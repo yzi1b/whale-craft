@@ -35,14 +35,14 @@ import { PluginConfig, DEFAULT_CONFIG, resolveStateDir, pickPresetTarget, pickPr
 import { AccountStore, parseAuthlibCard, normalizeServerUrl, dashUuid } from './src/accounts.mjs'
 import { DEFAULT_AGENTS_MD, agentsMdPath, legacyAgentsMdPath, migrateLegacyAgentsMd, readAgentsMd, writeAgentsMd, resetAgentsMd, isAgentsMdPath, syncRulesVersion, readRulesVersion } from './src/agentsmd.mjs'
 import { encodePng } from './src/png.mjs'
-import { userMessage, messageFactoryKind, pluginLoadNote } from './src/user-message.mjs'
+import { userMessage, noticeSource, messageFactoryKind, pluginLoadNote } from './src/user-message.mjs'
 import { ImageEngine, imageEngineAvailable, imageEngineError } from './src/image.mjs'
 import { listenLanBroadcast } from './src/lan.mjs'
 import { statusPing, parseAddress } from './src/ping.mjs'
 import { waitForEvents } from './src/wait.mjs'
 
 export const name = 'whale_craft'
-export const inject = ['webServer', 'tools']
+export const inject = ['tools']
 
 /** 插件版本（`mc_capabilities` 会报给 Master；读不到就 unknown） */
 const PLUGIN_VERSION = (() => {
@@ -747,13 +747,22 @@ export function apply(ctx, config) {
     }
 
     // ③ 再强清该会话全部后台任务
+    //
+    // 🔴 2026-09-22：`jobs` 这一族的 `caller` 参数要的是**会话 id 字符串**，不是 agent 对象
+    //    （宿主 `assertAccess()` 比的是 `job.owner.id !== caller`；见 src/watchdog.mjs#ownerId）。
+    //    以前传 `agent` 对象，`list()` 于是**一个自己的 job 都匹配不到**，
+    //    却把 `owner === undefined` 的**宿主级"无主 job"**全列出来 —— 那些 job 的
+    //    `assertAccess` 对无主任务是不设防的，于是"强制停止某个会话"会顺手杀掉
+    //    跟这个会话毫无关系的后台任务。这里两处一起改：用会话 id 查，且**只杀自己的**。
     const jobs = ctx.get('jobs')
-    if (jobs && agent) {
+    const jobOwner = agent?.id
+    if (jobs && typeof jobOwner === 'string' && jobOwner.length > 0) {
       try {
-        for (const j of jobs.list(agent) ?? []) {
+        for (const j of jobs.list(jobOwner) ?? []) {
           const id = j?.id ?? j?.jobId
           if (!id) continue
-          try { jobs.kill(id, agent, reason); out.killedJobs.push(id) } catch {}
+          if (j?.owner !== jobOwner) continue     // 无主 job（宿主自己的）不归我们管
+          try { jobs.kill(id, jobOwner, reason); out.killedJobs.push(id) } catch {}
         }
       } catch (e) { out.jobsError = String(e?.message ?? e) }
     }
@@ -1261,7 +1270,9 @@ export function apply(ctx, config) {
       }
     },
   }
-  ctx.effect(() => ctx.webServer.register(apiRoute), 'whale_craft: /api/mc 路由')
+  ctx.inject(['webServer'], (scope) => {
+    scope.effect(() => scope.webServer.register(apiRoute), 'whale_craft: /api/mc 路由')
+  })
 
   /**
    * 发布区服务路由（用户 2026-09-17 定稿）：`/api/whale-craft/express/<工作区 uuid>/<剩余路径>`。
@@ -1305,7 +1316,9 @@ export function apply(ctx, config) {
       }
     },
   }
-  ctx.effect(() => ctx.webServer.register(shareRoute), 'whale_craft: /api/whale-craft 路由（发布区）')
+  ctx.inject(['webServer'], (scope) => {
+    scope.effect(() => scope.webServer.register(shareRoute), 'whale_craft: /api/whale-craft 路由（发布区）')
+  })
 
   // 启动自检标记：确认"插件到底加载了没"（同时写 whale-craft.log 与宿主日志）
   const startup = `插件已加载｜pid=${process.pid}｜每会话独立实例｜工具注册中…`
@@ -1952,7 +1965,7 @@ export function apply(ctx, config) {
 
   ctx.tools.register(asTool({
     name: 'mc_inventory',
-    description: '看背包和手持物品。',
+    description: '看背包、手持物品和身上穿着的装备（wearing 是头/胸/腿/脚/副手）。',
     parameters: {},
     output: text(),
     async execute(args, exec) {
@@ -1999,15 +2012,19 @@ export function apply(ctx, config) {
       + '· toward 看向并走近某个玩家(who)\n'
       + '· place  把背包方块放到 (x,y,z)；悬空时会先垫脚搭上去（=搭高）\n'
       + '· break  破坏 (x,y,z) 的方块\n'
-      + '· use    使用/激活方块(x,y,z)或实体(who)：开门、按按钮、拉杆、喂动物\n'
-      + '· attack 攻击 4.5 格内的实体（可给 who 指定名字）\n'
-      + '· equip  把背包里的物品拿到手上(name)\n'
+      + '· use    使用/激活方块(x,y,z)或实体(who)：开门、按按钮、拉杆、喂动物；给了 name 会先把它拿到手上再用（骨粉/锄头/打火石/水桶）\n'
+      + '· useItem 用**手上的物品**（对着空气）：吃东西、喝药水、倒水、点火、拉弓、丢珍珠；name 可先装备，holdMs 控制按住多久\n'
+      + '· attack 攻击 4.5 格内的实体（可给 who 指定名字）；**要追着打就换 mc_hunt**（自动寻路追上+连续打+自动挖/垫脚）\n'
+      + '· equip  装备物品(name)；dest 指定槽位 hand/off-hand/head/torso/legs/feet，**不给就按物品自动判槽**（盔甲会穿到对应部位）\n'
+      + '· wear   一键穿上背包里最好的全套盔甲（头/胸/腿/脚）\n'
       + '· toss   丢弃物品(name, count)',
     parameters: {
-      mode: { type: 'string', description: 'look / toward / place / break / use / attack / equip / toss' },
+      mode: { type: 'string', description: 'look / toward / place / break / use / useItem / attack / equip / wear / toss' },
       who: { type: 'string', description: '玩家或实体名（look/toward/use/attack 用）' },
       x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' },
-      name: { type: 'string', description: '方块或物品名（place/equip/toss 用）' },
+      name: { type: 'string', description: '方块或物品名（place/use/useItem/equip/toss 用）' },
+      dest: { type: 'string', description: 'equip 的槽位：hand / off-hand / head / torso / legs / feet（不给=自动判槽）' },
+      holdMs: { type: 'number', description: 'useItem 按住多久（毫秒；不给就按物品估，食物 1600、药水 1800、弓 1200）' },
       count: { type: 'number', description: 'toss 丢几个（默认 1）' },
       approach: { type: 'boolean', description: 'toward 是否走近（默认 true）' },
       budgetMs: { type: 'number' },
@@ -2024,10 +2041,12 @@ export function apply(ctx, config) {
         case 'place':   return { mode, ...(await bot.placeBlock(args)) }
         case 'break':   return { mode, ...(await bot.breakBlock(args)) }
         case 'use':     return { mode, ...(await bot.useBlock(args)) }
+        case 'useItem': return { mode, ...(await bot.useItem({ name: args.name, holdMs: args.holdMs })) }
         case 'attack':  return { mode, ...(await bot.attack(args)) }
-        case 'equip':   return { mode, ...(await bot.equip({ name: args.name })) }
+        case 'equip':   return { mode, ...(await bot.equip({ name: args.name, destination: args.dest ?? null })) }
+        case 'wear':    return { mode, ...(await bot.equipArmor({})) }
         case 'toss':    return { mode, ...(await bot.tossItem({ name: args.name, count: args.count })) }
-        default: throw new Error(`未知 mode："${mode}"（可用 look/toward/place/break/use/attack/equip/toss）`)
+        default: throw new Error(`未知 mode："${mode}"（可用 look/toward/place/break/use/useItem/attack/equip/wear/toss）`)
       }
     },
   }))
@@ -2055,8 +2074,9 @@ export function apply(ctx, config) {
     name: 'mc_sequence',
     description: '**按顺序执行一串世界交互**（替代"写脚本"）：适合"走到这里放几个方块，再走到那里放几个"这类连串动作。\n'
       + 'steps 是数组，每项 op 可为：wait(sec) / move(x,y,z,mode) / look(x,y,z 或 who) / toward(who) / '
-      + 'place(x,y,z,name) / break(x,y,z) / dig(name 或 x,y,z,count) / use(x,y,z 或 who) / attack(who) / '
-      + 'equip(name) / give(name,count) / toss(name,count) / say(text) / jump。\n'
+      + 'place(x,y,z,name) / break(x,y,z) / dig(name 或 x,y,z,count) / use(x,y,z 或 who, 可给 name) / '
+      + 'useItem(name,holdMs) / attack(who) / hunt(who,durationSec,range,hpFloor,reacquire) / equip(name,dest) / wear / give(name,count) / toss(name,count) / '
+      + 'say(text) / jump。\n'
       + '逐步执行，默认遇错即停，整体有预算上限（默认 300s）。',
     parameters: {
       steps: { type: 'array', items: { type: 'object', additionalProperties: true }, description: '步骤数组（上限 64）' },
@@ -2116,6 +2136,39 @@ export function apply(ctx, config) {
         maxDistance: args.maxDistance, count: args.count,
       })
       return { result: lines }
+    },
+  }))
+
+  ctx.tools.register(asTool({
+    name: 'mc_hunt',
+    description: '**自动攻击（追着打）**：决定打谁之后一次调用即可 —— 自动寻路追上去、锁定**这一个**实体连续打，'
+      + '途中**自动挖挡路方块、自动垫脚**（靠 mineflayer-pathfinder），不必一步步调 mc_act（省 token）。\n'
+      + 'v2 战斗逻辑按 Wurst 客户端设计：**前方脚/头两格主动采样**——一格台阶直接跳、挡墙直接挖（不等视线掠过骗人、不等卡死）+ 挖死 8s 看门狗强制中止重规划；'
+      + '**视线被墙挡 → 换最快工具挖穿再打**（挖不动的领地方块挂死竞速+2 次即放弃，不再空耗；不贴墙空挥）；'
+      + '**每次出手前把最强武器拿回手上**（寻路垫脚会临时换手，收场也换回）；'
+      + '**卡在台阶/墙角 0.7s 不动 → 兜底自动跳**；**血量 ≤ hpFloor → 自动跑开 → 吃食物回血 → 再锁定追上来**（最多撤 3 轮，回不上血才收场）。\n'
+      + '**PVP 套装**（对标 Wurst）：**300ms 下落段跳劈暴击**（Criticals 合法版 ×1.5）+ 攻速 625ms 高斯 ±100ms 抖动（Killaura speedRandMS 防节奏固定）+ **血量≤10 自动图腾换副手**（AutoTotem）+ **6-22 格拉弓抛物线射击**（原版箭 v0=3.0/重力0.05/阻力0.99 解算 + 移动提前量，蓄力 0.85s；背包要有弓和箭）+ 推进按 sprint。\n'
+      + '开战自动换背包最强武器到手；**目标锁定规则**：就近锁定（距离最近的匹配实体）；**非玩家目标**太远（初距>60 格不追、追丢了拉开>60 格持续 4s 即取消锁定）；**玩家目标**不设距离限制、锁到死。'
+      + '目标死/跑丢/回不上血/超时/被中断/太远都会收场并返回战报（含 hits/retreats/ate/outcome）。'
+      + '背包带些方块（脚手架类）才能垫脚过沟，还要带点食物才回得了血。也可作为 mc_sequence 的 hunt 步骤。',
+    parameters: {
+      who: { type: 'string', required: true, description: '目标名字（子串匹配；先用 mc_entities 看附近有谁）' },
+      durationSec: { type: 'number', description: '最多追打多少秒（默认 45，上限 120）' },
+      range: { type: 'number', description: '追到多近算跟上（默认 2，1-8）' },
+      hpFloor: { type: 'number', description: '自己血量低于此值就撤退：跑开→吃食物回血→再锁定追上来（默认 10；回不上才收场）' },
+      reacquire: { type: 'number', description: '目标丢失后宽限几秒再收场（默认 4，可能只是过区块边界）' },
+    },
+    output: text(),
+    timeoutMs: 180_000,
+    async execute(args, exec) {
+      const sess = getSession(exec)
+      return sess.bot.hunt({
+        who: args.who,
+        durationSec: args.durationSec,
+        range: args.range,
+        hpFloor: args.hpFloor,
+        reacquire: args.reacquire,
+      })
     },
   }))
 
@@ -2511,7 +2564,8 @@ export function apply(ctx, config) {
    *    · 两个都开时**先投工作区的，再投我们自己的**；
    *    · 每条都要让人**和 AI**一眼看出是哪个文件：折叠标题与正文首行都带**相对路径**
    *      （`AGENTS.md` 与 `.whale-craft/AGENTS.md` 是两回事）；
-   *    · `source` 写死 `{kind:'plugin', plugin:'whale_craft', form:'notice'}` → 插件提示行，不归到用户头上；
+   *    · `source` 走 `noticeSource()` = `{kind:'plugin:whale_craft', form:'notice'}` → 插件提示行，不归到用户头上；
+   *      （🔴 kind 必须是 producer-owned：v4 会话格式拒绝 V3 的 `'plugin'`，见 src/user-message.mjs 顶部）
    *    · **不做 steer 兜底**（steer 空闲会"起一轮"＝没问就替用户说话）。
    */
   /**
@@ -2764,7 +2818,9 @@ export function apply(ctx, config) {
    */
   const noticeMessagesFor = (todo) => todo.map((it) => userMessage({
     content: [{ type: 'text', text: `Instructions from: ${it.rel}\n\n${it.text}` }],
-    source: { kind: 'plugin', plugin: 'whale_craft', form: 'notice', summary: it.title },
+    // 🔴 source 必须 producer-owned（`plugin:whale_craft`），不能是 V3 的 `'plugin'` ——
+    //    见 src/user-message.mjs 顶部那段 v4 事故说明。写成 `'plugin'` 会让整个 step 失败。
+    source: noticeSource(it.title),
   }))
 
   /** 记一笔台账（投出去的那些文件名 + 正文，供诊断与"内容变了就地更新"） */
@@ -3017,7 +3073,9 @@ export function apply(ctx, config) {
    * 复制完官方 preset 之后，把**我们自己的几处**覆盖上去：
    *   ① persona（官方那句 "You are a helpful software engineer assistant." + `complete: true` 都不要）
    *   ② 关掉那个持久 shell（MC 模式的指导写着"本模式没有 shell"，两边必须一致）
-   *   ③ 补齐 MC 模式需要的工具组（tool-fs / tool-jobs / present）—— 官方 `minimal` 里一个都没有
+   *   ③ 补齐 MC 模式需要的组 —— 官方 `minimal` 里一个都没有：
+   *      · 工具组 tool-fs / tool-jobs / present
+   *      · 压缩组 compaction（`/compact` 指令 + 自动压缩；2026-09-22 用户真机投诉"压缩上下文没了"）
    * @param {string} id 目标 preset
    * @param {{key?: 'prefix'|'text'|null}} [opts] `key` = **本版本源 preset 用的那个键**（新版 prefix / 老版 text）
    * @returns {boolean} 是否改动过（false = 结构不认识 / 无需改动，日志里说明）

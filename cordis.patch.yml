@@ -16,3 +16,23 @@
       name: whale_craft
       config:
         autoConnect: false
+
+        # ────────────────────────────────────────────────────────────────────
+        # ⚠️ AuthMe 密码**不要写在这里**
+        #
+        # 本文件是插件包的一部分：会被提交、打包、备份、分享，而且模型能直接读到。
+        # 明文密码放在这儿 = 公开。
+        #
+        # 改由环境变量提供 —— 见 src/core.mjs:
+        #   authmePassword: process.env.MC_AUTHME_PASSWORD ?? ''
+        #
+        #   export MC_AUTHME_PASSWORD='你的密码'        # 手动启动
+        #
+        # 交给 systemd 更稳（env 文件权限设 0600，别进版本库）：
+        #   # /etc/whale-craft/authme.env   内容：MC_AUTHME_PASSWORD=你的密码
+        #   # 单元里加一行：
+        #   EnvironmentFile=-/etc/whale-craft/authme.env
+        #
+        # 不需要 AuthMe 登录（服务器没装 / 已记住登录）：什么都不用配 ——
+        # 空串会被当成"没配"，整段 AuthMe 逻辑自动跳过，行为与上游一致。
+        # ────────────────────────────────────────────────────────────────────

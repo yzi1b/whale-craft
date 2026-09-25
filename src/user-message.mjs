@@ -15,6 +15,21 @@
  * 所以这里统一成一条路：**优先宿主实现，拿不到就用自带等价实现**（纯对象，字段逐个对齐
  * 宿主的 `createUserMessage`：`role` / `content` / `source` / `id`），
  * 让"能不能注入"与运行环境无关。解析失败会**记一行日志**（不再静默）。
+ *
+ * 🔴🔴 2026-09-22 真机事故（用户："mc模式发消息提示 本轮运行失败 format v4 message
+ *     requires a producer-owned source kind"）：
+ *     宿主 **DSH 0.1.7 的会话格式是 v4**，而 v4 的准入检查**明确拒绝** V3 的包装 kind
+ *     `'plugin'`（见 `@deepseek-ai/dsh-session-format-v3-to-v4/lib/index.js:126`：
+ *     `... || value["kind"] === "plugin"` → throw）。我们以前写死 `{kind:'plugin',
+ *     plugin:'whale_craft'}`，于是**提示词一投递，整个 step 就炸**（工具全正常，
+ *     只有注入那条通道死 —— 症状与"插件没装提示词"很像，别搞混）。
+ *
+ *     正解：`kind` 必须是 **producer-owned**（非空、且不是 `'plugin'`）。宿主的
+ *     `producerKind()`（同上 :87-93）对**不在** `RELEASED_SAME_NAME_PRODUCERS`
+ *     名单里的第三方插件给的规范值是 `` `plugin:${plugin}` `` ⇒ 我们是
+ *     **`plugin:whale_craft`**。宿主迁移老 V3 记录时把 `kind` 换成的也正是这个值
+ *     （`rewritePluginSource()` :101-107；它顺带丢掉 `plugin` 字段，我们留着当身份标记
+ *     —— 宿主只校验 `kind`，其余自有字段原样保留）。`form:'notice'` + `summary` 不变。
  * ============================================================================
  */
 import { createRequire } from 'node:module'
@@ -26,6 +41,29 @@ export const newMessageId = () => {
 }
 
 /**
+ * 插件提示行的 `source.kind` —— **producer-owned**，v4 会话格式的硬要求。
+ * 🔴 不许再写 `'plugin'`（那是 V3 的包装值，v4 准入直接抛错）。
+ * 值与宿主 `producerKind('whale_craft')` 的算法一致：`plugin:<插件名>`。
+ */
+export const PLUGIN_SOURCE_KIND = 'plugin:whale_craft'
+
+/**
+ * 造一条"插件提示行"的 `source`：宿主渲染成**折叠的一行 notice**（不是用户发言）。
+ * `kind` 是 producer-owned（v4 硬要求）；`plugin` 是本插件自己的身份标记 ——
+ * 宿主只校验 `kind`，其余自有字段**原样保留**（宿主自己的 `webhook` 也这么干：
+ * `{kind:'webhook', provider, deliveryId, ruleId, form, summary}`），所以留着无害，
+ * 且自检里那十几处 `m?.source?.plugin === 'whale_craft'` 的筛选照旧能用。
+ * @param {string} summary 那一行摘要（宿主 `CONTEXT_SUMMARY_MAX_CHARS = 120`）
+ * @returns {{kind:string, plugin:string, form:'notice', summary:string}}
+ */
+export const noticeSource = (summary) => ({
+  kind: PLUGIN_SOURCE_KIND,
+  plugin: 'whale_craft',
+  form: 'notice',
+  summary: String(summary ?? '').slice(0, 120),
+})
+
+/**
  * 自带等价实现：不依赖任何宿主包。
  * @param {{content?: unknown[], source?: object, id?: string}} input
  * @returns {{role:'user', content:unknown[], source:object, id:string}}
@@ -33,7 +71,7 @@ export const newMessageId = () => {
 export const builtinUserMessage = (input) => ({
   role: 'user',
   content: Array.isArray(input?.content) ? input.content : [],
-  source: input?.source ?? { kind: 'plugin' },
+  source: input?.source ?? { kind: PLUGIN_SOURCE_KIND },
   id: input?.id ?? newMessageId(),
 })
 

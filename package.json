@@ -1,6 +1,6 @@
 {
   "name": "whale_craft",
-  "version": "0.1.7",
+  "version": "0.4.0",
   "description": "DSH 原生 Minecraft Agent 插件：每会话独立机器人 + mc_* / mc_kit_* / mc_admin_* 工具 + 单对话看门狗 + 浏览器 UI + 工作区 .whale-craft 记忆",
   "keywords": [
     "dsh",
@@ -43,6 +43,7 @@
   ],
   "dependencies": {
     "mineflayer": "^4.37.1",
+    "mineflayer-pathfinder": "^2.4.5",
     "vec3": "^0.1.7"
   },
   "optionalDependencies": {

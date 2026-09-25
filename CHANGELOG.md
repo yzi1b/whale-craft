@@ -2,6 +2,197 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-09-24
+
+> ⚠️ **fork 分支**版本，完整说明见 [FORK-NOTES.md](./FORK-NOTES.md)。
+> 设计基准：**Wurst v7.54 客户端**（FightBot / NukerLegit / AutoEat / Killaura / Criticals / AutoTotem / BowAimbot）。
+
+### ⚔️ 新增：mc_hunt PVP 套装
+
+- 攻速 ~625ms + **高斯 ±100ms 抖动**（Killaura speedRandMS 防节奏固定）；
+- **下落段跳劈暴击**：起跳后轮询位置，真在下落（fallDistance>0）才出手，Criticals FULL_JUMP 合法版 ×1.5；
+- 血量 ≤10 **自动图腾换副手**（AutoTotem，背包没有/连续换失败则本轮不再找）；
+- **6–22 格弓箭**：原版箭 v0=3.0/重力 0.05/阻力 0.99 逐 tick 模拟 + 移动提前量两遍解算，蓄力 0.85s，
+  2.5s 节流（BowAimbot/Trajectories 风格）；推进带 sprint。
+
+### 🧠 修复：前方障碍检测（用户："被一个方块挡住，全有问题"）
+
+- `frontObstacle` 从"正前单点"升级为**五方向弧扫（正前 ±45° ±90°）× 两档距离（0.55/1.05 格）**；
+- `stepJump` 先**转向台阶所在方向**再跳（原先往空处跳）；**逃跑段**也接台阶检测；
+- 位置停滞判定 700ms → **450ms**（FightBot 撞墙当拍就跳，700ms 太钝）。
+
+### 🎯 变更：目标锁定规则（用户 2026-09-24 要求）
+
+- 就近锁（距离最近的匹配实体）；**非玩家目标**初距 >60 格不追（报错提示）、追丢后拉开 >60 格
+  持续 4s → 收场 `too_far` **取消锁定**；**玩家目标不设距离限制，锁到死**（durationSec 内）。
+
+### 🔧 修复：挖掘与吃喝（用户："吃东西、攻击、挖东西全有问题"）
+
+- 挖掘：`digTime` **带效率附魔**计算（原先不带，1 秒的活被算成 20 秒误判硬墙）；挖前方块先
+  `lookAt` 方块中心（NukerLegit faceVector）；失败黑名单改 **5 秒时间窗**（被怪打断不再一票否决），
+  挂死（领地保护）仍立即永久放弃；
+- 吃喝（AutoEat 对齐）：吃前强制 `setGoal(null)` + 清控制位（**移动中不吃**）、装备后验手持
+  是 `FOOD_RE` 匹配的食物再 `consume`；
+
+## [0.3.0] - 2026-09-22
+
+> ⚠️ 这是 **fork 分支**（`feat/authme-26.2-dsh-0.1.7`），不是上游发布的版本。
+> 完整说明见 [FORK-NOTES.md](./FORK-NOTES.md)。基线：上游 `aac3130`（whale_craft 0.1.7）。
+
+### ✨ 新增（自动攻击：mc_hunt 追着打 + 自动挖 + 自动垫脚）
+
+- **需求**（用户真机）：上游只有 `attack`（打 4.5 格内一次），追着打要一步步调工具、**费 token**；
+  要求"决定打谁之后**自动寻路追上去、锁定这一个实体连续打**，追击途中**自动挖挡路方块、
+  自动垫脚**"，并参考 opencode 配置里配的 `/www/minecraft-mcp-server` 项目。
+- **参考项目结论**：那是个 mineflayer MCP server（`mc_equip` / `mc_attack` 直调 `bot.equip` /
+  `bot.attack`），其调试脚本 `brain.mjs` 用 `mineflayer-pathfinder` 的
+  `Movements + setMovements + GoalNear` 寻路（`canDig = false`，不挖方块）。
+- **修法（新增独立工具 `mc_hunt`，也可作 `mc_sequence` 的 `hunt` 步骤）**：
+  · 新依赖 `mineflayer-pathfinder@^2.4.5`，`createBot` 返回后 `loadPlugin`
+    （官方 README 与参考项目 `bot.ts:136` 同款时机）；
+  · `mc_hunt { who, durationSec?, range?, hpFloor?, reacquire? }`：名字子串锁定**一个**实体 →
+    `GoalFollow(target, range)` + **dynamic goal** 持续追击（目标移动自动重规划，等价 follow）→
+    进 4 格按 ~600ms 攻击冷却连打（250ms 决策 tick）；
+  · **自动挖**：`Movements.canDig = true` —— astar 生成 toBreak，pathfinder 自动换最快工具并 `bot.dig`；
+    **自动垫脚**：astar 的 `toPlace` + 背包方块（`getScaffoldingItem`），没方块会绕路并注明；
+  · 开战自动把背包**最强武器**换到手（剑 > 斧；netherite > diamond > iron > stone > golden/wooden）；
+  · 收场带回战报：目标死/跑丢（宽限 `reacquire` 秒，防过区块边界误判）/ 血量 ≤ `hpFloor` 撤 /
+    超时 `durationSec`（默认 45s，上限 120）/ 用户中断 / 断线；收尾必定
+    `setGoal(null)` + `clearControlStates()`，不把移动状态留在场上；
+  · `mc_act { mode: "attack" }` 描述里加了指向 `mc_hunt` 的提示。
+- **坑**：目标丢失后重搜到**新的实体对象**时必须**重建 `GoalFollow`** —— 旧引用 `isValid()` 恒真，
+  pathfinder 会一直追一个不再更新的残留坐标。
+- **自检**：+8 条断言（注册 / 未连服与缺参清晰报错 / loadPlugin / GoalFollow+dynamic /
+  canDig / `case 'hunt'` 接线 / hpFloor+中断+清控制位），`npm run check` = **770 ✅ / 5 ❌**
+  （5 条 ❌ 仍是既有平台差异）。
+
+## [0.2.0] - 2026-09-22
+
+> ⚠️ 这是 **fork 分支**（`feat/authme-26.2-dsh-0.1.7`），不是上游发布的版本。
+> 完整说明见 [FORK-NOTES.md](./FORK-NOTES.md)。基线：上游 `aac3130`（whale_craft 0.1.7）。
+
+### ✨ 新增（穿戴装备：盔甲 / 副手 / 指定槽位）
+
+- **现象**（用户真机）："无法穿戴装备。"
+- **根因**：`equip()` 把目标槽**硬编码成 `'hand'`**（`src/core.mjs`），于是盔甲（头盔 / 胸甲 / 护腿 / 靴子）
+  和副手**根本没法穿** —— 物品永远只会在快捷栏和主手之间挪。而 `bot.inventory.items()`
+  只覆盖槽 9–44，**不含盔甲槽 5–8 与副手 45**，所以"到底穿没穿"也不能靠它看。
+- **修法**：
+  · `equip({ name, destination, auto })` 支持 `hand / off-hand / head / torso / legs / feet`
+    （别名归一：`off-hand` / `off_hand` / `off hand` 等价，中文 `头 / 胸 / 腿 / 脚` 也认）；
+  · **不给 `destination` 就自动判槽** —— 权威依据是 minecraft-data 物品的 `enchantCategories`
+    （`armor_head` / `armor_chest` / `armor_legs` / `armor_feet`），所以 `turtle_helmet`、
+    `chainmail_chestplate` 这类名字不规则的也判得对；`elytra`→torso、`shield`→off-hand、
+    `carved_pumpkin` / `*_head` / `*_skull`→head 兜底；
+  · 新增 `mc_act { mode: "wear" }`：**一键穿全套**，同槽多件按材质挑最好的
+    （netherite > diamond > iron > chainmail > golden > leather），**鞘翅默认不穿**（它占胸槽会顶掉胸甲）；
+    缺哪件如实报出并给获取办法；
+  · `mc_inventory` 新增 **`wearing`**（读装备槽 5–8 + 副手 45），`equip` / `wear` 的回报里也带。
+- **坑**：`equip` 原先**先找物品、后校验 destination**，于是 dest 写错时会报"背包里没有 X"，
+  把真因盖掉 —— 已把校验提到前面。
+
+### ✨ 新增（使用手上的物品：吃 / 喝 / 倒水 / 点火 / 拉弓 / 丢珍珠）
+
+- **现象**（用户真机）："使用工具。" —— 原来只有 `use`，它做的是 `activateBlock` / `activateEntity`
+  （开门 / 按钮 / 拉杆 / 喂动物），**没有"用手上的物品"这一路**，所以吃不了、喝不了、倒不了水。
+- **修法**：
+  · 新增 `mc_act { mode: "useItem", name?, holdMs?, offHand? }`：可选先 equip 再 `activateItem()`；
+  · **食物走 `bot.consume()`**（等服务器 `entity_status` 确认，而不是自己数秒），
+    吃饱时给友好提示（`Food is full` → "吃饱了（food=20），现在吃 X 没效果"）；
+    数据里没有 `edible` / `foodPoints` 字段，所以食物按名字认（含 `_apple` / `_carrot` / `_potato` 等）；
+  · 非食物按类型给按下时长（弓 1200ms / 药水 1800ms / 食物 1600ms / 其余 120ms）再 `deactivateItem()`；
+  · `use` 新增 **`name`**：先把它拿到手上再对着方块右键（**骨粉催熟 / 锄头耕地 / 打火石点火**）。
+- **自检**：新增 **24 条**断言（槽位别名归一 / 自动判槽 / 自动穿头 / 真进槽 5 / `wearing` 回报 /
+  中文别名 / 乱给 dest 报错 / wear 四件 / 同槽挑好的 / 鞘翅默认不穿 / 报缺 / activate+release /
+  走 consume / 饱食度 / 吃饱友好提示 / `use`+name 先装备 / 空手报错 / 源码级断言 `mc_act` + `mc_sequence` + `wearing`）。
+  总数 **757 ✅ / 5 ❌**（那 5 条是既有的 Windows 路径夹具与 minecraft-data 索引问题，与本次无关）。
+
+## [0.1.9] - 2026-09-22
+
+> ⚠️ 这是 **fork 分支**（`feat/authme-26.2-dsh-0.1.7`），不是上游发布的版本。
+> 完整说明见 [FORK-NOTES.md](./FORK-NOTES.md)。基线：上游 `aac3130`（whale_craft 0.1.7）。
+
+### 🔴 修复（MC 模式里没有 `/compact`、也没有自动压缩）
+
+- **现象**（用户真机）："mc 模式 /compact 压缩上下文没了，无法压缩。"
+- **根因**：`/compact` 由 `@deepseek-ai/dsh-command-compact` 提供，而它属于 preset 里的**压缩组**
+  （`cordis:group` + `isolate: { compaction, toolResultPruner }` + 三个 config 条目：
+  `compaction-basic`（压缩服务本体）/ `command-compact`（斜杠指令）/ `tool-result-pruner`（超长工具结果裁剪））。
+  官方 `standard` / `ptc` / `cordis` 三个 preset 都有这一组，**`minimal` 没有** ——
+  而 whale_craft 建 MC 模式 preset 时正是照 `minimal` 复制的，只补了 `tool-fs` / `tool-jobs` / `present`，
+  于是这个 preset **既没有 `/compact`、也没有自动压缩**（而"自动压缩"没了更难察觉：上下文一直涨到爆）。
+- **修法**：把压缩组**整组**加进 `MC_PRESET_TOOL_GROUPS`（新增 `block` 字段，整组 YAML 逐字对齐官方那块），
+  `patchToolGroupsIntoComposition()` 支持整组块追加（老的三组输出逐字节不变）；
+  `MC_PRESET_SPEC` 升到 **7** —— 升级时会把 6 建的那些 preset 重建一遍，顺手给老环境补上压缩组。
+- **注意**：只补 `command-compact` 是**没用**的 —— 服务本体在 `compaction-basic`，
+  而 `isolate` 那两个键在别处根本不存在，**必须整组加**。
+- **自检**：新增 4 条断言（整组结构 / 三个 config 条目齐全 / pruner 参数与官方一致 / `MC_PRESET_SPEC === 7`）。
+
+## [0.1.8] - 2026-09-22
+
+> ⚠️ 这是 **fork 分支**（`feat/authme-26.2-dsh-0.1.7`），不是上游发布的版本。
+> 完整说明见 [FORK-NOTES.md](./FORK-NOTES.md)。基线：上游 `aac3130`（whale_craft 0.1.7）。
+
+### ✨ 新增
+
+- **AuthMe 6.x 对话框登录**（Minecraft 26.2 / AuthMe 6.x / 协议 775）：
+  AuthMe 在 configuration 阶段下发 `show_dialog`，必须用 `custom_click_action` 原始包回密码，
+  否则 `loginCancelKicks=true` 时会被踢下线。mineflayer 不支持这一步，因此手写协议：
+  自备 `writeVarInt()`、从 mineflayer 依赖树加载 `prismarine-nbt` 解析并构造 NBT，
+  按阶段选包 id（configuration `0x08` / play `0x44`）后用 `client.writeRaw()` 发出。
+- **`authmePassword` 配置项**：默认读环境变量 **`MC_AUTHME_PASSWORD`**，
+  **不落任何配置文件**；未设置时整段逻辑自动跳过，行为与上游一致。
+- `spawn` 之后补发一条 `/login <密码>`，兼容仍走 post-join 的服务器。
+
+### 🔴 修复
+
+- **DSH 0.1.7 插件激活顺序**：`inject` 不再硬依赖 `webServer`（只留 `['tools']`），
+  两处路由注册（`/api/mc`、`/api/whale-craft`）改为
+  `ctx.inject(['webServer'], (scope) => scope.effect(…))` 懒注入。
+- **🔴 提示词投递在 DSH 0.1.7（v4 会话格式）下让**整轮**失败**
+  （`本轮运行失败 format v4 message requires a producer-owned source kind`）。
+  症状很有迷惑性：**工具全都能用**，只有"注入提示行"这条通道炸 —— 看着像"插件没装提示词"。
+  根因：投递消息的 `source.kind` 写死成 V3 的包装值 `'plugin'`，而 v4 的准入检查**点名拒绝**它
+  （`@deepseek-ai/dsh-session-format-v3-to-v4/lib/index.js`：
+  `… || value["kind"] === "plugin"` → `throw new SessionFormatError(...)`）。
+  修法：新增 `PLUGIN_SOURCE_KIND = 'plugin:whale_craft'` 与统一的 `noticeSource()` 构造器
+  —— `kind` 取宿主 `producerKind()` 对第三方插件的规范值 `plugin:<插件名>`，
+  两处投递点（`index.js` 的提示行、`src/watchdog.mjs` 的看门狗唤醒）改用它。
+- **自检夹具跟不上"懒注入"那次改动**：路由注册搬进 `ctx.inject(['webServer'], …)` 之后，
+  `selfcheck.mjs` 的两处假 ctx 里 `inject` 是空壳 / 只登记不回调 ⇒
+  `/api/mc` 与 `/api/whale-craft` 两条路由**从没注册**，相关断言全废，
+  脚本还在 `callOn(undefined, …)` 上 `TypeError` 崩掉（真机不受影响：真 cordis 的 `inject` 会回调）。
+  已让夹具对 `webServer` 立刻回调，自检得以跑完全程。
+- **🔴 看门狗挂后台 job 失败，降级成"无 job 模式"**
+  （日志原文：`挂 job 失败（降级为无 job 模式）：session "[object Object]" has no live agent
+  (background job owner must be live)`）。症状是"还能唤醒，但 `job_list` 里看不到、UI 也停不掉"。
+  根因：`jobs` 这一族的 `owner` / `caller` 要的是**会话 id 字符串**，插件传的是 **agent 对象**。
+  宿主 `resolveOwner(session)`（`@deepseek-ai/dsh-jobs-local`）拿它去 `agents.get(session)` 查表，
+  而那张表**按会话 id 字符串索引**，且 `enter()` 里断言 `agent.id === agent.session.id`
+  ⇒ 传对象必然查不到，错误信息里对象被 `String()` 成了 `[object Object]`。
+  修法：新增私有 `#ownerId()`（`agent?.id ?? sess.agentId`），4 处调用点
+  （`src/watchdog.mjs` 的 `jobs.start` / `jobs.kill`，`index.js` 的 `jobs.list` / `jobs.kill`）
+  全部改传会话 id 字符串。
+  **顺带修掉一个更危险的隐患**：宿主 `assertAccess()` 对 `owner === undefined` 的
+  "无主 job"**完全不设防**，而旧代码传对象时恰好一个自己的 job 都匹配不到、
+  却把无主 job 全列出来再 `kill` 掉 —— 也就是点一次「强制停止」会顺手清掉
+  跟该会话毫无关系的宿主后台任务。现在改成只杀自己的（`j.owner === jobOwner`）。
+  另：拿不到会话 id 时**不再挂"无主 job"**（那会让它对所有会话可见），
+  直接降级为"无 job 模式"并记一行日志。
+
+### 🧹 杂项
+
+- **版本号 `0.1.7` → `0.1.8`**（`package.json` + `package-lock.json`）；
+  顺手把 `package-lock.json` 里残留的 `0.1.4` 一并订正（上游 lockfile 一直没跟 `package.json` 同步）。
+- **重写 `README.md`**：改成 fork 自己的说明 —— 上游是哪个版本、上游有哪些问题（含报错原文）、
+  我们修了什么、新增了什么、怎么装、已知限制；上游 README 原文折叠在文末（未改动）。
+
+### 🧩 适配
+
+- **DSH `0.1.7-alpha.1`**；上游基线 `aac3130`（whale_craft 0.1.7）；
+  EtheriumMC 26.2 / Paper 26.2（Folia）+ AuthMe 6.x；Node.js `>= 22`。
+- 无新增依赖。
+
 ## [0.1.7] - 2026-09-20
 
 > 这一版在 0.1.6 之上修了三个**真机问题**（都是用户/其他使用者实测报上来的），并订正了几处"状态在撒谎"。

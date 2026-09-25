@@ -45,13 +45,13 @@
  *   ③ 改为 `agent.steer(plugin 来源的 message)`：
  *      · 文档："**An idle driver starts a turn**; a running driver consumes it at
  *        its next step boundary" —— **空闲起一轮 = 唤醒**，运行中下一步插话，两用都对；
- *      · `source: {kind:'plugin', form:'notice'}` → 宿主渲染成**折叠的一行摘要**，
+ *      · `source: {kind:'plugin:whale_craft', form:'notice'}` → 宿主渲染成**折叠的一行摘要**，
  *        不是用户发言。这就是"提示词注入"。
  *   ④ 仍然是单脑——注入目标始终是**同一个** session。
  * ============================================================================
  */
 
-import { userMessage } from './user-message.mjs'
+import { userMessage, noticeSource } from './user-message.mjs'
 
 /** 默认配置。括号里是"为什么默认这样"。 */
 export const WATCH_DEFAULTS = {  /** 进服自动挂载（用户要求：进游戏自动打开） */
@@ -111,7 +111,8 @@ const clone = (v) => JSON.parse(JSON.stringify(v))
 /**
  * 构造注入用的 message（`src/user-message.mjs` 统一提供）。
  *
- * 关键在于 `source`：宿主要求 `ContextFormed`，用 `{kind:'plugin', plugin, form:'notice', summary}`
+ * 关键在于 `source`：宿主要求 `ContextFormed`，用
+ * `{kind:'plugin:whale_craft', plugin, form:'notice', summary}`
  * 会被渲染成**折叠的一行摘要**（"One-line account of what happened, shown without expanding
  * the row"），而**不是**用户发言 —— 这正是用户要的"提示词注入而非模拟用户发消息"。
  *
@@ -308,7 +309,7 @@ export class Watchdog {
 
     // 停 job（若宿主没有 jobs、或本次就是 job 触发的，跳过）
     if (jobId && !fromJob) {
-      try { this.ctx.get('jobs')?.kill(jobId, this.agent, reason) } catch {}
+      try { this.ctx.get('jobs')?.kill(jobId, this.#ownerId(), reason) } catch {}
     }
     // 结算 done —— 否则 job 永远停在 'stopping'，job_list 里挂着不动、job_kill 永远"请求中"
     this.#settleJob(fromJob ? `被取消（${reason}）` : `已停止（${reason}）`)
@@ -343,10 +344,44 @@ export class Watchdog {
     } catch {}
   }
 
+  /**
+   * 宿主 `jobs` 服务要的是**会话 id（字符串）**，不是 agent 对象。
+   *
+   * 🔴 2026-09-22 真机事故（用户）：看门狗挂 job 失败、降级成"无 job 模式"，
+   *    日志是 `挂 job 失败（降级为无 job 模式）：session "[object Object]" has no live
+   *    agent (background job owner must be live)`。
+   *
+   *    根因：`jobs.start({ owner: this.agent })` 把 **agent 对象**塞进了 `owner`，
+   *    而宿主 `resolveOwner(session)`（`@deepseek-ai/dsh-jobs-local/lib/index.js:526-533`）
+   *    是拿它去 `agents.get(session)` 查表 —— 那张表**按会话 id 字符串索引**
+   *    （`@deepseek-ai/dsh-agent`：`get(id) { return this.store.get(id)?.agent }`，
+   *    且 `enter()` 里断言 `agent.id === agent.session.id`），
+   *    传对象必然查不到 → 抛错，错误信息里把对象 `String()` 成了 `[object Object]`。
+   *
+   *    宿主的对照写法：`@deepseek-ai/dsh-tool-jobs` 一律用 `exec.agent?.id`
+   *    （`jobs.list(exec.agent?.id)` / `jobs.kill(id, exec.agent?.id, reason)`）。
+   *
+   *    同理 `jobs.kill(id, caller, reason)` / `jobs.list(caller)` 的 `caller` 也是会话 id，
+   *    宿主 `assertAccess()` 比的是 `job.owner.id !== caller`。
+   *
+   * @returns {string|undefined} 会话 id；拿不到返回 undefined（调用方据此降级，不挂"无主 job"）
+   */
+  #ownerId () {
+    const id = this.agent?.id ?? this.sess?.agentId
+    return typeof id === 'string' && id.length > 0 ? id : undefined
+  }
+
   #startJob () {
     const jobs = this.ctx.get('jobs')
     if (!jobs) {
       this.#record('lifecycle', '宿主没有 jobs 服务：看门狗以"无 job"模式运行（仍能唤醒，但 job_list 看不到）')
+      return
+    }
+    // 🔴 owner 必须是**会话 id 字符串**（见 #ownerId 的说明）。拿不到就不挂 ——
+    //    挂成"无主 job"（owner 缺省）会让它对所有会话可见、也能被别的会话停掉。
+    const ownerId = this.#ownerId()
+    if (!ownerId) {
+      this.#record('lifecycle', '拿不到会话 id（agent 未就绪）：看门狗以"无 job"模式运行')
       return
     }
     const self = this
@@ -354,7 +389,7 @@ export class Watchdog {
       this.jobId = jobs.start({
         kind: 'mc-watch',
         label: `MC 看门狗（整局存活）`,
-        owner: this.agent,
+        owner: ownerId,
         run: () => ({
           // 宿主 job_kill → 这里。走 fromJob:true：拆除但**不回头 kill 自己**，
           // 并结算 done（否则 job 卡在 stopping）。
@@ -556,7 +591,7 @@ export class Watchdog {
    *
    * 首选 `agent.steer(plugin 来源的 message)`：
    *   · 空闲 → **起一轮**（= 唤醒）；运行中 → 下一步插话（不打断）
-   *   · source 是 `{kind:'plugin', form:'notice'}` → 宿主渲染成折叠的一行摘要，不是用户消息
+   *   · source 是 `{kind:'plugin:whale_craft', form:'notice'}` → 宿主渲染成折叠的一行摘要，不是用户消息
    * 兜底才用 `sessionController.prompt`（那条必然是用户来源）。
    */
   #inject (text, kind) {
@@ -595,21 +630,19 @@ export class Watchdog {
     //    **An idle driver starts a turn**; a running driver consumes it at its
     //    next step boundary." —— 空闲起一轮、运行中插下一步，正是我们要的两用。
     //
-    // source 用 `{kind:'plugin', form:'notice'}`：宿主把它渲染成**折叠的 notice 行**
+    // source 走 `noticeSource()`（`{kind:'plugin:whale_craft', form:'notice', summary}`）：
+    //   宿主把它渲染成**折叠的 notice 行**
     //   （"One-line account of what happened, shown without expanding the row"），
     //   不是用户发言。summary 就是那一行。
+    // 🔴 kind 必须是 producer-owned —— 老写法 `{kind:'plugin', plugin:'whale_craft'}`
+    //   在 v4 会话格式下会被准入拒绝，整个 step 直接失败（见 src/user-message.mjs 顶部）。
     // ────────────────────────────────────────────────────────────────────────
     const agent = this.agent
     if (agent && typeof agent.steer === 'function') {
       try {
         const message = userMessage({
           content: [{ type: 'text', text }],
-          source: {
-            kind: 'plugin',
-            plugin: 'whale_craft',
-            form: 'notice',
-            summary: `MC 看门狗：${kind}`.slice(0, 120),
-          },
+          source: noticeSource(`MC 看门狗：${kind}`),
         })
         agent.steer(message)
         this.stats.injected++

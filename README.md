@@ -1,3 +1,236 @@
+# whale-craft · 登录插件适配（fork）
+
+> 🍴 这是 [yzi1b/whale-craft](https://github.com/yzi1b/whale-craft) 的 fork。
+> 在**上游 `0.1.7`** 的基础上，适配 **Minecraft 26.2 + AuthMe 6.x 对话框登录**，
+> 修掉 **DSH `0.1.7-alpha.1`（v4 会话格式）** 下的 5 个真机问题，
+> 并补上上游缺的 **穿戴装备**、**使用手上的物品** 与 **自动攻击（`mc_hunt`）** 三项能力。
+
+| | |
+|---|---|
+| 上游仓库 | [yzi1b/whale-craft](https://github.com/yzi1b/whale-craft) |
+| **上游版本** | **`0.1.7`**（commit `aac3130`，2026-09-20） |
+| **本 fork 版本** | **`0.4.0`** |
+| 本 fork 分支 | `feat/authme-26.2-dsh-0.1.7` |
+| 相对上游改动 | **13 个文件，+1701 / -70**（新增依赖 `mineflayer-pathfinder@^2.4.5`） |
+| 逐条改动说明 | [FORK-NOTES.md](./FORK-NOTES.md) |
+| 更新日志 | [CHANGELOG.md](./CHANGELOG.md) |
+
+---
+
+## 一、上游 `0.1.7` 有哪些问题
+
+下面 5 条都是**在真机上实测踩到的**（DSH `0.1.7-alpha.1` + EtheriumMC 26.2 / Paper + AuthMe 6.x）。
+
+### 🔴 1. 提示词投递让整轮失败（DSH 0.1.7 / v4 会话格式）
+
+**报错**
+
+```
+本轮运行失败 format v4 message requires a producer-owned source kind
+```
+
+**症状很有迷惑性**：工具**全都能用** —— 走路、挖建、说话、看图都正常，
+只有"往对话里注入提示行"这条通道炸，看着像"插件没装提示词"，其实每次投递都让整轮失败。
+
+**根因**：投递消息的 `source.kind` 写死成 V3 的包装值 `'plugin'`，
+而 DSH v4 的准入检查**点名拒绝**它
+（`@deepseek-ai/dsh-session-format-v3-to-v4/lib/index.js`：
+`… || value["kind"] === "plugin"` → `throw new SessionFormatError(...)`）。
+
+**影响**：MC 模式下**每轮都会失败**。
+
+### 🔴 2. 看门狗挂后台 job 失败，静默降级成"无 job 模式"
+
+**报错**
+
+```
+挂 job 失败（降级为无 job 模式）：session "[object Object]" has no live agent (background job owner must be live)
+```
+
+**症状**：看门狗还能唤醒模型，但 `job_list` 里**看不到它**，界面上也**停不掉**。
+
+**根因**：`jobs` 这一族的 `owner` / `caller` 要的是**会话 id 字符串**，插件传的是 **agent 对象**。
+宿主 `resolveOwner(session)` 拿它去 `agents.get(session)` 查表，而那张表**按会话 id 字符串索引**，
+且 `enter()` 里断言 `agent.id === agent.session.id` ⇒ 传对象必然查不到，
+错误信息里对象被 `String()` 成了 `[object Object]`。
+
+**⚠️ 这里还藏着一个更危险的隐患**：宿主对 `owner === undefined` 的"无主 job"**完全不设防**。
+旧代码传对象时恰好一个自己的 job 都匹配不到，却把无主 job 全列出来再 `kill` 掉 ——
+也就是**点一次「强制停止」会顺手清掉跟该会话毫无关系的宿主后台任务**。
+
+### 🔴 3. `webServer` 还没就绪就被引用（DSH 0.1.7 的插件激活顺序）
+
+插件的 `inject` 硬依赖 `webServer`，而 0.1.7 的激活顺序会让它在这条依赖还没就绪时就被求值。
+
+### 🟡 4. Minecraft 26.2 上 AuthMe 6.x 的登录过不去（上游没做这块）
+
+AuthMe 在 **configuration 阶段**就下发 `show_dialog`，要求回一个 `custom_click_action` 原始包；
+`preJoin` 开启时不可跳过，`loginCancelKicks` 开启时没回就被踢下线。
+mineflayer 不处理这个包 ⇒ 机器人根本进不去。
+
+### 🔴 5. MC 模式 preset 里没有压缩组 ⇒ 没有 `/compact`，也没有自动压缩
+
+建 MC 模式 preset 时是照官方 **`minimal`** 复制再补的，而 `minimal` **没有压缩组**
+（官方 `standard` / `ptc` / `cordis` 都有）。上游只补了 `tool-fs` / `tool-jobs` / `present` 三个工具组，
+于是这个 preset **既没有 `/compact` 指令、也没有自动压缩**。
+
+用户真机报的原话："mc 模式 /compact 压缩上下文没了，无法压缩。"
+—— 比 `/compact` 更麻烦的是**自动压缩也没了**：上下文会一直涨到爆，中途毫无提示。
+
+---
+
+## 二、我们修了什么
+
+| # | 问题 | 改法 |
+|---|---|---|
+| 1 | v4 提示行投递 | 新增 `PLUGIN_SOURCE_KIND = 'plugin:whale_craft'` 与统一的 `noticeSource()` 构造器 —— `kind` 取宿主 `producerKind()` 对第三方插件的规范值 `plugin:<插件名>`；两处投递点（`index.js` 的提示行、`src/watchdog.mjs` 的看门狗唤醒）改用它 |
+| 2 | 看门狗 job owner | 新增私有 `#ownerId()`（`agent?.id ?? sess.agentId`），4 处调用点（`src/watchdog.mjs` 的 `jobs.start` / `jobs.kill`、`index.js` 的 `jobs.list` / `jobs.kill`）全部改传会话 id 字符串 |
+| 2b | 「强制停止」误杀宿主任务 | 改成只杀自己的（`j.owner === jobOwner`）；拿不到会话 id 时**不再挂"无主 job"**，直接降级为"无 job 模式"并记一行日志 |
+| 3 | `webServer` 未就绪 | `inject` 不再硬依赖它（只留 `['tools']`），两处路由注册改为 `ctx.inject(['webServer'], (scope) => scope.effect(…))` 懒注入 |
+| 4 | 自检夹具跟不上懒注入 | 两处假 ctx 的 `inject` 是空壳 / 只登记不回调 ⇒ `/api/mc` 与 `/api/whale-craft` 两条路由**从没注册**、相关断言全废，脚本还在 `callOn(undefined, …)` 上 `TypeError` 崩掉。已让夹具对 `webServer` 立刻回调，并补 8 条 jobs 回归钉子 |
+| 5 | MC 模式没有 `/compact` / 自动压缩 | 把**压缩组整组**加进 `MC_PRESET_TOOL_GROUPS`（新增 `block` 字段，整组 YAML 逐字对齐官方），`patchToolGroupsIntoComposition()` 支持整组块追加；`MC_PRESET_SPEC` 升到 **7** ⇒ 升级时重建 6 建的 preset，顺手补上。**只补 `command-compact` 没用**：服务本体在 `compaction-basic`，`isolate` 那两个键别处不存在，必须整组加 |
+
+---
+
+## 三、我们新增了什么
+
+### ✨ AuthMe 6.x 对话框登录（Minecraft 26.2 / 协议 775）
+
+AuthMe 在 **configuration 阶段**下发 `show_dialog`（Dialog），必须用 `custom_click_action`
+原始包把密码回过去，否则 `loginCancelKicks=true` 时会被踢下线。mineflayer 不支持这一步，因此手写协议：
+
+- 自备 `writeVarInt()`；
+- 从 mineflayer 依赖树加载 `prismarine-nbt` 解析并构造 NBT；
+- 按阶段选包 id（configuration `0x08` / play `0x44`），用 `client.writeRaw()` 发出；
+- `spawn` 之后补发一条 `/login <密码>`，兼容仍走 post-join 的服务器。
+
+### 🔑 `authmePassword` 配置项（只走环境变量，密码不落盘）
+
+**密码不会出现在任何配置文件里** —— 本文件、`cordis.patch.yml`、日志里都没有。
+默认读环境变量 **`MC_AUTHME_PASSWORD`**；**不设这个变量时整段逻辑自动跳过，行为与上游完全一致**。
+
+```bash
+# 只有「离线服 + AuthMe」才需要（正版验证服不用）
+export MC_AUTHME_PASSWORD='你的密码'
+```
+
+systemd 部署建议用 `EnvironmentFile`（权限 600）：
+
+```ini
+# /etc/whale-craft/authme.env   —— chmod 600
+MC_AUTHME_PASSWORD=你的密码
+```
+
+```ini
+# 在 service 里
+EnvironmentFile=-/etc/whale-craft/authme.env
+```
+
+### ✨ 穿戴装备（盔甲 / 副手 / 指定槽位）
+
+上游的 `equip` 把目标槽**硬编码成 `hand`**，所以**盔甲和副手根本穿不上** —— 物品只会在快捷栏和主手之间挪。
+本 fork 补上：
+
+- `mc_act { mode: "equip", name, dest }` —— `dest` 可给 `hand / off-hand / head / torso / legs / feet`
+  （`off-hand` / `off_hand` / `off hand` 等价，中文 `头 / 胸 / 腿 / 脚` 也认）；
+- **不给 `dest` 就自动判槽**：权威依据是 minecraft-data 物品的 `enchantCategories`
+  （`armor_head` / `armor_chest` / `armor_legs` / `armor_feet`），所以 `turtle_helmet`、
+  `chainmail_chestplate` 这类名字不规则的也判得对；`elytra`→torso、`shield`→off-hand 兜底；
+- `mc_act { mode: "wear" }` —— **一键穿全套**，同槽多件按材质挑最好的，**鞘翅默认不穿**
+  （它占胸槽会顶掉胸甲），缺哪件如实报出并给获取办法；
+- `mc_inventory` 的 **`wearing`** 报身上穿着的装备 —— 装备槽不在 `items()` 里（那只看槽 9–44），
+  所以不单独看就永远不知道穿没穿。
+
+### ✨ 使用手上的物品（吃 / 喝 / 倒水 / 点火 / 拉弓 / 丢珍珠）
+
+上游只有 `use`，做的是 `activateBlock` / `activateEntity`（开门 / 按钮 / 拉杆 / 喂动物），
+**没有"用手上的物品"这一路** —— 所以吃不了、喝不了、倒不了水。本 fork 补上：
+
+- `mc_act { mode: "useItem", name?, holdMs?, offHand? }` —— 可选先 equip 再 `activateItem()`；
+- **食物走 `bot.consume()`**（等服务器 `entity_status` 确认，而不是自己数秒）；
+  吃饱时给友好提示（`Food is full` → "吃饱了（food=20），现在吃 X 没效果"）；
+- 非食物按类型给按下时长（弓 1200ms / 药水 1800ms / 食物 1600ms / 其余 120ms）再 `deactivateItem()`；
+- `use` 新增 **`name`**：先把它拿到手上再对着方块右键（**骨粉催熟 / 锄头耕地 / 打火石点火**）。
+
+`mc_sequence` 同步认 `wear` 与 `useItem` 两个 op（`equip` 也支持 `dest`）。
+
+### ✨ 自动攻击（`mc_hunt`：追着打 + 自动挖 + 自动垫脚）
+
+上游只有 `attack`（打 **4.5 格内**一次），要追着打就得一步步调工具、**费 token**。
+本 fork 新增独立工具 `mc_hunt`（也可作 `mc_sequence` 的 `hunt` 步骤），
+参考 opencode 配置里配的 `mineflayer-pathfinder` 项目实现：
+
+- `mc_hunt { who, durationSec?, range?, hpFloor?, reacquire? }` —— 按名字子串锁定**一个**实体，
+  `GoalFollow(target, range)` + **dynamic goal** 持续追击（目标移动自动重规划），进 4 格按
+  ~600ms 攻击冷却连打；
+- **自动挖挡路方块**：`Movements.canDig = true`（astar 生成 toBreak → pathfinder 自动换最快工具
+  并 `bot.dig`）；**自动垫脚**：astar 的 `toPlace` + 背包方块 —— 所以背包带点方块才垫得了脚过沟；
+- 开战自动把背包**最强武器**换到手（剑 > 斧，netherite > diamond > iron > stone > golden/wooden）；
+- 收场带回战报：目标死/跑丢（宽限 `reacquire` 秒）/ 血量 ≤ `hpFloor` 撤 / 超时 `durationSec`
+  （默认 45s，上限 120）/ 用户中断 / 断线；收尾必定清 goal + 清控制位；
+- 新增依赖 `mineflayer-pathfinder@^2.4.5`，`createBot` 返回后 `loadPlugin`（官方 README 同款时机）。
+
+### ⚔️ 战斗升级与真机修复（0.4.0）
+
+以 **Wurst v7.54 客户端**为设计基准（FightBot / NukerLegit / AutoEat / Killaura / Criticals / AutoTotem / BowAimbot）：
+
+- **PVP 套装**：~625ms 攻速 + **高斯 ±100ms 抖动**（Killaura speedRandMS，防节奏被预判）；
+  **下落段跳劈暴击**（起跳后轮询到真在下落才出手，Criticals FULL_JUMP 合法版 ×1.5）；
+  血量 ≤10 **自动图腾换副手**（AutoTotem）；**6–22 格弓箭抛物线 + 移动提前量**（原版箭
+  v0=3.0/重力 0.05/阻力 0.99 逐 tick 解算，BowAimbot/Trajectories 风格）；推进带 sprint；
+- **前方障碍五方向弧扫 × 两档距离**（正前 ±45° ±90°、0.55/1.05 格）：脚挡头空=正面跳台阶
+  （先转向台阶再跳）、脚头都挡=直接挖、低顶=挖头那格 —— 修"被一格方块挡住不跳不挖"；
+  逃跑路上同样能跳台阶；位置停滞 450ms 即脉冲跳（FightBot 撞墙当拍就跳的手动版）；
+- **目标锁定规则**：就近锁；**非玩家目标**初距 >60 格不追、追丢后拉开 >60 格持续 4s →
+  `too_far` 取消锁定；**玩家目标不设距离限制，锁到死**（durationSec 内）；
+- **挖掘修复**：`digTime` 带效率附魔计算（不把 1 秒的活误判成硬墙）、挖前方块先 `lookAt` 中心
+  （NukerLegit faceVector）、挖掘失败改 5 秒时间窗（被怪打断不再一票否决），挂死仍立即永久放弃；
+- **吃喝修复**（AutoEat 对齐）：吃前强制清 goal + 控制位（移动中不吃）、装备后验手持是食物再 consume；
+  低血三段式不变：跑开 → 吃食物回血 → 再锁定追上来。
+
+---
+
+## 四、怎么装
+
+### 从 Release 附件装（推荐，不用 clone）
+
+```bash
+# 下载本 fork Releases 页的 whale_craft-0.4.0.tgz
+dsh plugin --profile <你的 profile> add /path/to/whale_craft-0.4.0.tgz
+```
+
+### 从源码装
+
+```bash
+git clone -b feat/authme-26.2-dsh-0.1.7 https://github.com/swan3146/whale-craft.git
+dsh plugin --profile <你的 profile> add link:/path/to/whale-craft
+```
+
+> ⚠️ npm 上的 `whale_craft` 属于原作者（`lyricraft <yzi1b@outlook.com>`），
+> 所以本 fork **没有发到 npm**，只作为 Release 附件提供。
+
+---
+
+## 五、已知限制
+
+1. **只测过 DSH `0.1.7-alpha.1`**；其它版本的 `inject` / `jobs` 契约可能不同。
+2. **AuthMe 只覆盖 6.x 的 dialog 流程**（configuration 阶段 `show_dialog`）；
+   更老的 AuthMe 走的是插件消息那条路，本 fork 没动它，仍靠 spawn 后补发 `/login` 兜底。
+3. **`authmePassword` 只从环境变量读**，没有 UI 入口；留空即整段跳过。
+4. **看门狗拿不到会话 id 时以"无 job"模式运行**（不会挂无主 job）—— 这时还能唤醒，但 `job_list` 看不到。
+5. **自检有 5 条用例是 Windows 路径 / `minecraft-data` 版本索引问题**，在 Linux 上会 ❌，
+   与本次改动无关（`npm run check` 退出码仍为 0）。
+
+---
+
+## 六、上游的 README
+
+插件本身的功能说明（`mc_*` 工具清单、配置项、架构）以上游 README 为准。
+下面是**上游 `0.1.7` 的 README 原文（未改动）**：
+
+<details>
+<summary>点开看上游 README 原文（422 行）</summary>
+
 # Whale Craft
 
 **[English ↓](#english)** · 中文 · [![CI](https://github.com/yzi1b/whale-craft/actions/workflows/ci.yml/badge.svg)](https://github.com/yzi1b/whale-craft/actions/workflows/ci.yml)
@@ -420,3 +653,5 @@ Push a `v*` tag to get a GitHub Release with the zip, plus an **npm publish** wh
 `NPM_TOKEN` secret (without it, the npm step is skipped with a notice — the workflow still succeeds).
 
 MIT licensed. Third-party notices in `THIRD_PARTY_NOTICES.md`.
+
+</details>

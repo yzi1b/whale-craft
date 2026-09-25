@@ -166,12 +166,15 @@ export function isCopiedPresetDescription (desc, shippedDescriptions) {
  *      和它的持久 shell 一起带过来，而 MC 模式的指导里明写"本模式没有 shell" —— 自相矛盾）；
  *      **3 = persona 换成用户定稿的那一句**（"你在一台真实的 Minecraft Java 版服务器里扮演一名玩家…"）；
  *      **4 = 补上 `present`（显式文件交付）组** —— 删掉 mc_kit_share 之后，"让用户看到文件"改走宿主自带机制；
- *      **5 = 补齐 MC 模式需要的**那几组工具（tool-fs / tool-jobs / present）—— 官方 minimal 里一个都没有，
+ *      **5 = 补齐 MC 模式需要的**那几组（tool-fs / tool-jobs / present）—— 官方 minimal 里一个都没有，
  *      不补的话复制出来的 preset 既没有文件工具、也没有 job controller（看门狗只能降级成"无 job 模式"）；
  *      **6 = persona 键名跨版本跟随源 preset**（新版要 `prefix`、老版要 `text`）——
- *      升级到这一版会把 5 建的那些 preset **重建一遍**，顺手修好老环境里"键名写坏、加载失败"的那份。
+ *      升级到这一版会把 5 建的那些 preset **重建一遍**，顺手修好老环境里"键名写坏、加载失败"的那份；
+ *      **7 = 补上压缩组（compaction）** —— 官方 minimal 同样没有它，于是照 minimal 建的 MC 模式
+ *      **既没有 `/compact` 指令、也没有自动压缩**（2026-09-22 用户真机投诉："mc模式 /compact
+ *      压缩上下文没了，无法压缩"）。这是"工具组"之外的第二个必补组。
  */
-export const MC_PRESET_SPEC = 6
+export const MC_PRESET_SPEC = 7
 
 /**
  * persona 段里"人设正文"用的键名。**跨 DSH 版本有两种**：
@@ -310,6 +313,35 @@ export const MC_PRESET_TOOL_GROUPS = [
   { id: 'tool-fs', pkg: '@deepseek-ai/dsh-tool-fs', note: '文件工具（read/write/edit/read_image）' },
   { id: 'tool-jobs', pkg: '@deepseek-ai/dsh-tool-jobs', note: '后台任务 controller（看门狗要挂 job）' },
   { id: 'present', pkg: '@deepseek-ai/dsh-tool-present', note: '显式文件交付（轮末文件卡片）' },
+  {
+    // 🔴 2026-09-22：官方 minimal 也没有这一组 ⇒ 照 minimal 建的 MC 模式里
+    //    **既没有 `/compact` 指令、也没有自动压缩**（用户真机投诉）。
+    id: 'compaction',
+    pkg: '@deepseek-ai/dsh-command-compact',
+    note: '压缩组（`/compact` 指令 + 自动压缩 + 超长工具结果裁剪）',
+    // 这一组**必须整组加**（`cordis:group` + `isolate`），只补 `command-compact` 是没用的：
+    // 压缩服务本体在 `compaction-basic`，而 `isolate` 那两个键在别处根本不存在。
+    // 内容逐字对齐官方 standard / ptc / cordis 三个 preset 里的那一块（`cordis:group` 是宿主内置组类型）。
+    block: [
+      '- id: compaction',
+      '  name: cordis:group',
+      '  group: true',
+      '  isolate:',
+      '    compaction: true',
+      '    toolResultPruner: true',
+      '  config:',
+      '    - id: compaction-basic',
+      "      name: '@deepseek-ai/dsh-compaction-basic'",
+      '    - id: command-compact',
+      "      name: '@deepseek-ai/dsh-command-compact'",
+      '    - id: tool-result-pruner',
+      "      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'",
+      '      config:',
+      '        thresholdChars: 8192',
+      '        headChars: 4096',
+      '        tailChars: 1024',
+    ].join('\n'),
+  },
 ]
 
 /**
@@ -317,7 +349,10 @@ export const MC_PRESET_TOOL_GROUPS = [
  *
  * 只做"没有才加"：`pkg` 已经在文件里（不管是哪来的、哪个 id）就跳过；一个都不用加 → 返回 null。
  * @param {string} text composition 文本（`agent.cordis.yml`）
- * @param {Array<{id:string, pkg:string, note?:string}>} [groups] 要确保存在的组（默认 MC_PRESET_TOOL_GROUPS）
+ * @param {Array<{id:string, pkg:string, note?:string, block?:string}>} [groups]
+ *   要确保存在的组（默认 MC_PRESET_TOOL_GROUPS）。
+ *   `block` = 直接追加的 YAML 片段（顶层组用，如压缩组要带 `cordis:group` + `isolate`）；
+ *   不给 `block` 就走"一行 `- id` + 一行 `name`"的简单形式。
  * @returns {string|null} 改好的文本；无需改动 → null
  */
 export function patchToolGroupsIntoComposition (text, groups = MC_PRESET_TOOL_GROUPS) {
@@ -327,7 +362,7 @@ export function patchToolGroupsIntoComposition (text, groups = MC_PRESET_TOOL_GR
   let out = src.endsWith('\n') ? src : src + '\n'
   for (const g of missing) {
     out += `\n# ── ${g.note ?? g.pkg}（whale_craft 2026-09-16 加）──\n`
-      + `\n- id: ${g.id}\n  name: '${g.pkg}'\n`
+      + (g.block ? `\n${g.block}\n` : `\n- id: ${g.id}\n  name: '${g.pkg}'\n`)
   }
   return out
 }

@@ -31,6 +31,54 @@ const Vec3 = vec3pkg.Vec3 ?? vec3pkg
 const HERE = dirname(fileURLToPath(import.meta.url))
 
 /**
+ * 写 VarInt（Minecraft 协议变量长度整数）。
+ * AuthMe 对话框提交需要手动构造 raw packet。
+ */
+function writeVarInt (value) {
+  const bufs = []
+  let temp = value
+  while (true) {
+    let byte = temp & 0x7F
+    temp >>>= 7
+    if (temp !== 0) byte |= 0x80
+    bufs.push(byte)
+    if (temp === 0) break
+  }
+  return Buffer.from(bufs)
+}
+
+/**
+ * 尝试加载 prismarine-nbt（从 mineflayer 的依赖树里解析）。
+ * 用于 AuthMe 对话框登录：解析 show_dialog 的 NBT 并构造 custom_click_action 回复。
+ */
+let prismarineNBT = null
+try {
+  const requireFromMf = createRequire(createRequire(import.meta.url).resolve('mineflayer'))
+  prismarineNBT = requireFromMf('prismarine-nbt')
+} catch {
+  try {
+    prismarineNBT = (await import('prismarine-nbt')).default ?? (await import('prismarine-nbt'))
+  } catch {}
+}
+
+/**
+ * 尝试加载 mineflayer-pathfinder —— mc_hunt 自动攻击的寻路引擎。
+ * 能力全在它身上：GoalFollow 动态追击、自动挖挡路方块（Movements.canDig）、
+ * 自动垫脚/搭桥（astar toPlace + 背包方块）。
+ * 可选依赖：没装不影响连接与其它工具，只是 mc_hunt 会明确报"没装"。
+ * （参考 /www/minecraft-mcp-server —— opencode 里配置的 MCP 项目，实测同款用法。）
+ */
+let pathfinderPlugin = null
+let PathfinderMovements = null
+let PathGoals = null
+try {
+  const pf = createRequire(import.meta.url)('mineflayer-pathfinder')
+  pathfinderPlugin = pf.pathfinder
+  PathfinderMovements = pf.Movements
+  PathGoals = pf.goals
+} catch {}
+
+/**
  * 从 mineflayer **自己的**依赖树里解析包（同一份 node_modules）。
  * 用途：创造模式取物要 new 一个 prismarine-item 的 Item 实例塞进槽位。
  * ⚠️ 用"解析到的 mineflayer 实际路径"当锚点，**不写死目录** —— 这样插件装在哪儿都成立。
@@ -143,6 +191,8 @@ export const DEFAULTS = {
   moveBudgetMs: 40_000,
   chatHistory: 300,
   inputPacket: process.env.MC_INPUT_PACKET !== '0',
+  /** AuthMe 密码（离线服 + AuthMe preJoin 对话框登录时使用） */
+  authmePassword: process.env.MC_AUTHME_PASSWORD ?? '',
   /**
    * 日志落盘位置。🔴 **默认不写插件包目录**（装进 `node_modules/` 后那可能是只读的、
    * 升级时也会被覆盖）：默认写 `$DSH_HOME/whale_craft/logs/`，可用 `MC_LOG` 覆盖。
@@ -409,6 +459,77 @@ function colorOf (name) {
   if (/_ore$/.test(name)) return [125, 125, 125]
   if (/stone|cobble|deepslate|brick/.test(name)) return [120, 120, 120]
   return [150, 150, 150]
+}
+
+/* ───────────── 装备：槽位名归一 + 自动判槽（2026-09-22）─────────────
+ * 为什么有这一段：原来的 `equip` 把 destination 写死成 'hand'，
+ * 于是**盔甲（头/胸/腿/脚）一件都穿不上** —— 用户点名的缺口。
+ * 参照实现是 opencode 里挂的那个 mc_equip（destination: hand, head, torso, legs, feet）。
+ * ⚠️ mineflayer 认的副手槽叫 `off-hand`（**带连字符**），写成 offhand 会被 assert 拒掉。
+ */
+
+/** 别名 → mineflayer 槽位名；不认识的返回 null（调用方据此报错） */
+const EQUIP_DEST_ALIASES = {
+  hand: 'hand', main: 'hand', mainhand: 'hand', 手: 'hand', 主手: 'hand', 右手: 'hand',
+  offhand: 'off-hand', off: 'off-hand', 副手: 'off-hand', 左手: 'off-hand',
+  head: 'head', helmet: 'head', hat: 'head', 头: 'head', 头盔: 'head',
+  torso: 'torso', chest: 'torso', chestplate: 'torso', body: 'torso', 胸: 'torso', 胸甲: 'torso', 身体: 'torso',
+  legs: 'legs', leggings: 'legs', pants: 'legs', 腿: 'legs', 护腿: 'legs',
+  feet: 'feet', boots: 'feet', shoes: 'feet', 脚: 'feet', 靴子: 'feet',
+}
+
+/** 归一装备槽位名；空 → null，不认识 → null（配合 `destination != null` 判"给了但不认识"）。
+ *  `-`/`_`/空格一律吃掉，所以 off-hand / off_hand / off hand 都等价（mineflayer 认的是带连字符的 off-hand）。 */
+export function normalizeEquipDest (dest) {
+  if (dest == null) return null
+  const k = String(dest).trim().toLowerCase().replace(/[\s_-]+/g, '')
+  if (!k) return null
+  return EQUIP_DEST_ALIASES[k] ?? null
+}
+
+/** 盔甲四槽（穿全套、回报用） */
+export const ARMOR_SLOTS = ['head', 'torso', 'legs', 'feet']
+
+/** 装备槽在背包窗口里的下标（`inventory.items()` 只给 9–44，装备槽得单独看） */
+const EQUIP_SLOT_INDEX = { head: 5, torso: 6, legs: 7, feet: 8, 'off-hand': 45 }
+
+/** 同槽位有多件时挑好的：数据里没有盔甲"防御力"字段，按材质排足够用 */
+const ARMOR_MATERIALS = ['netherite', 'diamond', 'iron', 'chainmail', 'golden', 'leather', 'turtle']
+function armorRank (name) {
+  const i = ARMOR_MATERIALS.findIndex((m) => String(name).startsWith(m + '_'))
+  return i < 0 ? ARMOR_MATERIALS.length : i
+}
+
+/**
+ * 猜物品该穿哪个槽。**优先用 minecraft-data 的 `enchantCategories`**
+ * （armor_head / armor_chest / armor_legs / armor_feet）—— 这是数据里的权威字段，
+ * 比按名字后缀硬匹配可靠：turtle_helmet、chainmail_chestplate、模组盔甲都能对上。
+ * 数据里没标盔甲类别的（鞘翅、盾、南瓜头、头颅）再按名字兜底，其余一律当手持物。
+ */
+export function guessEquipDest (registry, itemName) {
+  const name = String(itemName ?? '')
+  const cats = registry?.itemsByName?.[name]?.enchantCategories ?? []
+  if (cats.includes('armor_head')) return 'head'
+  if (cats.includes('armor_chest')) return 'torso'
+  if (cats.includes('armor_legs')) return 'legs'
+  if (cats.includes('armor_feet')) return 'feet'
+  if (name === 'elytra') return 'torso'
+  if (name === 'shield') return 'off-hand'
+  if (name === 'carved_pumpkin' || /(_head|_skull)$/.test(name)) return 'head'
+  return 'hand'
+}
+
+/** 看起来像食物/药水？—— 数据里没有 edible/foodPoints 字段，只能按名字认（够用） */
+const FOOD_RE = /^(apple|golden_apple|enchanted_golden_apple|bread|carrot|golden_carrot|potato|baked_potato|poisonous_potato|beetroot|beetroot_soup|melon_slice|sweet_berries|glow_berries|dried_kelp|cookie|pumpkin_pie|mushroom_stew|rabbit_stew|suspicious_stew|chorus_fruit|honey_bottle|milk_bucket|.*_stew|.*_soup|(cooked|raw)_(beef|porkchop|chicken|mutton|rabbit|cod|salmon)|tropical_fish|pufferfish|rotten_flesh|spider_eye|poisonous_potato)$/
+const DRINK_RE = /^(potion|splash_potion|lingering_potion|milk_bucket|honey_bottle)$/
+
+/** 吃/喝/拉弓这类"按住才有用"的物品：估个按住时长（毫秒）；普通物品几乎瞬时 */
+function guessUseHoldMs (name) {
+  const n = String(name ?? '')
+  if (/^(bow|crossbow)$/.test(n)) return 1200
+  if (DRINK_RE.test(n)) return 1800
+  if (FOOD_RE.test(n)) return 1600
+  return 120
 }
 
 /**
@@ -715,6 +836,60 @@ export class McBot extends EventEmitter {
       })
       b._createdAt = Date.now()
 
+      // ──── 挂 pathfinder（mc_hunt 自动追击：寻路 + 自动挖挡路方块 + 自动垫脚）────
+      // 官方 README 与参考项目 bot.ts:136 都是 createBot 返回后立刻 loadPlugin。
+      // 挂失败不致命：hunt() 里会再检查 bot.pathfinder 并给出清晰报错。
+      if (pathfinderPlugin) {
+        try { b.loadPlugin(pathfinderPlugin) } catch {}
+      }
+
+      // ──── AuthMe 6.x 对话框登录（26.2 Paper + Dialog API） ────
+      // AuthMe preJoin 对话框在 configuration 阶段下发，必须用 custom_click_action 回复密码，
+      // 否则 loginCancelKicks=true 时会被踢。preJoin.enable=true 时此流程不可跳过。
+      const authmePwd = this.cfg.authmePassword
+      if (authmePwd && prismarineNBT) {
+        const submitAuthMeDialog = (data) => {
+          try {
+            // dialog 可能是 registryEntryHolder，真正的 NBT 在 .data 上
+            let dialog = data?.dialog ?? data
+            if (dialog?.data) dialog = dialog.data
+
+            let simple = {}
+            try { simple = prismarineNBT.simplify(dialog) || {} } catch { simple = {} }
+
+            // 从对话框里解析出提交按钮的 action id 和输入框的 key
+            const submitId =
+              (Array.isArray(simple.actions) ? simple.actions : [])
+                .map((a) => a?.action?.id)
+                .find((id) => typeof id === 'string' && id.endsWith('/submit')) ||
+              'authme:prejoin-login/submit'
+            const inputKey =
+              (Array.isArray(simple.inputs) && simple.inputs[0]?.key) || 'password'
+
+            const payloadNbt = prismarineNBT.comp({ [inputKey]: prismarineNBT.string(authmePwd) })
+            const fullNbt = prismarineNBT.writeUncompressed(payloadNbt, 'big')
+            // 匿名 NBT：保留根 compound 类型字节(0x0a)，去掉根名(00 00)
+            const anonNbt = Buffer.concat([fullNbt.subarray(0, 1), fullNbt.subarray(3)])
+
+            const idBuf = Buffer.from(submitId, 'utf8')
+            // configuration 阶段 packet id = 0x08，play 阶段 = 0x44
+            const packetId = b._client?.state === 'play' ? 0x44 : 0x08
+            const body = Buffer.concat([
+              writeVarInt(packetId),
+              writeVarInt(idBuf.length), idBuf,
+              writeVarInt(anonNbt.length), anonNbt,
+            ])
+            b._client.writeRaw(body)
+            this.log('AuthMe 对话框已提交（submitId=' + submitId + '）')
+          } catch (e) {
+            this.log('AuthMe 对话框提交失败：' + (e?.message ?? e))
+          }
+        }
+        b._client.on('packet', (data, meta) => {
+          if (meta.name === 'show_dialog') submitAuthMeDialog(data)
+        })
+      }
+
       let dupe = false
       b.on('error', (e) => { this.#reportError(e) })
       b.on('kicked', (r) => {
@@ -748,7 +923,16 @@ export class McBot extends EventEmitter {
       try {
         await new Promise((resolve, reject) => {
           const t = setTimeout(() => reject(new Error(`连接 ${sub} 超时`)), this.cfg.connectTimeoutMs)
-          b.once('spawn', () => { clearTimeout(t); resolve() })
+          b.once('spawn', () => {
+            clearTimeout(t)
+            // ──── AuthMe post-join /login 命令 ────
+            // preJoin 对话框登录成功后，服务器可能还需要 post-join /login 命令。
+            // 如果对话框已经登录成功，这条命令会多余但不会出错（AuthMe 会忽略已登录玩家）。
+            if (authmePwd) {
+              try { b.chat(`/login ${authmePwd}`) } catch {}
+            }
+            resolve()
+          })
           b.once('kicked', (r) => { clearTimeout(t); reject(new Error(`被踢: ${String(r).slice(0, 200)}`)) })
         })
       } catch (e) {
@@ -1565,7 +1749,12 @@ export class McBot extends EventEmitter {
 
   inventory () {
     const b = this.requireBot()
-    return { held: b.heldItem ? `${b.heldItem.name}x${b.heldItem.count}` : null, items: b.inventory.items().map((i) => `${i.name}x${i.count}`) }
+    return {
+      held: b.heldItem ? `${b.heldItem.name}x${b.heldItem.count}` : null,
+      // 装备槽不在 `inventory.items()` 里（它只给 9–44），单独列出来 —— 否则"我到底穿没穿"看不见
+      wearing: this.#wornArmor(b),
+      items: b.inventory.items().map((i) => `${i.name}x${i.count}`),
+    }
   }
 
   /* ───────────── 朝向（"看向我"就该用工具，不要用 /tp 指令） ───────────── */
@@ -1752,13 +1941,121 @@ export class McBot extends EventEmitter {
     throw new Error(`未知 mode：${mode}（可用 look / place / break / toward）`)
   }
 
-  /** 装备某物到手上 */
-  async equip ({ name } = {}) {
+  /**
+   * 装备某物。
+   *
+   * `destination` 不给就**按物品自己判槽**（盔甲→头/胸/腿/脚、鞘翅→胸、盾→副手、其余→手），
+   * 这正是原来缺的能力：以前写死 'hand'，盔甲一件都穿不上。
+   * 给了就用给的（hand / off-hand / head / torso / legs / feet，中英文别名都认）。
+   * auto:false 时不猜，一律装到手上（老行为）。
+   */
+  async equip ({ name, destination = null, auto = true } = {}) {
     const b = this.requireBot()
-    const item = b.inventory.items().find((i) => i.name === String(name))
-    if (!item) throw new Error(`背包里没有 ${name}（用 mc_inventory 看有什么）`)
-    await this.#t(b.equip(item, 'hand'), 'equip', `手持 ${name}`)
-    return { held: `${item.name}x${item.count}` }
+    const want = String(name ?? '').trim()
+    if (!want) throw new Error('要装备什么？给物品名（用 mc_inventory 看有什么）')
+    // 先校验 dest 再找物品：否则"背包里没有 X"会把"dest 写错了"这个真因盖掉
+    const explicit = normalizeEquipDest(destination)
+    if (destination != null && explicit == null) {
+      throw new Error(`不认识的装备位置 "${destination}"（可用 hand / off-hand / head / torso / legs / feet）`)
+    }
+    const item = b.inventory.items().find((i) => i.name === want)
+    if (!item) throw new Error(`背包里没有 ${want}（用 mc_inventory 看有什么）`)
+    const dest = explicit ?? (auto ? guessEquipDest(b.registry, item.name) : 'hand')
+    await this.#t(b.equip(item, dest), 'equip', `装备 ${item.name} → ${dest}`)
+    const label = `${item.name}x${item.count}`
+    return {
+      equipped: label,
+      destination: dest,
+      autoPicked: explicit == null,
+      held: dest === 'hand' ? label : undefined,
+      wearing: this.#wornArmor(b),
+    }
+  }
+
+  /** 当前身上穿着的盔甲 / 副手（`bot.inventory.items()` 不含 5–8 / 45 这些装备槽，得单独看） */
+  #wornArmor (b) {
+    const out = {}
+    for (const [k, s] of Object.entries(EQUIP_SLOT_INDEX)) {
+      const it = b.inventory?.slots?.[s]
+      if (it) out[k] = `${it.name}x${it.count}`
+    }
+    return out
+  }
+
+  /**
+   * 一键穿全套装备：头/胸/腿/脚各挑背包里**最好**的一件穿上。
+   *
+   * 为什么要这个：玩家说"穿上装备"不会一件件点名，而 `equip` 一次只穿一件 ——
+   * 四件套要四次调用，模型很容易漏。这里一次搞定，并回报"穿了哪些、缺哪些"。
+   * 鞘翅默认**不自动穿**（它占胸槽会顶掉胸甲），要穿就 elytra:true。
+   */
+  async equipArmor ({ include = ARMOR_SLOTS, elytra = false } = {}) {
+    const b = this.requireBot()
+    const pool = b.inventory.items()
+    const wanted = (Array.isArray(include) && include.length ? include : ARMOR_SLOTS)
+      .map((s) => normalizeEquipDest(s) ?? String(s))
+      .filter((s) => ARMOR_SLOTS.includes(s))
+    const worn = []
+    const missing = []
+    const failed = []
+    for (const slot of wanted) {
+      let cands = pool.filter((i) => guessEquipDest(b.registry, i.name) === slot)
+      if (slot === 'torso' && !elytra) cands = cands.filter((i) => i.name !== 'elytra')
+      if (!cands.length) { missing.push(slot); continue }
+      cands.sort((a, c) => armorRank(a.name) - armorRank(c.name))
+      const best = cands[0]
+      try {
+        await this.#t(b.equip(best, slot), 'equip', `穿 ${best.name} → ${slot}`)
+        worn.push(`${slot}=${best.name}`)
+      } catch (e) { failed.push(`${slot}: ${e.message}`) }
+    }
+    return {
+      worn, missing, failed,
+      nowWearing: this.#wornArmor(b),
+      note: missing.length ? `背包里没有可穿的：${missing.join(' / ')}（创造模式可用 mc_give 取）` : undefined,
+    }
+  }
+
+  /**
+   * 使用手上的物品（= 举起来用一下）：吃、喝、水桶、打火石、弓箭、末影珍珠、盾…
+   *
+   * 和 `useBlock` 的分工：`useBlock` 是"对着**世界**右键"（开门/按钮/喂动物），
+   * 这个是对着**空气**用**手上的东西** —— 以前完全没有这条路，所以机器人吃不了东西、
+   * 倒不了水、射不了箭（用户点名的第二个缺口）。
+   * 给了 name 就先拿到手上（offHand:true 拿副手）。
+   * holdMs 不给就按物品类型估（食物 1.6s、药水 1.8s、弓 1.2s、其余 0.12s）；
+   * 食物默认走 mineflayer 的 `bot.consume()`（它等服务器确认，比"自己数秒"稳）。
+   */
+  async useItem ({ name = null, offHand = false, holdMs = null, release = true, consume = null } = {}) {
+    const b = this.requireBot()
+    const hand = offHand ? 'off-hand' : 'hand'
+    if (name) await this.equip({ name, destination: hand })
+    const item = b.inventory?.slots?.[b.getEquipmentDestSlot(hand)] ?? (offHand ? null : b.heldItem)
+    if (!item) throw new Error(`${offHand ? '副手' : '主手'}上没有物品（给 name 先装备，或用 mc_inventory 看有什么）`)
+
+    const isFood = !offHand && FOOD_RE.test(item.name) && !/^(potion|splash_potion|lingering_potion)$/.test(item.name)
+    const useConsume = consume === true || (consume !== false && isFood && holdMs == null)
+    if (useConsume) {
+      if (typeof b.consume !== 'function') throw new Error('这一版 mineflayer 没有 bot.consume，请改用 holdMs 手动控制')
+      try {
+        await this.#t(b.consume(), 'act', `吃/喝 ${item.name}`)
+      } catch (e) {
+        if (/Food is full/i.test(String(e?.message))) {
+          throw new Error(`吃饱了（food=${b.food}），现在吃 ${item.name} 没效果`)
+        }
+        throw e
+      }
+      return { used: item.name, hand, mode: 'consume', food: b.food, wearing: undefined }
+    }
+
+    const ms = holdMs == null ? guessUseHoldMs(item.name) : Math.min(Math.max(Number(holdMs) || 0, 0), 10_000)
+    b.activateItem(offHand)
+    try {
+      if (ms > 0) await sleep(ms)
+    } finally {
+      if (release) b.deactivateItem()
+    }
+    return { used: item.name, hand, mode: 'activate', heldMs: ms, released: Boolean(release) }
   }
 
   /**
@@ -1852,9 +2149,16 @@ export class McBot extends EventEmitter {
     return { cleared: true }
   }
 
-  /** 使用/激活方块或实体（开门、按按钮、拉杆、喂动物…） */
-  async useBlock ({ x, y, z, who = null } = {}) {
+  /**
+   * 使用/激活方块或实体（开门、按按钮、拉杆、喂动物…）。
+   *
+   * 给了 name 就**先把它拿到手上**再右键 —— 这是"用物品对着方块用"的路子：
+   * 骨粉催熟、锄头耕地、打火石点火、水桶倒水、刷怪蛋、喂特定食物都用得上。
+   * （只用手上的东西、不对着方块，走 `useItem`。）
+   */
+  async useBlock ({ x, y, z, who = null, name = null, offHand = false } = {}) {
     const b = this.requireBot()
+    if (name) await this.equip({ name, destination: offHand ? 'off-hand' : 'hand' })
     if (who) {
       const needle = String(who).toLowerCase()
       const ent = Object.values(b.entities).find(
@@ -1891,6 +2195,653 @@ export class McBot extends EventEmitter {
     return { attacked: label, distance: d, health: b.health }
   }
 
+  /**
+   * 自动攻击 v2（战斗基准 = Wurst v7.54：FightBot / KillauraLegit / NukerLegit / AutoEat）：
+   * 锁定**一个**实体追着打，跑完整场战斗。相比 v1 专门修了三个实战缺陷：
+   *   ①只差一格不跳：GoalFollow 按方块坐标提前判"到点"后寻路就不再规划（不生成跳/挖的边）——
+   *     现在**寻路闲着时自己朝目标按住前进**，位置 700ms 不挪窝（且着地、没在挖）就脉冲按住
+   *     jump 跳过去（FightBot"撞水平障碍即跳"的手动版；mineflayer 不上报 hasHorizontalCollision，
+   *     只能用位置停滞判定）；
+   *   ②目标在墙后只贴墙不挖：**先看视线**（眼→胸口 raycast），被挡且挡路方块 ≤4.5 格就换最快
+   *     工具（bestHarvestTool）直接挖穿再打——挖 >15s 的硬方块不挖（记进 notes）；挖太远先贴近；
+   *   ③低血不退：血量 ≤ hpFloor → **反向 GoalInvert(GoalFollow) 跑开**（≥9 格或 8s）→ 站定**吃食物**
+   *     （food<18 才吃，优先级 金苹果>熟食>面包…饱了才有的自然回血）→ 等 6s 回血 → **重新锁定追上去**。
+   *     最多撤 3 轮；回不上血/背包没食物 → retreated 收场（血量掉到危险线且已撤过也直接收场）。
+   * 攻击节奏 = 原版剑蓄力 625ms + 高斯 ±100ms 抖动（Killaura speedRandMS）；每次出手**跳劈**
+   * （Criticals FULL_JUMP 的原版合法实现：起跳→下落段出手 = 暴击 ×1.5；数据包模式不做——那是
+   * 伪造移动包）；**6-22 格先拉弓抛物线射一箭**（BowAimbot+Trajectories：v0=3.0/重力 0.05/
+   * 阻力 0.99 数值解算 + 移动目标提前量，蓄力 0.85s），近了换剑；**血量 ≤10 点自动图腾换副手**
+   * （AutoTotem）；推进按住 sprint（冲刺命中额外击退）。打前先面向胸口。
+   * 收场条件：
+   *   target_gone 目标死/离开加载范围（宽限 reacquire 秒，可能只是过区块边界）
+   *   too_far     非玩家目标拉开 >CHASE_FAR(60) 格持续 4s：达不到 → 取消锁定（玩家目标不设限）
+   *   retreated    血量反复跌破 hpFloor：撤退吃食物回不上血（或没食物），或血量已到危险线
+   *   timeout      durationSec 用尽
+   *   aborted      用户中断；disconnected 断线
+   * 返回战报含 hits / retreats / ate / food；durationSec 硬上限 120s。
+   */
+  async hunt ({ who, durationSec = 45, range = 2, hpFloor = 10, reacquire = 4 } = {}) {
+    if (!who) throw new Error('who 必填：要追打的目标名字（子串匹配；先用 mc_entities 看附近有谁）')
+    const b = this.requireBot()
+    if (!pathfinderPlugin || !PathGoals || typeof b.pathfinder?.setGoal !== 'function') {
+      throw new Error('未安装/未挂载 mineflayer-pathfinder（npm i mineflayer-pathfinder@^2.4.5 后重启 dsh-web）')
+    }
+    const needle = String(who).toLowerCase()
+    const findTarget = () => Object.values(b.entities)
+      .filter((e) => e !== b.entity && String(e.username ?? e.name ?? '').toLowerCase().includes(needle))
+      .sort((a, c) => a.position.distanceTo(b.entity.position) - c.position.distanceTo(b.entity.position))[0] ?? null
+    let target = findTarget()
+    if (!target) throw new Error(`全图找不到名字含 "${who}" 的实体（先用 mc_entities 看看；它可能不在已加载范围）`)
+    // 目标策略（用户 2026-09-24）：就近锁定（findTarget 已按距离取最近）；非玩家太远=打不到
+    // → 不硬追、拉开即取消锁定；玩家目标不设距离上限，锁到死（durationSec 内）
+    const isPlayer = (t) => !!t && (t.type === 'player' || typeof t.username === 'string')
+    const CHASE_FAR = 60
+    const firstDist = target.position.distanceTo(b.entity.position)
+    if (!isPlayer(target) && firstDist > CHASE_FAR) {
+      throw new Error(`最近的 "${who}" 在 ${firstDist.toFixed(0)} 格外（>${CHASE_FAR}），太远不追——先用 mc_entities 看近处；玩家目标不受此限`)
+    }
+
+    const label = target.username ?? target.name ?? target.type
+    const durMs = Math.min(Math.max(Number(durationSec) || 45, 1), 120) * 1000
+    const followRange = Math.min(Math.max(Number(range) || 2, 1), 8)
+    const hpLimit = Number.isFinite(Number(hpFloor)) ? Number(hpFloor) : 10
+    const lostGraceMs = Math.min(Math.max(Number(reacquire) || 4, 0), 30) * 1000
+
+    // 战斗常量：reach 保守取 4.0（服务器容差未知），冷却=原版剑蓄力整轮
+    const ATTACK_REACH = 4.0
+    const ATTACK_COOLDOWN_MS = 625         // 原版剑蓄力 = 1/1.6s（Killaura 默认走原版冷却）
+    const ATTACK_JITTER_MS = 100           // Killaura speedRandMS：高斯 ±100ms 抖攻速（防节奏固定）
+    const DIG_REACH = 4.5               // 手动挖墙最远距离
+    const MAX_DIG_MS = 15_000           // 最快工具也要 >15s 的硬方块不挖
+    const FLEE_DIST = 9                 // 撤退跑到离目标几格才算脱战
+    const FLEE_TIMEOUT_MS = 8_000
+    const HEAL_WAIT_MS = 6_000          // 吃完等自然回血的窗口
+    const MAX_RETREATS = 3              // 撤退-吃-回来 最多几轮
+    const CRIT = Math.max(2, Math.floor(hpLimit * 0.4))  // 危险线（hpFloor=10 → 4）
+    const STUCK_MS = 450                // 位置停滞多久算卡住 → 起跳（FightBot 撞墙当拍就跳；700ms 太钝）
+    const JUMP_HOLD_MS = 280
+    const TOTEM_HP = 10                 // AutoTotem（Wurst 默认≈常备）：血量 ≤10 点(5 心) → 图腾换副手
+    const BOW_MIN = 6                   // 弓接战（BowAimbot）：6-22 格先射一箭，近了换剑冲锋
+    const BOW_MAX = 22
+    const BOW_CHARGE_MS = 850           // 拉弓蓄力 ~1s 满伤害，0.85s ≈ 90%+ 输出
+    const BOW_INTERVAL_MS = 2_500       // 两箭最小间隔
+
+    try {
+      const weapon = this.#bestWeapon(b)
+      if (weapon && b.heldItem?.name !== weapon.name) {
+        await this.#t(b.equip(weapon, 'hand'), 'equip', `手持 ${weapon.name}`)
+      }
+    } catch { /* 换手失败照打 */ }
+
+    const mv = new PathfinderMovements(b)
+    mv.canDig = true                     // 挡路方块自动挖（astar toBreak → pathfinder 自带挖+换最快工具）
+    b.pathfinder.setMovements(mv)
+    const scaffolding = mv.countScaffoldingItems?.() ?? 0
+
+    let goal = new PathGoals.GoalFollow(target, followRange)
+    b.pathfinder.setGoal(goal, true)     // dynamic：目标动 → hasChanged → 重规划（v1 验证过的追击底座）
+    const relock = () => {
+      // 换/找回目标必须重建 goal：旧实体引用的 GoalFollow 坐标不再刷新
+      goal = new PathGoals.GoalFollow(target, followRange)
+      b.pathfinder.setGoal(goal, true)
+    }
+
+    const t0 = Date.now()
+    const deadline = t0 + durMs
+    let phase = 'fight'                  // fight → flee → heal → fight（低血三段式）
+    let phaseAt = t0
+    let keepAwaySet = false              // heal 阶段的保距 goal 只挂一次
+    let hits = 0
+    let retreats = 0
+    let ate = 0
+    let lastAttackAt = 0
+    let lastJumpAt = 0
+    let lostAt = null
+    let farAt = null                    // 非玩家目标持续超出 CHASE_FAR 的起始时刻（打不到 → 取消锁定）
+    let outcome = 'timeout'
+    let notes = null
+    let hardWall = false                 // 撞上挖不动的墙（记 notes）
+    const digFails = new Map()           // 坐标 → {n, at}：挂死(n≥99)永久放弃；普通失败 5s 内连跌 2 次才放弃
+    const failOf = (key) => {
+      const r = digFails.get(key)
+      return r && (r.n >= 99 || Date.now() - r.at < 5000) ? r.n : 0
+    }
+    let miningStreak = 0                 // 连续"在挖"已持续多久（ms 计数，每拍 +250；挖死看门狗）
+    let stallAt = Date.now()             // 位置停滞监视锚点
+    let stallPos = b.entity.position.clone()
+    let prevT = null                    // 上一拍目标位置（弓箭提前量的速度估计）
+    let prevTAt = 0
+    let lastBowAt = 0                   // 上一箭时刻（BOW_INTERVAL_MS 节流）
+    let bowDead = false                 // 没弓/没箭/连续失败 → 本轮不再尝试弓
+    let bowFails = 0
+    let totemMissing = false            // 背包确认没有图腾 → 本轮不再找
+    let totemFails = 0
+
+    const refreshStall = () => { stallPos = b.entity.position.clone(); stallAt = Date.now() }
+    const chestOf = (t) => t.position.offset(0, (t.height ?? 1.8) * 0.5, 0)
+
+    // 挖掘挂死看门狗：pathfinder 自己的 toBreak 或我手动挖，撞上服务器不让挖的方块会无限期卡
+    // （真机：领地方块 b.dig 挂死）→ 连续"在挖" > 8s 就强制 stopDigging + 重挂 goal（触发
+    // resetPath 换策略：绕路/放弃），绝不无限期卡住
+    const MINING_HANG_MS = 8000
+    const unstickDig = async () => {
+      if (!b.pathfinder.isMining?.()) { miningStreak = 0; return false }
+      miningStreak += 250
+      if (miningStreak < MINING_HANG_MS) return false
+      miningStreak = 0
+      try { b.stopDigging?.() } catch {}
+      refreshStall()
+      if (phase === 'fight') { try { relock() } catch {} }
+      return true
+    }
+
+    // 攻速抖动：Killaura 的 speedRandMS——两均匀和近似的高斯 ±100ms，攻速节奏不固定
+    const gaussMs = () => (Math.random() + Math.random() - 1) * ATTACK_JITTER_MS
+
+    // AutoTotem（Wurst 同名功能，原版合法）：血量 ≤ TOTEM_HP 且副手不是图腾、背包有 → 换副手；
+    // 背包确认没有/连续换失败 → 本轮不再找（不空耗）
+    const autoTotem = async () => {
+      if (totemMissing || b.health > TOTEM_HP) return false
+      try {
+        const off = b.inventory.slots?.[45]           // 玩家背包 45 号槽 = 副手
+        if (off && /totem_of_undying/.test(off.name)) return false
+        const totem = b.inventory.items().find((i) => i.name === 'totem_of_undying')
+        if (!totem) { totemMissing = true; return false }
+        await this.#t(b.equip(totem, 'off-hand'), 'equip', '图腾换到副手')
+        return true
+      } catch {
+        if (++totemFails >= 2) totemMissing = true
+        return false
+      }
+    }
+    const fleeGoal = () => new PathGoals.GoalInvert(new PathGoals.GoalFollow(target, FLEE_DIST)) // pathfinder 没有原生逃跑 goal
+
+    // 视线：眼→目标胸口打 ray，返回挡路方块（null=通；出错也算通，宁可空挥也不瘫）
+    const losBlock = () => {
+      try {
+        if (!target || !b.entities[target.id]) return null
+        const eye = b.entity.position.offset(0, (b.entity.height ?? 1.8) - 0.18, 0)
+        const chest = chestOf(target)
+        const d = chest.distanceTo(eye)
+        if (d < 0.2) return null
+        const dir = chest.minus(eye).normalize()
+        return b.world.raycast(eye, dir, d - 0.05, (blk) => blk.boundingBox === 'block' && !/^(water|lava)$/.test(blk.name)) ?? null
+      } catch { return null }
+    }
+
+    // ── 智能前方障碍检测（2026-09-23 用户实测反馈："总被墙挡不挖；前面一格方块也不跳不挖"）──
+    // 光靠视线 ray 太迟钝：眼(1.62)→胸口(0.9) 的射线经常从一格方块**顶上掠过去** → 判"没挡"
+    // → 既不挖也不跳，就干瞪眼往前压。改成主动采样：沿**面向方向**（=按住前进会走的方向）在
+    // 脚面(y+0.1)、头顶(y+1.1)各探一格实体方块：
+    //   脚挡头空 = 一格台阶 → stepJump 直接跳上去（不等卡死）
+    //   脚头都挡 = ≥2 格墙   → 4.5 格内换最快工具直接挖（挖不动的 digBlock 内部放弃并记 hardWall）
+    //   脚空头挡 = 低顶门洞 → 挖头顶那格
+    // 空气/花草（boundingBox=empty）不算挡
+    const frontObstacle = () => {
+      try {
+        const p = b.entity.position
+        const yaw = b.entity.yaw ?? 0
+        // 正前 + 左右 45°/90° 弧扫：面向没对着墙但身体被侧前方挡住也算
+        const dirs = [0, 0.78, -0.78, 1.57, -1.57].map((a) => ({
+          dx: -Math.sin(yaw + a), dz: Math.cos(yaw + a),
+        }))
+        const solid = (dx, dz, fwd, dy) => {
+          const blk = b.world.blockAt(p.offset(dx * fwd, dy, dz * fwd))
+          return blk && blk.boundingBox === 'block' ? blk : null
+        }
+        for (const { dx, dz } of dirs) {
+          for (const fwd of [0.55, 1.05]) {     // 贴身一格 + 前方一格两档距离
+            const foot = solid(dx, dz, fwd, 0.1)
+            const head = solid(dx, dz, fwd, 1.1)
+            if (!foot && !head) continue
+            if (foot && !head) return { kind: 'step', block: foot, dx, dz }
+            if (!foot && head) return { kind: 'overhang', block: head, dx, dz }
+            return { kind: 'wall', block: foot, dx, dz }
+          }
+        }
+        return null
+      } catch { return null }
+    }
+
+    const distToTarget = () => (target && b.entities[target.id])
+      ? target.position.distanceTo(b.entity.position) : Infinity
+
+    // 手动挖：换最快工具再挖；太硬/太远不挖。2026-09-23 真机教训：领地保护的方块服务器直接
+    // 拒绝 → b.dig 会挂死到 #t 的 25s 超时 → 加"挂死竞速"（预测耗时×3，封顶 MAX_DIG_MS），
+    // 挂死立即永久放弃、其他错误 2 次放弃（记进 digFails + hardWall），不再每拍重试空耗。
+    const digBlock = async (block) => {
+      const key = `${block.position.x},${block.position.y},${block.position.z}`
+      if (failOf(key) >= 2) return false                  // 已判定挖不动 → 直接放弃
+      const tool = b.pathfinder.bestHarvestTool?.(block) ?? null
+      // 带效率附魔算实际挖速（Wurst AutoTool：effLvl²+1 加速）——不带会把 1 秒的活判成硬墙
+      const enchants = (() => {
+        try {
+          const nbt = requireFromMineflayer('prismarine-nbt')
+          return tool?.nbt ? (nbt.simplify?.(tool.nbt)?.Enchantments ?? []) : []
+        } catch { return [] }
+      })()
+      const digMs = block.digTime(tool ? tool.type : null, false, false, false, enchants, {})
+      if (!Number.isFinite(digMs) || digMs > MAX_DIG_MS) {
+        hardWall = true
+        digFails.set(key, { n: 99, at: Date.now() })
+        return false
+      }
+      try { b.setControlState('forward', false); b.setControlState('sprint', false) } catch {}
+      try { await this.#t(b.lookAt(block.position.offset(0.5, 0.5, 0.5)), 'lookAt', '面向挡路方块') } catch {}  // NukerLegit：先 faceVector 再挖
+      if (tool && b.heldItem?.type !== tool.type) {
+        try { await this.#t(b.equip(tool, 'hand'), 'equip', `换 ${tool.name} 挖墙`) } catch {}
+      }
+      const hangMs = Math.min(MAX_DIG_MS, Math.max(6000, digMs * 3 + 3000))
+      let hung = false
+      const digP = Promise.resolve(b.dig(block, true))
+      digP.catch(() => {})               // 竞速输掉的 promise 迟到的 rejection 不能打崩进程
+      try {
+        await this.#t(Promise.race([
+          digP,
+          sleep(hangMs).then(() => { hung = true }),
+        ]), 'dig', `挖 ${block.name}`)
+        return true
+      } catch {
+        // 挂死超时 = 服务器不让挖（领地保护等）→ 立刻永久放弃；其他错误（被击断等）5s 内 2 次才放弃
+        const n = failOf(key) + (hung ? 99 : 1)
+        digFails.set(key, { n, at: Date.now() })
+        if (n >= 2) {
+          hardWall = true
+          try { b.stopDigging?.() } catch {}
+        }
+        return false
+      }
+    }
+
+    // 卡住跳：位置 STUCK_MS 不挪窝 + 着地 + 没在挖/搭 → 脉冲按住 jump（修"差一格不跳"）
+    const jumpIfStuck = async () => {
+      const now = Date.now()
+      const p = b.entity.position
+      if (p.distanceTo(stallPos) > 0.15) { refreshStall(); return false }
+      if (now - stallAt < STUCK_MS) return false
+      if (!b.entity.onGround || b.pathfinder.isMining?.()) { refreshStall(); return false }   // isBuilding 不再抑制跳——寻路自己会跳，这层只防真卡死
+      if (now - lastJumpAt < 600) return false
+      lastJumpAt = now
+      stallAt = now + 400                // 起跳后再宽限一会儿才重新判停滞
+      try {
+        b.setControlState('jump', true)
+        await sleep(JUMP_HOLD_MS)
+      } catch { /* 忽略 */ } finally {
+        try { b.setControlState('jump', false) } catch {}
+      }
+      return true
+    }
+
+    // 一格台阶正面跳：frontObstacle 判"脚挡头空"就调（FightBot 撞墙跳的正面版）——按住前进+跳
+    // 蹬上去，350ms 冷却。不等位置停滞，采样到台阶就跳。
+    const stepJump = async (obs) => {
+      const now = Date.now()
+      if (now - lastJumpAt < 350 || !b.entity.onGround) return false
+      lastJumpAt = now
+      try {
+        if (obs?.dx !== undefined) {   // 弧扫在侧向命中 → 先转向台阶再跳（不然往空处跳）
+          await this.#t(b.look(Math.atan2(-obs.dx, obs.dz), 0), 'look', '面向台阶')
+        }
+        b.setControlState('forward', true)
+        b.setControlState('jump', true)
+        await sleep(JUMP_HOLD_MS)
+      } catch { /* 忽略 */ } finally {
+        try { b.setControlState('jump', false) } catch {}
+      }
+      stallAt = Date.now() + 300          // 刚起跳，给 300ms 宽限再判停滞
+      return true
+    }
+
+    // ── 远程压制（Wurst BowAimbot + Trajectories 的服务端版）──
+    // 原版箭：初速 3.0（满蓄）、每 tick 重力 -0.05、阻力 ×0.99。以"目标扩展 AABB"判命中，
+    // 直瞄俯仰 ±70° 内粗扫 1.5° 再精扫 0.15°；拿命中 tick 数加移动目标提前量再解一遍。
+    const simArrow = (eye, aim) => {
+      const dx = aim.x - eye.x, dy = aim.y - eye.y, dz = aim.z - eye.z
+      const yaw = Math.atan2(-dx, dz)
+      const basePitch = Math.atan2(-dy, Math.hypot(dx, dz))   // 直瞄俯仰（正=向下）
+      let best = { miss: Infinity, yaw, pitch: basePitch, ticks: 0 }
+      const tryPitch = (pitch) => {
+        const cp = Math.cos(pitch)
+        let vx = -Math.sin(yaw) * cp * 3.0
+        let vy = -Math.sin(pitch) * 3.0
+        let vz = Math.cos(yaw) * cp * 3.0
+        let x = eye.x, y = eye.y, z = eye.z
+        for (let i = 1; i <= 140; i++) {
+          vy -= 0.05
+          x += vx; y += vy; z += vz
+          vx *= 0.99; vy *= 0.99; vz *= 0.99
+          const ex = Math.max(0, Math.abs(x - aim.x) - 0.4)
+          const ey = Math.max(0, Math.abs(y - aim.y) - 0.9)
+          const ez = Math.max(0, Math.abs(z - aim.z) - 0.4)
+          const miss = Math.hypot(ex, ey, ez)
+          if (miss < best.miss) best = { miss, yaw, pitch, ticks: i }
+          if (miss <= 0.02) return true             // 已进盒内 → 直接命中
+          if (y < aim.y - 6) break                  // 掉太深没戏
+        }
+        return false
+      }
+      for (let d = -70; d <= 5; d += 1.5) if (tryPitch(basePitch + d * Math.PI / 180)) return best
+      const p0 = best.pitch
+      for (let d = -1.5; d <= 1.5; d += 0.15) if (tryPitch(p0 + d * Math.PI / 180)) return best
+      return best.miss <= 1.2 ? best : null         // 最贴的都不够近 → 这箭别射
+    }
+    const solveBow = (tv) => {
+      const eye = b.entity.position.offset(0, (b.entity.height ?? 1.8) - 0.18, 0)
+      let sol = simArrow(eye, chestOf(target))                 // 第一遍：直瞄解出飞行时间
+      if (!sol) return null
+      const aim = target.position
+        .offset(tv.x * sol.ticks / 20, tv.y * sol.ticks / 20, tv.z * sol.ticks / 20)
+        .offset(0, (target.height ?? 1.8) * 0.5, 0)
+      sol = simArrow(eye, aim)                                 // 第二遍：带提前量精解
+      if (!sol || sol.miss > 1.2) return null
+      return sol
+    }
+    const bowShot = async (tv) => {
+      if (bowDead || Date.now() - lastBowAt < BOW_INTERVAL_MS) return false
+      const bow = b.inventory.items().find((i) => i.name === 'bow')
+      const hasArrow = b.inventory.items().some((i) => /^(arrow|tipped_arrow|spectral_arrow)$/.test(i.name))
+      if (!bow || !hasArrow) { bowDead = true; return false }
+      const sol = solveBow(tv)
+      if (!sol) return false
+      try {
+        if (b.heldItem?.name !== 'bow') await this.#t(b.equip(bow, 'hand'), 'equip', '拿弓')
+        await this.#t(b.look(sol.yaw, sol.pitch), 'lookAt', '瞄弓')
+        b.activateItem()                     // 按住右键 = 开始拉弓
+        await sleep(BOW_CHARGE_MS)           // 蓄力 0.85s（≈90%+ 箭速/伤害）
+        b.deactivateItem()                   // 松手射出
+        lastBowAt = Date.now()
+        return true
+      } catch {
+        try { b.deactivateItem() } catch {}
+        if (++bowFails >= 2) bowDead = true
+        return false
+      }
+    }
+
+    while (Date.now() < deadline) {
+      if (this.abortSignal?.aborted) { outcome = 'aborted'; break }
+      if (!b.entity || b._client?.ended) { outcome = 'disconnected'; break }
+
+      // 目标从实体表消失：宽限重搜（可能只是过区块边界），耗尽才收场；fight 中找回就重建 goal
+      if (!target || !b.entities[target.id]) {
+        if (lostAt === null) lostAt = Date.now()
+        const found = findTarget()
+        if (found) {
+          target = found
+          lostAt = null
+          if (phase === 'fight') relock()
+        } else if (Date.now() - lostAt > lostGraceMs) {
+          outcome = 'target_gone'
+          break
+        }
+      } else { lostAt = null }
+
+      const hp = b.health
+      const dist = distToTarget()
+      // 非玩家目标跑太远 → 取消锁定（用户：达不到就别锁了）；玩家不设限，锁到死
+      if (target && b.entities[target.id] && !isPlayer(target) && dist > CHASE_FAR) {
+        if (farAt === null) farAt = Date.now()
+        else if (Date.now() - farAt > 4000) {
+          outcome = 'too_far'
+          notes = `非玩家目标已拉开 ${dist.toFixed(0)} 格（>${CHASE_FAR}），追不上，取消锁定`
+          break
+        }
+      } else farAt = null
+
+      if (phase === 'fight') {
+        // ── 血线分层：危险线+已撤过 → 收场；跌破 hpFloor → 撤（最多 MAX_RETREATS 轮）──
+        if (hp <= CRIT && retreats >= 1) {
+          outcome = 'retreated'
+          notes = `血量 ${hp} 已到危险线（≤${CRIT}）且已撤退过，收场`
+          break
+        }
+        if (hp <= hpLimit) {
+          if (retreats >= MAX_RETREATS) {
+            outcome = 'retreated'
+            notes = `血量 ${hp} ≤ hpFloor ${hpLimit}，撤退 ${retreats} 次仍回不上血`
+            break
+          }
+          retreats++
+          phase = 'flee'
+          phaseAt = Date.now()
+          refreshStall()
+          try { b.setControlState('forward', false) } catch {}
+          if (target && b.entities[target.id]) {
+            try { b.pathfinder.setGoal(fleeGoal(), false) } catch {}
+          }
+          continue
+        }
+        if (hp > hpLimit + 6 && retreats > 0) retreats = 0   // 回血充足 → 撤退轮次重新记账
+        await autoTotem()                     // AutoTotem：低血把图腾换到副手（Wurst 同名功能）
+        // 目标移动速度（弓的提前量）：上一拍→这一拍位移/时间，封顶 ±8 格/秒
+        let tvx = 0, tvy = 0, tvz = 0
+        if (target && b.entities[target.id]) {
+          const nowMs = Date.now()
+          if (prevT) {
+            const dt = Math.max((nowMs - prevTAt) / 1000, 0.05)
+            const cl8 = (v) => Math.max(-8, Math.min(8, v))
+            tvx = cl8((target.position.x - prevT.x) / dt)
+            tvy = cl8((target.position.y - prevT.y) / dt)
+            tvz = cl8((target.position.z - prevT.z) / dt)
+          }
+          prevT = target.position.clone()
+          prevTAt = nowMs
+        }
+
+        // ── fight 动作：挖墙 / 打 / 推进+卡住跳（KillauraLegit 视线 + FightBot 推进）──
+        const blocked = losBlock()
+        if (blocked && !b.pathfinder.isMining?.()) {
+          const blockDist = blocked.position.distanceTo(b.entity.position)
+          if (blockDist <= DIG_REACH && await digBlock(blocked)) {
+            refreshStall()               // 挖成功 → 下一拍重查视线
+            await sleep(250)
+            continue
+          }
+          // 挖不动（领地保护/被击断 2 次）或墙在视线里但 >4.5 格 → 落到推进分支往前压/绕
+        }
+        // 远程压制（BowAimbot 服务端版）：6-22 格、视线通、落地 → 抛物线+提前量射一箭，近了换剑
+        if (!blocked && dist >= BOW_MIN && dist <= BOW_MAX && b.entity.onGround && target && b.entities[target.id]) {
+          if (await bowShot({ x: tvx, y: tvy, z: tvz })) { await sleep(250); continue }
+        }
+        if (!blocked && dist <= ATTACK_REACH) {
+          try { b.setControlState('forward', false); b.setControlState('sprint', false) } catch {}
+          refreshStall()
+          if (Date.now() - lastAttackAt >= ATTACK_COOLDOWN_MS + gaussMs()) {
+            // 寻路垫脚会把方块/工具临时换到手上 → 出手前把最强武器拿回来（真机教训：曾攥着 cobblestone 空挥）
+            try {
+              const w = this.#bestWeapon(b)
+              if (w && b.heldItem?.name !== w.name) {
+                await this.#t(b.equip(w, 'hand'), 'equip', `手持 ${w.name}`)
+              }
+            } catch { /* 换不上就用手上的打 */ }
+            // 跳劈暴击（Criticals 的 FULL_JUMP 合法版）：起跳 300ms 过顶点进入下落段再出手
+            // → fallDistance>0 = 暴击 ×1.5；水中/已在空中就直接打。服务器视角=正常移动+正常攻击。
+            if (b.entity.onGround && !b.entity.isInWater?.()) {
+              try { b.setControlState('jump', true) } catch {}
+              await sleep(300)
+              try { b.setControlState('jump', false) } catch {}
+            }
+            try {
+              await this.#t(b.lookAt(chestOf(target)), 'lookAt', '看向目标')  // 先面向胸口
+              await this.#t(Promise.resolve(b.attack(target)), 'attack', `攻击 ${label}`)
+              hits++
+              lastAttackAt = Date.now()
+            } catch { /* 目标瞬间没了/打空 → 下一拍 */ }
+          }
+          await sleep(250)
+          continue
+        }
+
+        // ── 智能前方障碍检测（主动采样，不等视线掠过、不等卡死）：台阶→正面跳；墙/低顶→直接挖 ──
+        const obs = frontObstacle()
+        if (obs?.kind === 'step') {
+          if (await stepJump(obs)) { await sleep(250); continue }
+        } else if (obs && !b.pathfinder.isMining?.()) {
+          const oDist = obs.block.position.distanceTo(b.entity.position)
+          if (oDist <= DIG_REACH && await digBlock(obs.block)) {
+            refreshStall()               // 挖通 → 下一拍继续
+            await sleep(250)
+            continue
+          }
+          // 挖不动（领地保护，digBlock 内部已放弃）或 >4.5 格 → 落到推进：让寻路绕 / 压过去找口
+        }
+        // 够不着 / 墙太远挖不到 → 往前压：寻路活着让它跑（该跳该挖它规划）；寻路闲着自己走
+        if (!b.pathfinder.isMoving?.() && !b.pathfinder.isMining?.()) {
+          if (dist > followRange + 1 && !b.pathfinder.goal) {
+            try { relock() } catch {}     // dynamic goal 曾被 goal_reached 清掉 → 重挂，目标跑了才会重规划
+          }
+          if (target && b.entities[target.id]) {
+            try {
+              await this.#t(b.lookAt(chestOf(target)), 'lookAt', '看向目标')
+            } catch { /* 看不到也照样推 */ }
+            try { b.setControlState('forward', true); b.setControlState('sprint', true) } catch {}   // 推进按 sprint（Wurst AutoSprint：冲刺命中额外击退）
+          }
+        }
+        await jumpIfStuck()
+        await unstickDig()
+        await sleep(250)
+        continue
+      }
+
+      if (phase === 'flee') {
+        // 跑开够远 / 超时 / 血已经开始回升 → 进吃喝阶段
+        if (dist >= FLEE_DIST || Date.now() - phaseAt > FLEE_TIMEOUT_MS || hp > hpLimit + 2) {
+          phase = 'heal'
+          phaseAt = Date.now()
+          keepAwaySet = false
+          try { b.pathfinder.setGoal(null) } catch {}   // 站住吃（Wurst AutoEat：移动中不吃）
+          try { b.clearControlStates?.() } catch {}
+          refreshStall()
+        } else {
+          const o = frontObstacle()       // 逃跑路上一格台阶：正面跳上去（不然被台阶截住跑不掉）
+          if (o?.kind === 'step' && await stepJump(o)) { await sleep(180); continue }
+          await autoTotem()               // 逃跑途中血只低不涨 → 图腾先换到副手
+          await jumpIfStuck()             // 逃跑路上卡台阶照样跳
+          await unstickDig()              // 逃跑路上挖挂死同样救
+          await sleep(250)
+          continue
+        }
+        continue
+      }
+
+      // ── heal：吃食物把 food 抬到 ≥18（自然回血门槛）→ 等血过线 → 重新锁定追上去 ──
+      await autoTotem()                     // 等回血的窗口是最脆的 → 图腾换到副手（AutoTotem）
+      if (b.food < 18) {
+        const foods = b.inventory.items().filter((i) => FOOD_RE.test(i.name))
+        if (foods.length === 0) {
+          outcome = 'retreated'
+          notes = `血量 ${hp} ≤ hpFloor ${hpLimit}，撤了也吃不上东西（背包没食物，food=${b.food}）`
+          break
+        }
+        const rank = (n) => (/golden_apple|enchanted_golden_apple/.test(n) ? 300
+          : /^cooked_/.test(n) ? 200
+            : /^(bread|golden_carrot|baked_potato|cookie|pumpkin_pie)$/.test(n) ? 150
+              : /(rotten_flesh|spider_eye|poisonous_potato)/.test(n) ? -50 : 100)
+        foods.sort((a, c) => rank(c.name) - rank(a.name))
+        for (const f of foods.slice(0, 3)) {   // 这一拍最多吃 3 件（下一拍 food 仍 <18 会继续吃）
+          if (b.food >= 18 || this.abortSignal?.aborted) break
+          try {                              // AutoEat：移动中不吃 → 吃前再压一次 goal+控制位
+            try { b.pathfinder.setGoal(null) } catch {}
+            try { b.clearControlStates?.() } catch {}
+            await this.#t(b.equip(f, 'hand'), 'equip', `拿 ${f.name}`)
+            if (!FOOD_RE.test(b.heldItem?.name ?? '')) throw new Error(`手持 ${b.heldItem?.name ?? '空'} 不是食物`)
+            await this.#t(b.consume(), 'act', `吃 ${f.name}`)
+            ate++
+          } catch { break }                 // 被撞断/吃饱/背包忙 → 下一拍再试
+        }
+        if (b.food < 18 && b.inventory.items().filter((i) => FOOD_RE.test(i.name)).length === 0) {
+          outcome = 'retreated'
+          notes = `血量 ${hp} ≤ hpFloor ${hpLimit}，吃光了食物（food=${b.food}）回不上血`
+          break
+        }
+      }
+      if (b.food >= 18 && !keepAwaySet && target && b.entities[target.id]) {
+        try { b.pathfinder.setGoal(fleeGoal(), false); keepAwaySet = true } catch {}  // 等回血时也别让人贴脸
+      }
+      if (b.health > hpLimit) {
+        phase = 'fight'                   // 血回过线 → 重新锁定，继续追（用户要的"再锁定追上来"）
+        phaseAt = Date.now()
+        refreshStall()
+        relock()
+        await sleep(250)
+        continue
+      }
+      if (Date.now() - phaseAt > HEAL_WAIT_MS) {
+        if (retreats >= MAX_RETREATS) {
+          outcome = 'retreated'
+          notes = `血量 ${b.health} ≤ hpFloor ${hpLimit}，等了 ${HEAL_WAIT_MS / 1000}s 回不上血`
+          break
+        }
+        retreats++                         // 还没到轮次上限 → 再跑开一轮
+        phase = 'flee'
+        phaseAt = Date.now()
+        keepAwaySet = false
+        refreshStall()
+        if (target && b.entities[target.id]) {
+          try { b.pathfinder.setGoal(fleeGoal(), false) } catch {}
+        }
+        await sleep(250)
+        continue
+      }
+      await sleep(250)
+    }
+
+    // 收尾：清 goal + 停控制位，绝不把移动状态留在场上
+    try { b.pathfinder.setGoal(null) } catch {}
+    try { b.clearControlStates?.() } catch {}
+    // 收场把最强武器拿回手（真机教训：寻路垫脚收场时手里常是 dirt/工具）
+    try {
+      const w = this.#bestWeapon(b)
+      if (w && b.heldItem?.name !== w.name) await this.#t(b.equip(w, 'hand'), 'equip', `手持 ${w.name}`)
+    } catch { /* 换不上不影响返回 */ }
+
+    if (outcome === 'timeout' && !notes) {
+      const parts = []
+      if (scaffolding === 0) parts.push('背包无垫脚方块（垫不了脚，遇沟/悬崖只能绕或卡住）')
+      if (hardWall) parts.push('目标隔着一时挖不动的硬方块墙')
+      if (retreats > 0) parts.push(`期间撤退 ${retreats} 次（吃了 ${ate} 件食物）`)
+      if (parts.length) notes = parts.join('；')
+    }
+    if (outcome === 'retreated' && !notes) {
+      notes = `血量 ${b.health} ≤ hpFloor ${hpLimit}，撤退 ${retreats} 次（吃了 ${ate} 件食物）回不上血`
+    }
+    if (outcome === 'target_gone' && !notes) {
+      notes = `目标消失（可能死亡或离开加载范围），最后宽限 ${lostGraceMs / 1000}s`
+    }
+    return {
+      target: label,
+      hits,
+      outcome,
+      distanceEnd: (target && b.entity && b.entities[target.id])
+        ? Number(target.position.distanceTo(b.entity.position).toFixed(1)) : null,
+      health: b.health,
+      food: b.food,
+      retreats,
+      ate,
+      held: b.heldItem?.name ?? null,
+      scaffolding,
+      elapsedMs: Date.now() - t0,
+      ...(notes ? { notes } : {}),
+    }
+  }
+
+  /** 背包里最强的武器：剑 > 斧，材料 netherite > diamond > iron > stone > golden/wooden；没有返回 null */
+  #bestWeapon (b) {
+    const tier = { netherite: 5, diamond: 4, iron: 3, stone: 2, golden: 1, wooden: 1 }
+    const score = (i) => {
+      const m = String(i.name).match(/^(\w+)_(sword|axe)$/)
+      if (!m) return -1
+      return (tier[m[1]] ?? 1) * 10 + (m[2] === 'sword' ? 5 : 3)
+    }
+    let best = null
+    let bestScore = 0
+    for (const i of b.inventory.items()) {
+      const s = score(i)
+      if (s > bestScore) { best = i; bestScore = s }
+    }
+    return best
+  }
+
   /** 丢弃手上的物品 */
   async tossItem ({ name = null, count = 1 } = {}) {
     const b = this.requireBot()
@@ -1913,8 +2864,8 @@ export class McBot extends EventEmitter {
    * 按顺序执行一串步骤。替代"让 AI 写脚本"——我们不给它脚本能力，
    * 而是把"走这里→放几个→再走那里"这种连串动作收进一个工具，服务端逐步跑。
    *
-   * 步骤 op：wait / move / look / turn(toward) / place / break / dig / use /
-   *          attack / equip / give / toss / say / jump
+   * 步骤 op：wait / move / look / turn(toward) / place / break / dig / use / useItem /
+   *          attack / hunt / equip / wear / give / toss / say / jump
    */
   async runSequence (steps, { stopOnError = true, budgetMs = 300_000 } = {}) {
     if (!Array.isArray(steps) || !steps.length) throw new Error('steps 必须是非空数组')
@@ -1964,13 +2915,16 @@ export class McBot extends EventEmitter {
       case 'dig':     return { result: await this.dig(s) }
       case 'use':     return this.useBlock(s)
       case 'attack':  return this.attack(s)
+      case 'hunt':    return this.hunt(s)
       case 'equip':   return this.equip(s)
+      case 'wear':    return this.equipArmor(s)
+      case 'useItem': return this.useItem(s)
       case 'give':    return this.giveItem(s)
       case 'toss':    return this.tossItem(s)
       case 'say':     return { said: this.chatSay(s.text ?? '') }
       case 'jump':    return this.jump()
       default:
-        throw new Error(`未知步骤 op："${op}"（可用：wait/move/look/toward/place/break/dig/use/attack/equip/give/toss/say/jump）`)
+        throw new Error(`未知步骤 op："${op}"（可用：wait/move/look/toward/place/break/dig/use/useItem/attack/hunt/equip/wear/give/toss/say/jump）`)
     }
   }
 

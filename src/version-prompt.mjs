@@ -12,8 +12,9 @@
  *   · 记忆（`.whale-craft/README.md` 等）—— 玩出来的经验。
  *
  * 规矩（照用户一贯的要求）：
- *   · 走**插件提示行**注入（`agent.inbox.nextStep` + `source:{kind:'plugin',form:'notice'}`），
- *     **不碰系统提示词**；
+ *   · 走**插件提示行**注入（本步 `decision.messages` + `source:noticeSource(...)`
+ *     = `{kind:'plugin:whale_craft', form:'notice'}`；🔴 kind 不能是 V3 的 `'plugin'`，
+ *     v4 会话格式会拒），**不碰系统提示词**；
  *   · 排在 `.whale-craft/RULES.md` **之后**、记忆索引之前 —— 读起来就是"对本版本规则的补充"；
  *   · **不加开关**：它是随版本走的常量，用户不需要也不该改；
  *   · 正文里写清交付流程（发布区 → `mc_kit_express` → 按「文件分享」模式拿到 URL/绝对路径/一句提示，

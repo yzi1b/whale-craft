@@ -184,7 +184,21 @@ const fakeCtx = {
     getSectionOrder: () => 100,
   },
   // 服务迟到时走这条路
-  inject: (deps, cb) => { injectedFibers.push({ deps, cb }) },
+  // 🔴 2026-09-22：`index.js` 自 `074d61f`（"use lazy injection for webServer"）起把
+  //    **路由注册**搬进了 `ctx.inject(['webServer'], (scope) => scope.effect(() =>
+  //    scope.webServer.register(...)))`（index.js:1264 与 :1310）。本夹具原先只登记、
+  //    从不回调 ⇒ `registeredRoutes` 里 `/api/mc` 与 `/api/whale-craft` **两条都没有**
+  //    ⇒ 那一段的断言全废、还在 `callOn(undefined, …)` 上 TypeError 崩掉。
+  //    真 cordis 的 `inject` 会调回调，所以真机没事 —— 纯属夹具没跟上那次改动。
+  //    这里只对 `webServer` **立刻**回调（本夹具一开始就有它，见上面 :176）；
+  //    其余依赖（systemPrompt / agentPresets / workspaceRegistry）保持"只登记"，
+  //    由各自的用例手动触发（那些用例验的正是"服务迟到"）。
+  inject: (deps, cb) => {
+    injectedFibers.push({ deps, cb })
+    if (deps.includes('webServer') && typeof cb === 'function') {
+      try { cb(fakeCtx) } catch (e) { logs.push('[inject error] ' + e.message) }
+    }
+  },
   effect: (fn) => { try { fn() } catch (e) { logs.push('[effect error] ' + e.message) } },
   set: (k, v) => { fakeCtx[k] = v },
   // 没有 jobs 服务：验证看门狗在缺服务时报错清晰（不崩）
@@ -218,13 +232,13 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   const { readFileSync } = await import('node:fs')
   const idx = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
   console.log(`  ${!tools.has('mc_kit_share') ? '✅' : '❌'} 🔴 mc_kit_share 已移除（它只是在调宿主**另装**的 dsh-file-host，插件本身没有文件服务器）`)
-  console.log(`  ${tools.size === 29 ? '✅' : '❌'} 工具数 29（实际 ${tools.size}）：mc_* 25 + mc_kit_* 3 + mc_admin_* 1`)
+  console.log(`  ${tools.size === 30 ? '✅' : '❌'} 工具数 30（实际 ${tools.size}）：mc_* 26 + mc_kit_* 3 + mc_admin_* 1`)
   // 只看**代码**，不看注释：注释里留着"为什么删"的说明（那是要留的）
   const codeOnly = idx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
   console.log(`  ${!/uploadToFileHost|dsh-file-host|\/serve\/file-host|mc_kit_share/.test(codeOnly) ? '✅' : '❌'} 源码里没有上传/文件服务器残留（注释里保留"为什么删"的说明）`)
   console.log(`  ${tools.has('mc_kit_image') && tools.has('mc_kit_memory') ? '✅' : '❌'} mc_kit_image / mc_kit_memory 仍在（一个渲染 PNG、一个记忆语义层）`)
   console.log(`  ${/MC_PRESENT_TOOL = 'present'/.test(idx) && /^\s+MC_PRESENT_TOOL,$/m.test(idx) ? '✅' : '❌'} present 已进 MC 模式白名单`)
-  console.log(`  ${/MC_PRESET_TOOL_GROUPS/.test(idx) && /availableToolGroups\(\)/.test(idx) ? '✅' : '❌'} 复制/重建 preset 时会补齐 MC 模式需要的工具组（tool-fs / tool-jobs / present）`)
+  console.log(`  ${/MC_PRESET_TOOL_GROUPS/.test(idx) && /availableToolGroups\(\)/.test(idx) ? '✅' : '❌'} 复制/重建 preset 时会补齐 MC 模式需要的组（工具组 tool-fs / tool-jobs / present + 压缩组 compaction）`)
   console.log(`  ${/const ensureToolGroupsInPreset/.test(idx) && /ensureToolGroupsInPreset\(svc, existingId\)/.test(idx) ? '✅' : '❌'} 🔴 **已存在的** preset（含本机手写那份）也会被补齐那几组（不动别的行）`)
   console.log(`  ${/这些工具包在本部署的 preset 里没人引用/.test(idx) ? '✅' : '❌'} 加组之前先探"这个部署里有没有那个包"（免得把 preset 弄挂）`)
   // 发布区（用户 2026-09-17 定稿：`/api/whale-craft/express/<工作区 uuid>/…`，自己一条前缀路由）
@@ -514,6 +528,52 @@ for (const [label, args, want] of [
   console.log(`  ${first?.ok === false && /可用：/.test(first.error) && stopped ? '✅' : '❌'} 未知 op 报错+列可用值+遇错即停：${String(first?.error).slice(0, 60)}…`)
 }
 
+// ── mc_hunt：自动攻击（参考 opencode 配的 mineflayer-pathfinder 项目）──
+{
+  console.log(`  ${tools.get('mc_hunt') ? '✅' : '❌'} mc_hunt 已注册`)
+
+  // 不在线 / 没装 pathfinder 都要清晰报错（不是崩溃、不是 TypeError）
+  try {
+    await tools.get('mc_hunt').execute({ who: '僵尸' }, A)
+    console.log('  ❌ mc_hunt 未连服竟然成功')
+  } catch (e) {
+    console.log(`  ${/不在线|连接|pathfinder/.test(e.message) ? '✅' : '❌'} mc_hunt 未连服清晰报错：${e.message.slice(0, 44)}…`)
+  }
+
+  // 缺 who 要在碰连接之前就被拦下（schema 必填层 或 hunt() 参数层，两条路都要清晰）
+  try {
+    await tools.get('mc_hunt').execute({}, A)
+    console.log('  ❌ mc_hunt 缺 who 竟然成功')
+  } catch (e) {
+    console.log(`  ${/who 必填|missing required property "who"/.test(e.message) ? '✅' : '❌'} mc_hunt 缺 who 校验：${e.message.slice(0, 55)}…`)
+  }
+
+  // 源码级断言：pathfinder 挂载 + GoalFollow 锁定单体 + 自动挖 + 序列 op 接线
+  const { readFileSync } = await import('node:fs')
+  const coreSrcHunt = readFileSync(new URL('./src/core.mjs', import.meta.url), 'utf8')
+  const idxSrcHunt = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+  console.log(`  ${/mineflayer-pathfinder/.test(coreSrcHunt) && /loadPlugin\(pathfinderPlugin\)/.test(coreSrcHunt) ? '✅' : '❌'} core.mjs 挂载 pathfinder 插件（createBot 后 loadPlugin，参考 bot.ts:136）`)
+  console.log(`  ${/GoalFollow\(target, followRange\)/.test(coreSrcHunt) && /setGoal\(goal, true\)/.test(coreSrcHunt) ? '✅' : '❌'} hunt 用 GoalFollow + dynamic goal 锁定单一目标持续追击`)
+  console.log(`  ${/mv\.canDig = true/.test(coreSrcHunt) ? '✅' : '❌'} hunt 打开 canDig（追击自动挖挡路方块；垫脚靠 toPlace + 背包方块）`)
+  console.log(`  ${/case 'hunt'/.test(coreSrcHunt) && /hunt\(who,durationSec/.test(idxSrcHunt) ? '✅' : '❌'} mc_sequence 接入 hunt op（#runStep 分支 + 工具描述）`)
+  console.log(`  ${/hpFloor/.test(coreSrcHunt) && /aborted/.test(coreSrcHunt) && /clearControlStates/.test(coreSrcHunt) ? '✅' : '❌'} hunt 有撤退线（hpFloor）+ 用户中断 + 收尾清控制位`)
+  // v2（2026-09-23 Wurst 基准重写）：视线挖墙 / 卡住跳 / 低血三段式（跑开→吃→再锁定）
+  console.log(`  ${/b\.world\.raycast/.test(coreSrcHunt) && /bestHarvestTool/.test(coreSrcHunt) ? '✅' : '❌'} hunt v2 视线受阻 → raycast 找挡路方块 + bestHarvestTool 换最快工具挖穿（NukerLegit 风格）`)
+  console.log(`  ${/stallAt/.test(coreSrcHunt) && /setControlState\('jump'/.test(coreSrcHunt) ? '✅' : '❌'} hunt v2 位置停滞 700ms → 脉冲跳（修"差一格既不跳也不挖"，FightBot 撞墙跳手动版）`)
+  console.log(`  ${/GoalInvert/.test(coreSrcHunt) && /retreats/.test(coreSrcHunt) && /b\.consume/.test(coreSrcHunt) ? '✅' : '❌'} hunt v2 低血三段式：GoalInvert 反向跑开 → consume 吃食物 → 回血后 relock 再追（hpFloor 语义从直接收场改为撤退回血）`)
+  console.log(`  ${/digFails/.test(coreSrcHunt) && /stopDigging/.test(coreSrcHunt) && /const w = this\.#bestWeapon\(b\)/.test(coreSrcHunt) ? '✅' : '❌'} hunt v2 挖不动的方块挂死竞速+2 次即放弃（真机：领地保护 b.dig 挂死 25s）+ 出手前把最强武器拿回手（寻路垫脚会换手）`)
+  // v3 智能前方检测（2026-09-23 用户反馈："总被墙挡不挖；前面一格方块也不跳不挖"→ 视线 ray 从方块顶掠过判"没挡"）
+  console.log(`  ${/frontObstacle/.test(coreSrcHunt) && /kind: 'step'/.test(coreSrcHunt) && /stepJump/.test(coreSrcHunt) ? '✅' : '❌'} hunt v3 主动前方采样（脚面/头顶各探一格）：脚挡头空=台阶正面跳 / 脚头都挡=直接挖 / 低顶=挖头那格（不等视线/卡死）`)
+  console.log(`  ${/miningStreak/.test(coreSrcHunt) && /MINING_HANG_MS/.test(coreSrcHunt) && /unstickDig/.test(coreSrcHunt) ? '✅' : '❌'} hunt v3 挖掘挂死看门狗：连续在挖 >8s → stopDigging + 重挂 goal 重规划（领地方块卡死救援）`)
+  // PVP 套装（2026-09-24 用户"pvp功能还是不够好"）：跳劈暴击 / 高斯攻速 / 自动图腾 / 弓箭抛物线
+  console.log(`  ${/gaussMs\(\)/.test(coreSrcHunt) && /ATTACK_JITTER_MS/.test(coreSrcHunt) && /await sleep\(300\)/.test(coreSrcHunt) ? '✅' : '❌'} hunt PVP 攻速 625ms+高斯±100ms 抖动（Killaura speedRandMS）+ 300ms 下落段跳劈（Criticals FULL_JUMP 合法暴击）`)
+  console.log(`  ${/autoTotem/.test(coreSrcHunt) && /totem_of_undying/.test(coreSrcHunt) && /simArrow/.test(coreSrcHunt) && /BOW_MAX/.test(coreSrcHunt) ? '✅' : '❌'} hunt PVP 自动图腾（血量≤TOTEM_HP 换副手，AutoTotem）+ 6-22 格弓箭抛物线+提前量压制（BowAimbot/Trajectories：v0=3.0/重力0.05/阻力0.99）`)
+  // 目标锁定 + 前方弧扫 + 吃/挖健壮化（2026-09-24 用户"吃东西/攻击/挖东西/被一格方块挡住全有问题"）
+  console.log(`  ${/CHASE_FAR/.test(coreSrcHunt) && /too_far/.test(coreSrcHunt) && /isPlayer/.test(coreSrcHunt) ? '✅' : '❌'} hunt 目标锁定：就近锁 / 非玩家初距>60 不追+拉开>60 持续 4s 取消 / 玩家不设限锁到死`)
+  console.log(`  ${/dirs = \[0, 0\.78/.test(coreSrcHunt) && /0\.55, 1\.05/.test(coreSrcHunt) && /stepJump\(o\)/.test(coreSrcHunt) ? '✅' : '❌'} hunt v3.1 前方弧扫五方向×两档距离（修"被一格方块挡住"侧向漏检）+ stepJump 先转向台阶`)
+  console.log(`  ${/failOf/.test(coreSrcHunt) && /Enchantments/.test(coreSrcHunt) && /FOOD_RE\.test\(b\.heldItem/.test(coreSrcHunt) ? '✅' : '❌'} hunt 挖掘失败 5s 时间窗（不再一票否决）+ digTime 带效率附魔 + 吃前验手持/清移动（AutoEat）`)
+}
+
 // ── 强制停止：语义与**顺序**（用户 2026-09-16：移除普通停止，只剩强制停止）──
 console.log('\n--- 强制停止（顺序：停LLM → 优雅退游戏 → 清后台任务 → 再停LLM）---')
 try {
@@ -544,7 +604,24 @@ console.log('\n--- 强制停止：UI 路径的真实顺序（停LLM → 退游�
   const fakeAgent2 = { id: 'sess-STOP', status: 'running' }
   // 这第二套 ctx 的 agents 服务要**可替换**：下面的「MC设置」接口测试需要换成"带工作区的会话"
   let agents2 = { get: () => fakeAgent2 }
-  const jobs2 = { list: () => [{ id: 'job-watch' }, { id: 'job-other' }], kill: (id) => side.push(`kill:${id}`) }
+  // 🔴 2026-09-22：`jobs` 这一族的 `caller` 要的是**会话 id 字符串**，不是 agent 对象
+  //    （宿主 `assertAccess()` 比的是 `job.owner.id !== caller`；`list()` 返回的 view 带 `owner`）。
+  //    这里照真实契约造假：两个**自己的** job + 一个**无主 job**（`owner` 缺省 = 宿主自己的）——
+  //    后者绝不该被"强制停止某个会话"顺手带走（老代码传 agent 对象时恰好会误杀它：
+  //    对象跟任何 `owner.id` 都不相等 ⇒ 只匹配到无主 job ⇒ 再 kill 掉）。
+  const listCallers = []
+  const killCallers = []
+  const jobs2 = {
+    list: (caller) => {
+      listCallers.push(caller)
+      return [
+        { id: 'job-watch', owner: 'sess-STOP' },
+        { id: 'job-other', owner: 'sess-STOP' },
+        { id: 'job-host-unowned' },
+      ]
+    },
+    kill: (id, caller) => { killCallers.push(caller); side.push(`kill:${id}`) },
+  }
   const sc2 = { cancel: ({ sessionId }) => side.push(`cancel:${sessionId}`) }
   const ctx2 = {
     logger: { info: () => {}, warn: () => {}, debug: () => {} },
@@ -553,7 +630,13 @@ console.log('\n--- 强制停止：UI 路径的真实顺序（停LLM → 退游�
     webServer: { register: (r) => { if (r.path === '/api/mc') route2 = r; return () => {} }, port: 39999 },
     workspaceRegistry: { archiveSession: async () => {} },
     systemPrompt: { context: () => () => {}, section: () => () => {} },
-    inject: () => {},
+    // 🔴 2026-09-22：`index.js` 自 `074d61f`（"use lazy injection for webServer"）起，
+    //    路由注册搬进了 `ctx.inject(['webServer'], (scope) => scope.effect(() =>
+    //    scope.webServer.register(...)))`（index.js:1264 与 :1310）。这里原先写的是
+    //    空壳 `inject: () => {}` —— **回调永远不跑** ⇒ `route2` 恒为 null ⇒ 下面
+    //    `route2.handler` 直接 TypeError 崩掉（且两条路由的断言从来没真跑过）。
+    //    真 cordis 的 `inject` 会调回调，所以真机没事；纯属自检夹具没跟上那次改动。
+    inject: (deps, cb) => { try { if (typeof cb === 'function') cb(ctx2) } catch {} },
     effect: (fn) => { try { fn() } catch {} },
     on: () => () => {},
     get: (k) => (k === 'jobs' ? jobs2
@@ -584,6 +667,12 @@ console.log('\n--- 强制停止：UI 路径的真实顺序（停LLM → 退游�
   console.log(`  ${body.stoppedLLM === true && body.finalStopLLM === true ? '✅' : '❌'} 停了两遍 LLM（首 + 尾，避免状态异常）：首=${body.stoppedLLM} 尾=${body.finalStopLLM}`)
   console.log(`  ${body.kicked === true ? '✅' : '❌'} 先尝试退出游戏（bot.disconnect 被调用）：${JSON.stringify(body.quit)}`)
   console.log(`  ${body.killedJobs?.length === 2 ? '✅' : '❌'} 该会话后台任务被清空：${JSON.stringify(body.killedJobs)}`)
+  // 🔴🔴 2026-09-22 真机事故回归钉子：`jobs` 的 caller 必须是**会话 id 字符串**。
+  //    以前传的是 `agent` 对象，于是 `list()` 一个自己的 job 都匹配不到、
+  //    却把 `owner === undefined` 的**宿主级无主 job** 全列出来并杀掉。
+  console.log(`  ${listCallers.length > 0 && listCallers.every((c) => c === 'sess-STOP') ? '✅' : '❌'} 🔴 jobs.list 收到的是**会话 id 字符串**（不是 agent 对象）：${JSON.stringify(listCallers)}`)
+  console.log(`  ${killCallers.length === 2 && killCallers.every((c) => c === 'sess-STOP') ? '✅' : '❌'} 🔴 jobs.kill 的 caller 也是会话 id：${JSON.stringify(killCallers)}`)
+  console.log(`  ${!side.includes('kill:job-host-unowned') ? '✅' : '❌'} 🔴 无主 job（宿主自己的）**没被**顺手杀掉：${JSON.stringify(side)}`)
   const sideWant = ['cancel:sess-STOP', 'kill:job-watch', 'kill:job-other', 'cancel:sess-STOP']
   console.log(`  ${side.join(' → ') === sideWant.join(' → ') ? '✅' : '❌'} 副作用真实顺序 = 先停LLM → 清任务 → 再停LLM：${side.join(' → ')}`)
 
@@ -1340,17 +1429,21 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const twice = C.disableShellInComposition(C.disableShellInComposition('- id: persistent-shell\n  group: true\n', '') ?? '')
     console.log(`  ${(twice.match(/disabled: true/g) ?? []).length === 1 ? '✅' : '❌'} 关 shell 是幂等的（不会写两遍 disabled）`)
     // 工具组补丁（2026-09-16：MC 模式必须有 tool-fs / tool-jobs / present —— 官方 minimal 里一个都没有）
+    //   2026-09-22：再加**压缩组**（官方 minimal 同样没有 → 照它建的 MC 模式里 `/compact` 直接消失）
     const mini = "- id: persona\n  name: '@deepseek-ai/dsh-persona'\n"
     const added = C.patchToolGroupsIntoComposition(mini)
-    console.log(`  ${added && C.MC_PRESET_TOOL_GROUPS.every((g) => added.includes(g.pkg)) ? '✅' : '❌'} 空壳 preset（像官方 minimal）→ 三组全补齐：${C.MC_PRESET_TOOL_GROUPS.map((g) => g.pkg.replace('@deepseek-ai/dsh-', '')).join(' / ')}`)
+    console.log(`  ${added && C.MC_PRESET_TOOL_GROUPS.every((g) => added.includes(g.pkg)) ? '✅' : '❌'} 空壳 preset（像官方 minimal）→ ${C.MC_PRESET_TOOL_GROUPS.length} 组全补齐：${C.MC_PRESET_TOOL_GROUPS.map((g) => g.pkg.replace('@deepseek-ai/dsh-', '')).join(' / ')}`)
     console.log(`  ${added && /- id: tool-jobs\n  name: '@deepseek-ai\/dsh-tool-jobs'\n/.test(added) ? '✅' : '❌'} 🔴 其中含 tool-jobs（没有它，宿主就没有 job controller → 看门狗只能降级成"无 job 模式"）`)
     console.log(`  ${added && /- id: tool-fs\n  name: '@deepseek-ai\/dsh-tool-fs'\n/.test(added) ? '✅' : '❌'} 其中含 tool-fs（文件工具；官方 minimal 没有 → 不补的话 jail/白名单全落空）`)
+    console.log(`  ${added && /- id: compaction\n  name: cordis:group\n  group: true\n  isolate:\n    compaction: true\n    toolResultPruner: true\n/.test(added) ? '✅' : '❌'} 🔴 含压缩组**整组**（cordis:group + group: true + isolate.compaction + isolate.toolResultPruner）—— 只补 command-compact 是没用的，服务本体在 compaction-basic`)
+    console.log(`  ${added && added.includes("'@deepseek-ai/dsh-command-compact'") && added.includes("'@deepseek-ai/dsh-compaction-basic'") && added.includes("'@deepseek-ai/dsh-compaction-tool-result-pruner'") ? '✅' : '❌'} 🔴 压缩组里三个 config 条目齐全（command-compact = /compact 指令本体；2026-09-22 用户真机投诉"压缩上下文没了"就是缺它）`)
+    console.log(`  ${added && /thresholdChars: 8192\n        headChars: 4096\n        tailChars: 1024\n/.test(added) ? '✅' : '❌'} 压缩组的 tool-result-pruner 参数与官方一致（8192 / 4096 / 1024）`)
     console.log(`  ${added && C.patchToolGroupsIntoComposition(added) === null ? '✅' : '❌'} 幂等：再跑一次返回 null（不会加两遍）`)
     const partial = C.patchToolGroupsIntoComposition("- id: tool-fs\n  name: '@deepseek-ai/dsh-tool-fs'\n")
     console.log(`  ${partial && (partial.match(/dsh-tool-fs/g) ?? []).length === 1 && partial.includes('dsh-tool-jobs') ? '✅' : '❌'} 已经有的那组不会被重复加（只补缺的）`)
     const oneOnly = C.patchToolGroupsIntoComposition(mini, [C.MC_PRESET_TOOL_GROUPS[0]])
     console.log(`  ${oneOnly && oneOnly.includes('dsh-tool-fs') && !oneOnly.includes('dsh-tool-jobs') ? '✅' : '❌'} 只把"部署里真的有的"那几组传进来时，只补那几组`)
-    console.log(`  ${C.MC_PRESET_SPEC === 6 ? '✅' : '❌'} 🔴 MC_PRESET_SPEC=6（升到这一版会把 5 建的 preset 重建一遍 → 顺手修好"persona 键名写坏"的老环境）`)
+    console.log(`  ${C.MC_PRESET_SPEC === 7 ? '✅' : '❌'} 🔴 MC_PRESET_SPEC=7（升到这一版会把 6 建的 preset 重建一遍 → 顺手给老环境补上压缩组）`)
   }
   // 🔴 **已经建好的**那份也要能修（用户那台测试机上就是旧版建出来的）：
   //    只在"简介恰好等于某个官方 preset 的简介"（明显是复制残留）时才动，用户自己写的不碰。
@@ -1372,7 +1465,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     console.log(`  ${/runtimeContextSuppressed \? \[\]/.test(src) ? '✅' : '❌'} 状态块注释里钉住了宿主那段 contexts: runtimeContextSuppressed ? [] （这是根因）`)
     console.log(`  ${/notices: sent/.test(src) && /segments: \{/.test(src) ? '✅' : '❌'} 状态块报的是**实际投出去的文件**（noticesSent，不许再撒谎）`)
     // 🔴 用户："我不要模拟用户发送啊！" —— 投递的那条必须标成 plugin/notice，且**不许** steer（空闲时会起一轮）
-    console.log(`  ${/kind: 'plugin', plugin: 'whale_craft', form: 'notice'/.test(src) ? '✅' : '❌'} 投递的消息标成 plugin/notice（插件提示行，不归到用户头上）`)
+    console.log(`  ${/noticeSource\(it\.title\)/.test(src) && !/kind: 'plugin'/.test(src) ? '✅' : '❌'} 投递的消息标成 plugin:whale_craft / notice（插件提示行，不归到用户头上）`)
     console.log(`  ${!/agent\.steer\(/.test(src) ? '✅' : '❌'} 🔴 插件里**没有** steer 兜底（steer 空闲会"起一轮"＝没问就替用户说话）`)
   }
 
@@ -1465,7 +1558,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   console.log(`  ${/export const builtinUserMessage/.test(umSrc) && /export const userMessage/.test(umSrc) ? '✅' : '❌'} 🔴 共用模块里有**自带等价实现**（不依赖任何宿主包也能注入）`)
   console.log(`  ${/role: 'user'/.test(umSrc) && /source: input\?\.source/.test(umSrc) && /crypto\.randomUUID/.test(umSrc) ? '✅' : '❌'} 兜底消息逐个对齐宿主 UserMessage 形状（role/content/source/id）`)
   console.log(`  ${/createRequire\(import\.meta\.url\)/.test(umSrc) && /req\('@deepseek-ai\/dsh-llm'\)/.test(umSrc) ? '✅' : '❌'} 仍然优先用宿主实现（形状跟得上宿主版本）`)
-  console.log(`  ${/import \{ userMessage \} from '\.\/user-message\.mjs'/.test(wdSrc) && /userMessage\(\{/.test(wdSrc) ? '✅' : '❌'} 🔴 看门狗（同一次事故的第二处）也用同一个模块，不再退化成"用户来源"消息`)
+  console.log(`  ${/import \{[^}]*\buserMessage\b[^}]*\} from '\.\/user-message\.mjs'/.test(wdSrc) && /userMessage\(\{/.test(wdSrc) && /noticeSource\(/.test(wdSrc) ? '✅' : '❌'} 🔴 看门狗（同一次事故的第二处）也用同一个模块 + noticeSource（不冒充用户发言、也不写 V3 的 kind:'plugin'）`)
 
   /* 🔴🔴 2026-09-18 **P0 事故**：0.1.4 把提示词投递挂到 `agent/pre-step`（cordis waterfall），
    *    但监听器只声明了一个形参、也没 `return next()` ⇒ **不交棒** = 否决整条链（含宿主内置行为），
@@ -1721,7 +1814,11 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     console.log(`  ${msgs.length === 3 ? '✅' : '❌'} 🔴 首次请求组装前投递 3 条（${msgs.length} 条：行事准则 + 版本提示 + 记忆索引）`)
     console.log(`  ${msgs.length === 3 && first === step1[0] ? '✅' : '❌'} 提示行排在本 step 消息的**最前面**（模型先看到规矩，再看用户那句）`)
     console.log(`  ${msgs.length === 3 && queuedAfterStep1 === 0 ? '✅' : '❌'} 🔴 提示行是**本步改写**送出去的（没有走"塞队列、下一步才领"那条晚一步的老路；队列残留 ${queuedAfterStep1} 条）`)
-    console.log(`  ${first?.source?.kind === 'plugin' && first?.source?.plugin === 'whale_craft' && first?.source?.form === 'notice' ? '✅' : '❌'} 🔴 来源是 plugin/notice（**不是**用户发言）：${JSON.stringify(first?.source ?? null)}`)
+    console.log(`  ${first?.source?.kind === 'plugin:whale_craft' && first?.source?.plugin === 'whale_craft' && first?.source?.form === 'notice' ? '✅' : '❌'} 🔴 来源是 producer-owned plugin:whale_craft / notice（**不是**用户发言）：${JSON.stringify(first?.source ?? null)}`)
+    // 🔴🔴 2026-09-22 真机事故回归钉子：kind 绝不能是 V3 的 'plugin' ——
+    //    宿主 v4 会话格式的准入会抛 `format v4 message requires a producer-owned source kind`，
+    //    **整个 step 失败**（工具全正常、只有"注入"这条通道炸，很容易误判成"没装提示词"）。
+    console.log(`  ${first?.source?.kind !== 'plugin' && String(first?.source?.kind ?? '').length > 0 ? '✅' : '❌'} 🔴 kind 不是 V3 的 'plugin'，是 producer-owned：${JSON.stringify(first?.source?.kind ?? null)}`)
     const body = (first?.content ?? []).map((c) => c.text ?? '').join('')
     console.log(`  ${/Whale Craft 行事准则/.test(body) && /Minecraft/.test(body) ? '✅' : '❌'} 第 1 条 = 行事准则（${body.length} 字），首行写明文件：${JSON.stringify(body.split('\n')[0])}`)
     console.log(`  ${/^Instructions from: \.whale-craft\/RULES\.md$/.test(body.split('\n')[0] ?? '') ? '✅' : '❌'} 正文首行是 "Instructions from: .whale-craft/RULES.md"（与 DSH 原生同形状）`)
@@ -2643,12 +2740,20 @@ console.log('\n--- 看门狗 job 结算 ---')
   const { EventEmitter } = await import('node:events')
   let hooks = null
   const kills = []
+  // 🔴🔴 2026-09-22 真机事故回归钉子：`jobs.start({ owner })` 的 owner 必须是
+  //    **会话 id 字符串**，`jobs.kill(id, caller, …)` 的 caller 也是。
+  //    以前传的是 `agent` **对象** ⇒ 宿主 `resolveOwner()` 拿它去 `agents.get()` 查表
+  //    （按会话 id 字符串索引）必然查不到 ⇒
+  //    `session "[object Object]" has no live agent (background job owner must be live)`
+  //    ⇒ 看门狗降级成"无 job 模式"（能唤醒，但 job_list 看不到、UI 也停不掉）。
+  const startSpecs = []
+  const killCallers = []
   const wdCtx = {
     logger: { info: () => {}, warn: () => {} },
     get: (k) => (k === 'jobs'
       ? {
-          start: (spec) => { hooks = spec.run(); return 'job-1' },
-          kill: (id) => { kills.push(id) },
+          start: (spec) => { startSpecs.push(spec); hooks = spec.run(); return 'job-1' },
+          kill: (id, caller) => { kills.push(id); killCallers.push(caller) },
         }
       : undefined),
   }
@@ -2662,6 +2767,9 @@ console.log('\n--- 看门狗 job 结算 ---')
   const wd = mk()
   wd.arm()
   console.log(`  ${hooks ? '✅' : '❌'} job 已挂上（${wd.jobId}）`)
+  const spec = startSpecs[0]
+  console.log(`  ${typeof spec?.owner === 'string' && spec.owner === 's' ? '✅' : '❌'} 🔴 jobs.start 的 owner 是**会话 id 字符串**（不是 agent 对象）：${JSON.stringify(spec?.owner)}`)
+  console.log(`  ${spec?.kind === 'mc-watch' && typeof spec?.label === 'string' ? '✅' : '❌'} job 元信息（kind/label）：${JSON.stringify({ kind: spec?.kind, label: spec?.label })}`)
 
   // 宿主 kill job → 我们的 cancel → 必须结算 done，且不回头再 kill 自己
   let settled = null
@@ -2684,6 +2792,7 @@ console.log('\n--- 看门狗 job 结算 ---')
   wd2.disarm('AI 主动关闭')
   await new Promise((r) => setTimeout(r, 30))
   console.log(`  ${kills.includes('job-1') ? '✅' : '❌'} AI 主动 disarm 会去 kill job（${kills.join(',') || '没调'}）`)
+  console.log(`  ${killCallers.length === 1 && killCallers[0] === 's' ? '✅' : '❌'} 🔴 jobs.kill 的 caller 也是**会话 id 字符串**：${JSON.stringify(killCallers)}`)
   console.log(`  ${settled2 ? '✅' : '❌'} 🔴 **主动** disarm 也结算了 done（否则宿主的 job 永远停在 stopping）：status=${settled2?.status}`)
 
   // 宿主随后回调 cancel()（我们 kill 之后宿主一定会走这一步）→ 幂等，不能报错也不能重复结算
@@ -2700,6 +2809,19 @@ console.log('\n--- 看门狗 job 结算 ---')
   let threw = null
   try { wd3.disarm('没在跑也要能调') } catch (e) { threw = e }
   console.log(`  ${!threw ? '✅' : '❌'} 未启动时 disarm 幂等不抛错`)
+
+  // 🔴 拿不到会话 id 时**不能**挂成"无主 job"（owner 缺省 = 对所有会话可见、
+  //    也能被别的会话的"强制停止"顺手带走），应当降级为"无 job 模式"并记一行日志。
+  const before = startSpecs.length
+  const wd4 = new Watchdog({
+    ctx: wdCtx,
+    sess: { bot: new EventEmitter(), events: [], config: {} },
+    agent: {},
+    onFire: () => {},
+  })
+  wd4.arm()
+  console.log(`  ${startSpecs.length === before && wd4.jobId === null ? '✅' : '❌'} 🔴 拿不到会话 id 时不挂"无主 job"，降级为无 job 模式（jobId=${wd4.jobId}）`)
+  console.log(`  ${wd4.log.some((e) => /拿不到会话 id/.test(e.text)) ? '✅' : '❌'} 降级原因记进了日志：${JSON.stringify(wd4.log.filter((e) => /会话 id|job/.test(e.text)).map((e) => e.text).slice(-2))}`)
 }
 
 // ── 结构不变量：会话事件队列只能有一个写入方 ──
@@ -2848,6 +2970,202 @@ console.log('\n--- 无 OP 建造（创造模式自动取物）---')
   }
 }
 
+// ── 穿戴装备 / 使用物品（用户 2026-09-22：机器人穿不上盔甲、用不了东西）──
+// 参照实现是 opencode 里挂的那个 minecraft-mcp-server 的 mc_equip（destination: hand/head/torso/legs/feet）。
+// 旧版 equip 把 destination 写死 'hand'，所以盔甲一件都穿不上。
+console.log('\n--- 穿戴装备 / 使用手上的物品 ---')
+{
+  const { McBot, normalizeEquipDest, guessEquipDest } = await import('./src/core.mjs')
+
+  // ① 槽位名归一：mineflayer 认的是**带连字符**的 off-hand，写成 offhand 会被 assert 拒
+  const norm = [
+    ['offhand', 'off-hand'], ['off-hand', 'off-hand'], ['off_hand', 'off-hand'], ['副手', 'off-hand'],
+    ['helmet', 'head'], ['chestplate', 'torso'], ['leggings', 'legs'], ['boots', 'feet'],
+    ['main-hand', 'hand'], ['手', 'hand'], ['bogus', null], [null, null],
+  ]
+  const badNorm = norm.filter(([i, o]) => normalizeEquipDest(i) !== o)
+  console.log(`  ${badNorm.length === 0 ? '✅' : '❌'} 槽位别名归一（含 off-hand 连字符写法）${badNorm.length ? ' 失败：' + JSON.stringify(badNorm) : ''}`)
+
+  // ② 自动判槽：用 minecraft-data 的 enchantCategories（权威字段），不是按名字后缀硬猜
+  const reg = {
+    itemsByName: {
+      diamond_helmet: { enchantCategories: ['armor', 'armor_head'] },
+      leather_helmet: { enchantCategories: ['armor', 'armor_head'] },
+      turtle_helmet: { enchantCategories: ['armor', 'armor_head'] },
+      chainmail_chestplate: { enchantCategories: ['armor', 'armor_chest'] },
+      diamond_chestplate: { enchantCategories: ['armor', 'armor_chest'] },
+      diamond_leggings: { enchantCategories: ['armor', 'armor_legs'] },
+      diamond_boots: { enchantCategories: ['armor', 'armor_feet'] },
+      elytra: { enchantCategories: ['wearable'] },
+      shield: { enchantCategories: ['wearable'] },
+      diamond_sword: { enchantCategories: ['weapon'] },
+      bread: { enchantCategories: [] },
+      water_bucket: { enchantCategories: [] },
+      bone_meal: { enchantCategories: [] },
+    },
+  }
+  const guess = [
+    ['diamond_helmet', 'head'], ['turtle_helmet', 'head'], ['chainmail_chestplate', 'torso'],
+    ['diamond_leggings', 'legs'], ['diamond_boots', 'feet'], ['elytra', 'torso'],
+    ['shield', 'off-hand'], ['diamond_sword', 'hand'], ['bread', 'hand'],
+  ]
+  const badGuess = guess.filter(([i, o]) => guessEquipDest(reg, i) !== o)
+  console.log(`  ${badGuess.length === 0 ? '✅' : '❌'} 按物品自动判槽（turtle_helmet/chainmail 这类名字不规则的也对）${badGuess.length ? ' 失败：' + JSON.stringify(badGuess) : ''}`)
+
+  const ARMOR_IDX = { head: 5, torso: 6, legs: 7, feet: 8 }
+  const mkEquipBot = (slots) => {
+    const calls = { equip: [], activate: [], deactivate: 0, consume: 0 }
+    const DEST = { head: 5, torso: 6, legs: 7, feet: 8, 'off-hand': 45 }
+    const fake = {
+      entity: { position: null },
+      game: { gameMode: 'survival' },
+      food: 12,
+      quickBarSlot: 0,
+      inventory: {
+        slots,
+        items () { return this.slots.slice(9, 45).filter(Boolean) },
+      },
+      registry: reg,
+      getEquipmentDestSlot (d) { return d === 'hand' ? 36 + fake.quickBarSlot : DEST[d] },
+      async equip (item, dest) {
+        calls.equip.push(`${item.name}->${dest}`)
+        const from = item.slot
+        const to = fake.getEquipmentDestSlot(dest)
+        if (from != null && from !== to) { fake.inventory.slots[to] = item; fake.inventory.slots[from] = null; item.slot = to }
+      },
+      activateItem (off) { calls.activate.push(off ? 'off' : 'main') },
+      deactivateItem () { calls.deactivate++ },
+      async consume () { calls.consume++; fake.food = 20 },
+      blockAt: () => ({ name: 'wheat', position: { x: 0, y: 0, z: 0 } }),
+      activateBlock: async () => {},
+    }
+    return { fake, calls }
+  }
+  const mkSlots = (entries) => {
+    const s = new Array(46).fill(null)
+    for (const [slot, name] of entries) s[slot] = { name, count: 1, slot }
+    return s
+  }
+
+  // ③ equip 不给 dest → 盔甲自己穿到对应部位（旧版会硬塞到手上，等于穿不上）
+  {
+    const { fake, calls } = mkEquipBot(mkSlots([[36, 'diamond_helmet'], [10, 'bread']]))
+    const bot = new McBot({ instanceId: 'selftest-equip1' })
+    bot.bot = fake
+    const r = await bot.equip({ name: 'diamond_helmet' })
+    console.log(`  ${r.destination === 'head' && calls.equip[0] === 'diamond_helmet->head' ? '✅' : '❌'} equip 不给 dest 时盔甲自动穿到头（${calls.equip[0]}）`)
+    console.log(`  ${fake.inventory.slots[5]?.name === 'diamond_helmet' ? '✅' : '❌'} 真的进了装备槽 5（头盔槽），不是快捷栏`)
+    console.log(`  ${r.wearing?.head === 'diamond_helmetx1' ? '✅' : '❌'} 回报里带上"现在穿着什么"（wearing.head=${r.wearing?.head}）`)
+  }
+
+  // ④ 中文别名也要认；乱给要报错而不是默默装手上
+  {
+    const { fake, calls } = mkEquipBot(mkSlots([[10, 'diamond_chestplate']]))
+    const bot = new McBot({ instanceId: 'selftest-equip2' })
+    bot.bot = fake
+    await bot.equip({ name: 'diamond_chestplate', destination: '胸甲' })
+    console.log(`  ${calls.equip[0] === 'diamond_chestplate->torso' ? '✅' : '❌'} dest 认中文别名（胸甲 → torso）`)
+  }
+  // ④′ dest 写错时必须报"dest 错"，不能被"背包里没有 X"盖掉（校验顺序）
+  {
+    const { fake } = mkEquipBot(mkSlots([[10, 'diamond_chestplate']]))
+    const bot = new McBot({ instanceId: 'selftest-equip2b' })
+    bot.bot = fake
+    let err = null
+    try { await bot.equip({ name: 'diamond_chestplate', destination: '脑袋' }) } catch (e) { err = e }
+    console.log(`  ${/不认识的装备位置/.test(String(err?.message)) ? '✅' : '❌'} 乱给 dest 报错有指导性：${String(err?.message).slice(0, 34)}…`)
+  }
+
+  // ⑤ wear：一次穿全套，同槽多件挑好的，鞘翅默认不穿（会顶掉胸甲）
+  {
+    const { fake } = mkEquipBot(mkSlots([
+      [10, 'leather_helmet'], [11, 'diamond_helmet'], [12, 'diamond_chestplate'],
+      [13, 'diamond_leggings'], [14, 'diamond_boots'], [15, 'elytra'],
+    ]))
+    const bot = new McBot({ instanceId: 'selftest-equip3' })
+    bot.bot = fake
+    const r = await bot.equipArmor({})
+    const allFour = Object.values(ARMOR_IDX).every((i) => /^diamond_/.test(String(fake.inventory.slots[i]?.name)))
+    console.log(`  ${allFour ? '✅' : '❌'} wear 一次穿上四件（${r.worn.join(' ')}）`)
+    console.log(`  ${fake.inventory.slots[5]?.name === 'diamond_helmet' ? '✅' : '❌'} 同槽多件时挑好的（diamond 压过 leather）`)
+    console.log(`  ${!r.worn.some((w) => /elytra/.test(w)) ? '✅' : '❌'} 鞘翅默认不自动穿（会顶掉胸甲）`)
+    console.log(`  ${r.missing.length === 0 ? '✅' : '❌'} 四件齐全时不报"缺"`)
+  }
+
+  // ⑥ wear：背包里没有的槽要如实报缺（不是静默跳过）
+  {
+    const { fake } = mkEquipBot(mkSlots([[11, 'diamond_helmet']]))
+    const bot = new McBot({ instanceId: 'selftest-equip4' })
+    bot.bot = fake
+    const r = await bot.equipArmor({})
+    console.log(`  ${r.missing.length === 3 && /mc_give/.test(String(r.note)) ? '✅' : '❌'} 缺的槽如实报出并给获取办法（missing=${r.missing.join(',')}）`)
+  }
+
+  // ⑦ useItem：普通物品走 activate + release（水桶/打火石/珍珠）
+  {
+    const { fake, calls } = mkEquipBot(mkSlots([[36, 'water_bucket']]))
+    const bot = new McBot({ instanceId: 'selftest-use1' })
+    bot.bot = fake
+    const r = await bot.useItem({})
+    console.log(`  ${calls.activate.length === 1 && calls.deactivate === 1 ? '✅' : '❌'} useItem 用主手物品（activate 1 次 + release 1 次）`)
+    console.log(`  ${r.used === 'water_bucket' && r.mode === 'activate' ? '✅' : '❌'} 回报用了什么（${r.used} / ${r.mode}）`)
+  }
+
+  // ⑧ useItem：食物走 bot.consume（它等服务器确认，比自己数秒稳）
+  {
+    const { fake, calls } = mkEquipBot(mkSlots([[36, 'bread']]))
+    const bot = new McBot({ instanceId: 'selftest-use2' })
+    bot.bot = fake
+    const r = await bot.useItem({})
+    console.log(`  ${calls.consume === 1 && calls.activate.length === 0 ? '✅' : '❌'} 食物走 bot.consume（不是自己数秒）`)
+    console.log(`  ${r.mode === 'consume' && r.food === 20 ? '✅' : '❌'} 吃完回报饱食度（food=${r.food}）`)
+  }
+
+  // ⑨ 吃饱了要给友好提示，而不是把 mineflayer 的 'Food is full' 原样抛给模型
+  {
+    const { fake } = mkEquipBot(mkSlots([[36, 'bread']]))
+    fake.food = 20
+    fake.consume = async () => { throw new Error('Food is full') }
+    const bot = new McBot({ instanceId: 'selftest-use3' })
+    bot.bot = fake
+    let err = null
+    try { await bot.useItem({}) } catch (e) { err = e }
+    console.log(`  ${/吃饱了/.test(String(err?.message)) ? '✅' : '❌'} 吃饱时给友好提示：${String(err?.message).slice(0, 34)}…`)
+  }
+
+  // ⑩ use 给了 name → 先拿到手上再右键（骨粉催熟 / 锄头耕地 / 打火石点火）
+  {
+    const { fake, calls } = mkEquipBot(mkSlots([[10, 'bone_meal']]))
+    const bot = new McBot({ instanceId: 'selftest-use4' })
+    bot.bot = fake
+    const r = await bot.useBlock({ x: 0, y: 0, z: 0, name: 'bone_meal' })
+    console.log(`  ${calls.equip[0] === 'bone_meal->hand' ? '✅' : '❌'} use 给了 name 会先拿到手上再右键（${calls.equip[0]}）`)
+    console.log(`  ${r.usedBlock === 'wheat' ? '✅' : '❌'} 右键的还是目标方块（${r.usedBlock}）`)
+  }
+
+  // ⑪ 手上/副手空着时要报错，不能静默成功
+  {
+    const { fake } = mkEquipBot(mkSlots([]))
+    const bot = new McBot({ instanceId: 'selftest-use5' })
+    bot.bot = fake
+    let err = null
+    try { await bot.useItem({}) } catch (e) { err = e }
+    console.log(`  ${/没有物品/.test(String(err?.message)) ? '✅' : '❌'} 空手用物品报错有指导性`)
+  }
+
+  // ⑫ 工具入口真的挂上了新 mode/op（源码级断言，防止改了 core 忘了接 index）
+  {
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const idx = readFileSync(fileURLToPath(new URL('./index.js', import.meta.url)), 'utf8')
+    const core = readFileSync(fileURLToPath(new URL('./src/core.mjs', import.meta.url)), 'utf8')
+    console.log(`  ${/case 'wear':/.test(idx) && /case 'useItem':/.test(idx) ? '✅' : '❌'} mc_act 挂上了 wear / useItem 两个 mode`)
+    console.log(`  ${/destination: args\.dest/.test(idx) ? '✅' : '❌'} mc_act{equip} 把 dest 透传下去`)
+    console.log(`  ${/case 'wear':\s+return this\.equipArmor\(s\)/.test(core) && /case 'useItem': return this\.useItem\(s\)/.test(core) ? '✅' : '❌'} mc_sequence 也认 wear / useItem 这两个 op`)
+    console.log(`  ${/wearing: this\.#wornArmor\(b\)/.test(core) ? '✅' : '❌'} mc_inventory 会报身上穿着的装备（装备槽不在 items() 里）`)
+  }
+}
+
 // ── 看门狗唤醒投递：必须是**提示词注入**，不是模拟用户发言 ──
 // 用户要求：不要 followup（那会给对话插一条用户消息），要 steer + plugin 来源。
 // `steer` 的宿主文档："An idle driver starts a turn" —— 空闲也能唤醒，正合用。
@@ -2881,7 +3199,7 @@ console.log('\n--- 看门狗唤醒投递（提示词注入，非用户消息）-
   const msg = steerCalls[0]
   console.log(`  ${steerCalls.length === 1 ? '✅' : '❌'} 走 agent.steer（${steerCalls.length} 次）`)
   console.log(`  ${promptCalls.length === 0 ? '✅' : '❌'} **没有**走 sessionController.prompt/followup（${promptCalls.length} 次）`)
-  console.log(`  ${msg?.source?.kind === 'plugin' ? '✅' : '❌'} 来源是 plugin（不是 user）：kind=${msg?.source?.kind}`)
+  console.log(`  ${msg?.source?.kind === 'plugin:whale_craft' ? '✅' : '❌'} 来源是 producer-owned（不是 V3 的 'plugin'，也不是 user）：kind=${msg?.source?.kind}`)
   console.log(`  ${msg?.source?.form === 'notice' ? '✅' : '❌'} form=notice（渲染成折叠摘要行）`)
   console.log(`  ${msg?.source?.plugin === 'whale_craft' ? '✅' : '❌'} 标了来源插件 whale_craft`)
   console.log(`  ${/deepseek/.test(msg?.content?.[0]?.text ?? '') ? '✅' : '❌'} 正文带上原始消息`)
