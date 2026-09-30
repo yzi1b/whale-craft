@@ -12,7 +12,7 @@
  */
 import { spawn, execFileSync } from 'node:child_process'
 import { openSync, writeFileSync, readFileSync, existsSync, unlinkSync, mkdirSync, copyFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import net from 'node:net'
@@ -31,7 +31,11 @@ const STATE_DIR = join(LOGS, 'isolate-state')
 const DSH_ROOT = process.env.DSH_ROOT
   ?? (() => {
     const i = process.argv.indexOf('--dsh-root')
-    return i >= 0 ? process.argv[i + 1] : ''
+    const raw = i >= 0 ? process.argv[i + 1] : ''
+    if (!raw) return ''
+    // ð´ æ¥æ¶ç¬¬ä¸æ¹è¾å¥åé¿æ¢æ§å¶å­ç¦/Shell åè§å­ç¦æ³é²ç«¯å£æ³¨å¥ï¼å¹¶å½ä¸åä¸ºç»å¯¹è·¯å¾ã
+    if (/[\0\r\n;&|`$]/.test(raw)) throw new Error('--dsh-root åå«éæ³å­ç¦')
+    return resolve(raw)
   })()
 const NODE = process.execPath
 /** 严禁占用的已登记端口（示例：这几个端口上跑着别的服务）。可用 `ISOLATE_FORBIDDEN=1,2,3` 覆盖。 */
