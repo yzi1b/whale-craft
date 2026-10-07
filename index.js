@@ -34,7 +34,8 @@ import { homedir } from 'node:os'
 import { McBot, lossless, logLine, libraryInfo } from './src/core.mjs'
 import { defineTool, toolDefKind } from './src/tool-def.mjs'
 import { versionPromptText, versionPromptTitle, versionPromptSource } from './src/version-prompt.mjs'
-import { EXPRESS_DIR, OUT_DIR, expressRootOf, outRootOf, parseExpressPath, safeExpressTarget, mimeOf, SANDBOX_TYPES, expressRefFor, EXPRESS_OFF_TEXT, EXPRESS_NEED_BASE_TEXT, normalizeExpressBase, onlineUrlOf } from './src/express.mjs'
+import { EXPRESS_DIR, OUT_DIR, expressRootOf, outRootOf, parseExpressPath, parseExpressLocalPath, safeExpressTarget, mimeOf, SANDBOX_TYPES, expressRefFor, EXPRESS_OFF_TEXT, EXPRESS_NEED_BASE_TEXT, EXPRESS_PORT_BUSY_TEXT, normalizeExpressBase, normalizeExpressPort, onlineUrlOf } from './src/express.mjs'
+import { ExpressShareServer, portAvailable } from './src/express-server.mjs'
 import { Watchdog, WATCH_DEFAULTS } from './src/watchdog.mjs'
 import { MemoryStore } from './src/memory.mjs'
 import { PluginConfig, DEFAULT_CONFIG, resolveStateDir, pickPresetTarget, pickPresetSource, isCopiedPresetDescription, PREFERRED_PRESET_SOURCES, MC_PRESET_SPEC, planPresetAction, patchPersonaInComposition, personaTextKeyOf, disableShellInComposition, patchToolGroupsIntoComposition, MC_PRESET_TOOL_GROUPS } from './src/config.mjs'
@@ -474,6 +475,15 @@ export function apply(ctx, rawConfig) {
     + `｜工具定义 ${toolDefKind() === 'host' ? '宿主 @deepseek-ai/dsh-tools' : '自带兜底'}`
     + `｜Config ${Config ? 'schema（宿主 schemastery）' : '无（宿主 schemastery 不可用）'}`)
 
+  /* ─────────── 宿主模式（web / desktop）：文件分享配置按模式各认一套（用户 2026-10-07）───────────
+   * 判据 = 宿主提供服务的 `profileContext.name`（`dsh/lib/profile-boot-*.js` 里 `hostCtx.provide`），
+   * 宿主自己也用 `ctx.get('profileContext')?.name === 'desktop'` 判桌面端。取不到（老宿主）按 web 兜底。
+   * ------------------------------------------------------------------------ */
+  const hostMode = () => {
+    try { if (String(ctx.get('profileContext')?.name ?? '').toLowerCase() === 'desktop') return 'desktop' } catch { /* 老宿主没有这个服务 */ }
+    return 'web'
+  }
+
   /* ─────────── 发布区（`.whale-craft/.express/`）：地址用**工作区 uuid** ───────────
    * 用户 2026-09-17 定稿：`<base>/api/whale-craft/express/<工作区 uuid>/<剩余路径>`。
    * uuid 直接从宿主的工作区注册表拿（`ctx.workspaceRegistry.list()` 是**同步**的，`path` 已 realpath 规范化）——
@@ -912,9 +922,16 @@ export function apply(ctx, rawConfig) {
       injectWorkspaceAgentsMd: ws ? ws.injectWorkspaceAgentsMd : null,
       // 「提示词」页的「随版本更新」（默认开；按工作区）
       rulesFollowVersion: ws ? ws.rulesFollowVersion !== false : null,
-      // 「MC设置 → 文件分享」：开关 + base（只有"在线"这一种方式，见 config.mjs `expressEnabled`）
-      expressEnabled: pluginConfig.expressEnabled,
-      expressBase: pluginConfig.expressBase,
+      // 「MC设置 → 文件分享」：**按宿主模式各认一套键**（用户 2026-10-07）——
+      //   web：开关 + base；desktop：开关 + 端口。前端据 `mode` 只显示/只写自己那套。
+      mode: hostMode(),
+      expressWebEnabled: pluginConfig.expressWebEnabled,
+      expressWebBase: pluginConfig.expressWebBase,
+      expressDesktopEnabled: pluginConfig.expressDesktopEnabled,
+      expressDesktopPort: pluginConfig.expressDesktopPort,
+      // desktop 独立端口现状（设置页红字 / "已开放"提示；**工作区无关**，故放在这里而非 /api/mc/express）
+      expressDesktopListening: expressServer.status.listening && expressServer.status.port === pluginConfig.expressDesktopPort,
+      expressDesktopError: expressServer.status.wantPort === pluginConfig.expressDesktopPort ? expressServer.status.error : null,
       // 「MC设置 → 调试」页的「开放助手调试工具」开关（工作区无关）
       exposeDebugTools: pluginConfig.exposeDebugTools,
       // 「MC设置」入口的模式门控：前端拿这份名单 + 会话记录的 preset 就能**本地**判定
@@ -1126,12 +1143,17 @@ export function apply(ctx, rawConfig) {
       const cwd = await cwdOf(body)
       if (cwd) ensureMemoryRootForCwd(cwd)
       // 全局键 → PluginConfig（**无条件**）；三个提示词开关 → **本工作区**的 config.json（有工作区才写）
-      for (const k of ['commandWhitelist', 'allowAllCommands', 'expressEnabled', 'expressBase', 'exposeDebugTools']) {
+      for (const k of ['commandWhitelist', 'allowAllCommands', 'expressWebEnabled', 'expressWebBase', 'expressDesktopEnabled', 'expressDesktopPort', 'exposeDebugTools']) {
         if (body[k] !== undefined) pluginConfig.set(k, body[k])
       }
       // 调试开关变更 → 立即重算各 MC/MC+ 会话的工具可见性（用户 2026-10-05）
       if (body.exposeDebugTools !== undefined) {
         try { refreshMcPolicy() } catch (e) { logLine(`调试开关变更后重算工具策略失败：${e?.message ?? e}`) }
+      }
+      // desktop 分享开关/端口变更 → 立即对齐独立端口服务（用户 2026-10-07）。
+      // **await**：让响应返回时 `listening`/`portError` 已是最终态，设置页不必猜。
+      if (body.expressDesktopEnabled !== undefined || body.expressDesktopPort !== undefined) {
+        await syncExpressServer()
       }
       const wsPatch = {}
       for (const k of ['injectWhaleCraftAgentsMd', 'injectWorkspaceAgentsMd', 'rulesFollowVersion']) {
@@ -1142,19 +1164,36 @@ export function apply(ctx, rawConfig) {
     }
 
     /* ── 「MC设置 → 文件分享」：这个工作区的发布区现状 / 清除分享数据 ──────────────
-     * 分享**模式与 base** 是全局配置（走 `/api/mc/config`）；这两个接口是**按工作区**的：
+     * 分享**开关与地址/端口**是全局配置（走 `/api/mc/config`）；这两个接口是**按工作区**的：
      *   · GET    看发布区在哪、攒了多少（页面上显示，省得用户去翻文件夹）；
      *   · DELETE 「清除分享数据」—— 前端必须**先让用户确认**再调它（不可撤销）。
      * 目录由服务端推导，前端传不了路径。
      * ------------------------------------------------------------------------ */
+    /* 端口占用自检（desktop 设置页用；**按需、不绑工作区**）：该端口能否在本机回环监听
+     * —— 若正是我们当前已监听的端口，则算"可用（本插件占用）"。 */
+    if (path === '/api/mc/express/port' && req.method === 'GET') {
+      const port = normalizeExpressPort(url?.searchParams?.get('port'))
+      if (port === null) return ok({ port: null, available: false, current: false, reason: 'invalid' })
+      const st = expressServer.status
+      if (st.listening && st.port === port) return ok({ port, available: true, current: true, reason: '' })
+      const free = await portAvailable(port)
+      return ok({ port, available: free, current: false, reason: free ? '' : 'inuse' })
+    }
     if (path === '/api/mc/express' && req.method === 'GET') {
       const gate = await gateOf()
       if (!gate.ok) return sendJson(res, 400, { ok: false, error: gate.error })
       // 顺带把「当前地址」给前端：base 的「获取当前」按钮 / 切到在线时的自动填，都用它
       // （`clientOrigin` = 浏览器塞进来的 `location.origin`，最精准那一档）
+      const st = expressServer.status
+      const wantPort = pluginConfig.expressDesktopPort
       return ok({
         ...sharedStat(gate.cwd),
+        mode: hostMode(),
         currentBase: currentBaseOf(req, { clientOrigin: url?.searchParams?.get('clientOrigin') }),
+        // desktop：独立端口现状（设置页据此红字提示 / 显示"已开放"）
+        port: wantPort,
+        listening: st.listening && st.port === wantPort,
+        portError: st.wantPort === wantPort ? st.error : null,
       })
     }
     if (path === '/api/mc/express' && req.method === 'DELETE') {
@@ -1295,6 +1334,47 @@ export function apply(ctx, rawConfig) {
       return true
     }
   }
+
+  /* ─────────── 桌面模式的「发布区独立端口」服务（用户 2026-10-07）───────────
+   * 只有 desktop 模式且启用分享时才起，只监听 localhost，地址 `http://localhost:<port>/<工作区uuid>/<rel>`。
+   * 换端口 / 开关即重启（`syncExpressServer` 串行化）。壳在 src/express-server.mjs；文件读写复用 serveSharedFile。
+   * 「只有启用分享且端口服务正常监听，才真正开放」——起不来就落 `status.error`，工具回占用文案。
+   * ------------------------------------------------------------------------ */
+  const expressServer = new ExpressShareServer({
+    logger: (m) => logLine(m),
+    handler: (req, res) => {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      const hit = parseExpressLocalPath(url.pathname)
+      if (!hit || (req.method !== 'GET' && req.method !== 'HEAD')) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+        res.end('not found')
+        return
+      }
+      serveSharedFile(req, res, hit)
+    },
+  })
+  let expressSyncChain = Promise.resolve()
+  /** 把「期望态」与「现状」对齐（起 / 停 / 换端口）；串行化避免并发 bind。 */
+  const syncExpressServer = () => {
+    expressSyncChain = expressSyncChain.then(async () => {
+      const want = (hostMode() === 'desktop' && pluginConfig.expressDesktopEnabled)
+        ? pluginConfig.expressDesktopPort
+        : null
+      if (want === null) {
+        if (expressServer.listening || expressServer.wantPort !== null) await expressServer.stop()
+        expressServer.wantPort = null
+        expressServer.error = null
+        return
+      }
+      if (expressServer.listening && expressServer.port === want) return
+      await expressServer.start(want)
+    }).catch((e) => { logLine(`发布区独立端口同步失败：${e?.message ?? e}`) })
+    return expressSyncChain
+  }
+  ctx.effect(() => {
+    void syncExpressServer()
+    return () => { void expressServer.stop() }
+  }, 'whale_craft: 发布区独立端口（desktop 模式）')
 
   /** 分支标题 +1（保留半角/全角括号），与宿主 `ClientSessions.fork` 的 `increaseTitle` 同款。 */
   const increasedForkTitle = (title) => {
@@ -1564,7 +1644,7 @@ export function apply(ctx, rawConfig) {
      *    `MC_PRESETS_FALLBACK` 兜底，名单一旦和默认值不同就悄悄失灵。谁再加接口，**记得也加这里**。 */
     if (path.startsWith('/api/mc/accounts') || path.startsWith('/api/mc/authservers')
       || path.startsWith('/api/mc/agents-md') || path === '/api/mc/config'
-      || path === '/api/mc/express' || path === '/api/mc/presets'
+      || path.startsWith('/api/mc/express') || path === '/api/mc/presets'
       || path === '/api/mc/servers' || path === '/api/mc/lan') {
       try {
         return await handleSettingsApi(req, res, path, url)
@@ -1604,7 +1684,7 @@ export function apply(ctx, rawConfig) {
    *     所以 `/api/whale-craft` 会赢过宿主自己在 `/api` 上的 RPC 前缀，跟注册顺序无关；
    *   · 信任栅栏得**自己再过一遍**（`/api/mc` 那道只管它自己），判据与用法完全一致。
    *
-   * 🔴 只有「在线」模式才服务（关闭模式 404）：不留"以为关了其实还能访问"的口子。
+   * 🔴 只有 **web 模式且已开启**才服务（desktop 走自己的独立端口；关闭一律 404）：不留"以为关了其实还能访问"的口子。
    */
   const shareRoute = {
     kind: 'prefix',
@@ -1616,8 +1696,9 @@ export function apply(ctx, rawConfig) {
         return
       }
       try {
-        if (!pluginConfig.expressEnabled) {
-          logLine('发布区：当前「文件分享」是关闭的，不提供访问（/api/whale-craft/… 只在开启时开）')
+        // 🔴 宿主 webServer 的这条路由只服务 **web 模式**；desktop 走自己的独立端口（src/express-server.mjs）。
+        if (hostMode() !== 'web' || !pluginConfig.expressWebEnabled) {
+          logLine('发布区：宿主 webServer 上的分享路由未开放（非 web 模式，或 web 分享未开启）')
           res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
           res.end('not found (sharing disabled)')
           return
@@ -2719,17 +2800,18 @@ export function apply(ctx, rawConfig) {
    * 只做一件事：把 `.whale-craft/.express/` 下的文件换成**给用户用的那一行**，
    * 剩下的 markdown 由 AI 自己拼（`![名](url)` / `[名](url)`）——不再往别的工具返回值里塞字段。
    *
-   * 🔴 **回什么由「文件分享」开关决定**（用户 2026-09-17 定、2026-10-04 从模式改为开关，见 config.mjs `expressEnabled`）：
+   * 🔴 **回什么由「文件分享」开关决定，且按宿主模式分两套**（用户 2026-09-17 定、2026-10-04 改开关、2026-10-07 按模式拆键）：
    *   · 关（默认）→ 恒回一句"文件分享已关闭…"，服务也不开（AI 只能把绝对路径告诉用户）；
-   *   · 开 → 回 `base + 相对路径` 的**完整 URL**，只有开启时才开服务。
-   * 两种状态都仍然**只认发布区**（`.express/`）里的文件。
+   *   · web 模式开 → 回 `base + /api/whale-craft/express/<uuid>/<rel>` 的**完整 URL**；
+   *   · desktop 模式开 → 回 `http://localhost:<port>/<uuid>/<rel>`；端口服务没起来则回占用文案。
+   * 各模式都仍然**只认发布区**（`.express/`）里的文件。
    */
   ctx.tools.register(asTool({
     name: 'mc_kit_express',
     description: '获取分享区中文件的完整分享URL。\n'
       + '要给用户分享图片或其他文件，先将要分享的文件放在工作区 `.whale-craft/.express/` 下，然后调用本工具传入文件路径，本工具会返回该文件用户可达的**完整**URL。该URL即可用于回报用户，无需再补充协议或域名。\n'
       + '如果要分享的文件是图片，期望在回复中内嵌展示出来，回复 `![图片名](url)` 即可。其他文件，或期望是可以下载的URL，回复 `[文件名](url)` 即可。\n'
-      + '本工具只用于生成URL。只要用户开启分享功能，`.whale-craft/.express/` 下的文件都会分享出去。如果用户没有开启分享功能，调用本工具会有相应报错。如果用户反映仍然无法看到图片或访问文件，且你的操作并无问题，提醒用户检查文件分享的 base 配置是否正确。',
+      + '本工具只用于生成URL。只要用户开启分享功能，`.whale-craft/.express/` 下的文件都会分享出去。如果用户没有开启分享功能，调用本工具会有相应报错。如果用户反映仍然无法看到图片或访问文件，且你的操作并无问题，提醒用户去「MC设置 → 文件分享」检查配置（web 模式看 base，桌面模式看端口）。',
     parameters: {
       path: { type: 'string', required: true, description: '发布区下的文件路径（工作区相对或绝对；必须在 .whale-craft/.express/ 下）' },
     },
@@ -2765,11 +2847,19 @@ export function apply(ctx, rawConfig) {
           + `请先把它放到 .whale-craft/${EXPRESS_DIR}/<子目录>/ 下（出图时把 out 写成那里，`
           + '或用 mc_kit_memory {action:"put", path:".express/<子目录>/x.png"} 复制过去），再来取。')
       }
-      const enabled = pluginConfig.expressEnabled
       // 关闭（默认）：恒回那一句（**不抛错** —— 让 AI 直接把话转达用户，而不是去试别的歪招）
-      if (!enabled) return { enabled: false, url: EXPRESS_OFF_TEXT, rel: ref.rel, abs: abs }
+      if (hostMode() === 'desktop') {
+        if (!pluginConfig.expressDesktopEnabled) return { enabled: false, url: EXPRESS_OFF_TEXT, rel: ref.rel, abs }
+        const port = pluginConfig.expressDesktopPort
+        const st = expressServer.status
+        // 已启用但独立端口没起来（被占用/启动失败）→ 回占用文案（**不抛错**）
+        if (!(st.listening && st.port === port)) return { enabled: true, url: EXPRESS_PORT_BUSY_TEXT(port), rel: ref.rel }
+        return { enabled: true, url: `http://localhost:${port}${ref.localPath}`, rel: ref.rel }
+      }
+      // web 模式
+      if (!pluginConfig.expressWebEnabled) return { enabled: false, url: EXPRESS_OFF_TEXT, rel: ref.rel, abs }
       // 开启：base + 相对路径；base 还没配就把"让用户去设置"这句话交给 AI
-      const url = onlineUrlOf(pluginConfig.expressBase, ref.url)
+      const url = onlineUrlOf(pluginConfig.expressWebBase, ref.url)
       if (!url) return { enabled: true, url: EXPRESS_NEED_BASE_TEXT, rel: ref.rel }
       return { enabled: true, url, rel: ref.rel }
     },
@@ -4277,8 +4367,9 @@ export function apply(ctx, rawConfig) {
       + '可用键：`commandWhitelist`（字符串数组；支持 "tp" 精确名、"/^gi.*/" 正则、"*" 全放行）· '
       + '`mcModePresets`（哪些 preset 算 MC 模式——应含 MC+ 的 id）· `mcPlusPresets`（哪些算 MC+ 变体：'
       + '开放标准模式全部工具）· `mcMode.allowOtherTools`（MC 模式白名单里**额外**放行的工具）· '
-      + '`mcMode.hideAdminTools`（默认 true）· `expressEnabled`（文件分享开关：true 开 / false 关）· '
-      + '`expressBase`（文件分享的 base，如 https://example.com）· `exposeDebugTools`（是否向助手暴露调试用途的工具，默认 false）· `memoryDir`。\n'
+      + '`mcMode.hideAdminTools`（默认 true）· `expressWebEnabled` / `expressWebBase`（**web 模式**文件分享开关 + base，如 https://example.com）· '
+      + '`expressDesktopEnabled` / `expressDesktopPort`（**桌面模式**文件分享开关 + 独立托管端口，默认 16049）· '
+      + '`exposeDebugTools`（是否向助手暴露调试用途的工具，默认 false）· `memoryDir`。\n'
       + '改完**立即生效**，落在 `$DSH_HOME/whale_craft/config.json`。（白名单只能"收窄"，不能凭空添加 preset 没挂的工具。）',
     parameters: {
       action: { type: 'string', description: 'get（默认）/ set / unset / reset / list' },

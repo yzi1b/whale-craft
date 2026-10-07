@@ -28,7 +28,7 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 | `presets/*.patch.yml` | 「MC模式」「MC+模式」两个 preset 的**声明式**定义（0.2.0-rc.2+ 注册表；经 `dsh.bundle.patch` 数组随包挂载） |
 | `client.js`（~1.8k 行） | **浏览器半端 bundle**（手写 factory，无构建步骤，HMR 热更）：状态条 / MC设置弹窗 / 新会话页 hero 入口 |
 | `src/core.mjs`（~2k 行） | `McBot`：mineflayer 封装（连接/重连/动作/观察/协议护栏）；**不依赖 DSH**，可独立测试 |
-| `src/*.mjs` | 16 个协作模块（watchdog / memory / config / **wsconfig** / **protected** / accounts / agentsmd / express / image / png / lan / ping / wait / user-message / version-prompt / **resolver-shim**），全部由 index.js 组装 |
+| `src/*.mjs` | 协作模块（watchdog / memory / config / **wsconfig** / **protected** / accounts / agentsmd / express / **express-server** / image / png / lan / ping / wait / user-message / version-prompt / **resolver-shim** …），全部由 index.js 组装 |
 | `tools/` | `check-core.mjs`（静态检查）、`dev.mjs`（隔离调试实例，**本机主用**）、`isolate.mjs`（老方式，需 DSH 源码 checkout） |
 | `selfcheck.mjs`（~3.5k 行） | 600+ 条离线断言：假 ctx 加载**真** `apply()`，不连 MC |
 | `scripts/` | `publish-npm.mjs`（本机手动发 npm）、`land-workflow-fix.mjs`（工作流文件落地）、`release.workflow.yml`（模板） |

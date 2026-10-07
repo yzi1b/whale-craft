@@ -120,7 +120,7 @@ DSH_ROOT=/path/to/deepseek-harness node tools/isolate.mjs start
 
 `selfcheck.mjs` 覆盖：工具面与参数、每会话实例隔离、超时/中断、放置判据（与 `minecraft-data` 真值表比对）、
 看门狗唤醒投递与 job 结算、未签名/系统位置聊天的识别、记忆树读写与路径穿越防护、**发布区的防穿透与真路由**、
-**「文件分享」两种模式与 base 推导**（含反代 `Referer` 一档）、账户库与凭据隔离、配置校验、
+**「文件分享」按宿主模式拆键（web=base / 桌面=独立端口）**、base 推导（含反代 `Referer` 一档）、账户库与凭据隔离、配置校验、
 提示词注入去重与版本提示、preset 自检与重建、**强制停止的四步顺序**、
 依赖面（含"`vec3` 与 `mineflayer` 必须是同一份"这类运行时断言），以及客户端 bundle 的静态检查。
 
@@ -148,10 +148,13 @@ CI 跑的就是这两条（`.github/workflows/ci.yml`）：**ubuntu（Node 22 / 
 ## 已知限制
 
 - **微软正版登录未实现**（只有离线 / Yggdrasil 皮肤站）。
-- **文件分享默认是关的**（`expressEnabled: false`）：AI 画了图只会把**绝对路径**给你，要让它直接在对话里显示，
-  得在「MC设置 → 文件分享」里**打开开关**并填好 `base`。前端只认绝对 http(s) 图片地址，所以关闭时的
-  本地路径**不会**内联成图（这是设计如此，不是 bug）。
-- 文件分享的 `base` **不做连通性自检**：填错了只有你自己能发现（AI 拿到的 URL 打不开）。
+- **文件分享默认是关的**：AI 画了图只会把**绝对路径**给你，要让它直接在对话里显示，
+  得在「MC设置 → 文件分享」里**打开开关**。**配置按宿主模式分两套**（从哪种模式进来就只认哪种）：
+  - **web 模式**（`expressWebBase`）：填你访问这台 DSH 用的 `base`（如 `https://example.com`）；
+  - **桌面模式**（`expressDesktopPort`，默认 `16049`）：插件自起一个**只监听本机**的独立端口直接托管分享文件，
+    地址形如 `http://localhost:16049/<工作区>/<文件名>`；端口被占用时设置页会红字提示，可改端口或恢复默认。
+  前端只认绝对 http(s) 图片地址，所以关闭时的本地路径**不会**内联成图（这是设计如此，不是 bug）。
+- 文件分享的 `base`（web）/ 端口（桌面）**不做连通性自检**：web 的 base 填错了只有你自己能发现（AI 拿到的 URL 打不开）；桌面端口占用会在设置页红字提示。
 - 🔴 **行事准则为什么叫 `RULES.md`**（见上）：`AGENTS.md` 会被 DSH 当工作区指令自动注入到任何碰过该目录的会话，
   与 MC 模式无关 —— 所以这个名字是刻意的。
 - 把 `memoryDir` 指到共享目录时，多个工作区会**共用**同一份记忆与 `config.json`（按工作区的设置也随之共享）。
@@ -340,12 +343,16 @@ first (`prepublishOnly`) — **a broken tree cannot be published**.
 ## Known limitations
 
 - **Microsoft (Mojang) login is not implemented** (offline / Yggdrasil only).
-- **File sharing is off by default** (`expressEnabled: false`): the agent only gives you an **absolute
-  path**; to render inline in the chat, turn on the switch under **MC Settings → File sharing** and set
-  `base`. The frontend only accepts absolute http(s) image URLs, so a local path is **not** inlined
-  (by design, not a bug).
-- File sharing's `base` has **no connectivity check**: only you can notice a typo (the URL the agent
-  gets won't open).
+- **File sharing is off by default**: the agent only gives you an **absolute path**; to render inline in
+  the chat, turn on the switch under **MC Settings → File sharing**. Settings come in **two sets, one per
+  host mode** (only the current mode's set is used):
+  - **web mode** (`expressWebBase`): set the `base` you use to reach this DSH (e.g. `https://example.com`);
+  - **desktop mode** (`expressDesktopPort`, default `16049`): the plugin starts its own **loopback-only**
+    port to serve shared files directly, e.g. `http://localhost:16049/<workspace>/<file>`; if the port is
+    taken the settings page shows a red hint — change the port or restore the default.
+  The frontend only accepts absolute http(s) image URLs, so a local path is **not** inlined (by design).
+- File sharing's `base` (web) / port (desktop) has **no connectivity check**: a typo'd web base is only
+  noticeable by you (the URL the agent gets won't open); a busy desktop port is flagged in the settings page.
 - 🔴 **Why the conduct file is `RULES.md`**: `AGENTS.md` is picked up by DSH as a workspace instruction
   file and injected into any session that touched that directory, MC or not — so the name is deliberate.
 - If `memoryDir` points at a shared directory, multiple workspaces **share** one memory and `config.json`

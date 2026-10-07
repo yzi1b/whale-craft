@@ -215,7 +215,7 @@
 
 ### `mc_kit_express`
 
-- **描述**：把发布区 `.whale-craft/.express/` 的文件换成给用户的一行（路径或 URL）
+- **描述**：把发布区 `.whale-craft/.express/` 的文件换成给用户的一行（路径或 URL）。**按宿主模式**：web 模式回 `base + /api/whale-craft/express/<工作区uuid>/<rel>`；桌面模式回 `http://localhost:<port>/<工作区uuid>/<rel>`（独立端口，端口起不来则回占用文案）。关闭时恒回"文件分享已关闭…绝对路径…"。
 - **参数**：`path:string*`
 - **超时**：默认
 

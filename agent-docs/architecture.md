@@ -32,7 +32,8 @@ DSH host 进程
    ├─ 工具注册（32 个）      mc_* 26 / mc_kit_* 3 / mc_admin_* 1 / mc_debug_* 2，全部经 asTool()
    ├─ HTTP（webServer）
    │   ├─ /api/mc/*                     状态/停止/设置（账户/配置/提示词/分享/preset 名单）
-   │   └─ /api/whale-craft/express/*    发布区文件（仅 online 模式注册）
+   │   └─ /api/whale-craft/express/*    发布区文件（**仅 web 模式且分享开启**时服务）
+   ├─ ExpressShareServer                desktop 模式：自起只监听 localhost 的独立端口托管发布区
    ├─ agent/pre-step 监听   提示词注入（改写 decision.messages）+ MC 模式策略对账
    ├─ presets/*.patch.yml   包内声明「MC模式」「MC+模式」两个 preset（dsh.bundle.patch 数组）
    ├─ ensureMcPreset        旧宿主遗留：目录式自举（新宿主上 no-op）
@@ -154,7 +155,7 @@ kind 变化先 release 再套新）：
 
 ## 9. HTTP 面与安全
 
-**信任栅栏**（`isTrustedRequest`，照抄 dsh-serve 的同款）：Host 必须回环或 ∈ `webRuntime.trustedHosts`；`Sec-Fetch-Site: cross-site` 拒；带 Origin 时 host 必须一致。非信任一律 403。两条顶层前缀路由各自独立过栅栏：`/api/mc/*` 与 `/api/whale-craft/express/*`（后者**只在文件分享开启时注册**）。
+**信任栅栏**（`isTrustedRequest`，照抄 dsh-serve 的同款）：Host 必须回环或 ∈ `webRuntime.trustedHosts`；`Sec-Fetch-Site: cross-site` 拒；带 Origin 时 host 必须一致。非信任一律 403。两条顶层前缀路由各自独立过栅栏：`/api/mc/*` 与 `/api/whale-craft/express/*`（后者**只在 web 模式且文件分享开启时**服务；desktop 模式走自己的独立端口，见 §10）。
 
 | 方法 + 路径 | 用途 |
 | --- | --- |
@@ -172,7 +173,8 @@ kind 变化先 release 再套新）：
 | POST `/api/mc/lan` | 「连接到MC」的**局域网探测**（后端多播监听 + 逐个 `statusPing` 拿在线人数；**不走闸门**） |
 | POST `/api/mc/connect` | 「连接到MC」点连接：**注入 + `agent.steer` 让该会话跑一轮**（**不自己连**，由 LLM 调 `mc_connect`）；**手动**连接才记历史。`asUser:true`（新对话页）→ 投**玩家消息**（`kind:'user'`，正文前 `[system] `）；否则走插件提示行 |
 | POST `/api/mc/branch-plus` | 「创建MC+分支」：**fork 一条分支 + 把新会话改成 MC+**（`{sessionId, messageId}`；`messageId` 反查 `atSeq` 对齐原生落点）。见下 |
-| GET/HEAD `/api/whale-craft/express/<工作区uuid>/<相对路径>` | 发布区文件（仅 online 模式） |
+| GET/HEAD `/api/whale-craft/express/<工作区uuid>/<相对路径>` | 发布区文件（**仅 web 模式且分享开启**） |
+| GET `/api/mc/express/port?port=` | desktop 设置页的端口占用自检（临时 bind 探测；当前已监听端口算"可用"） |
 
 - **设置类 API 的错误形态统一 200 + `{ok:false, error, needUserAction?, hint?}`**（前端 `apiFetch` 要求 `payload.ok===true`）。
 - **「连接到MC」的注入时机（2026-10-04）**：`/api/mc/connect` 只**注入 + 唤醒**——`sess.interruptWait('connect')` → `agent.steer(message)`（空闲起一轮、运行中插话）。正文由 `src/connect-prompt.mjs` 组装（追加插槽 `CONNECT_PROMPT_APPENDERS`）。历史只记 `via!=='lan'` 的地址（`src/serverhistory.mjs`，全局 `servers.json`）。
@@ -201,9 +203,18 @@ kind 变化先 release 再套新）：
 | `<工作区>/.whale-craft/.out/` | 谁都拿不到 | 默认输出（`mc_map image`、`mc_kit_image` 落盘） |
 | `<工作区>/.whale-craft/.express/` | 取决于文件分享开关 | 发布区（**目录即白名单**，支持子目录） |
 
-- `expressEnabled: false`（默认）：`mc_kit_express` 恒回 `EXPRESS_OFF_TEXT`（让 AI 把绝对路径给用户），路由不存在（访问即 404）。
-- `expressEnabled: true`：回 `base + /api/whale-craft/express/<uuid>/<rel>` 完整 URL；缺 base 回 `EXPRESS_NEED_BASE_TEXT`（报错不抛异常）。
-- 🔴 2026-10-04 前是 `expressMode: 'off' | 'online'`（还一度有 `local`）；用户定"以后只有在线这一种方式" ⇒ 降级成布尔开关，老值由 `PluginConfig.migrate` 搬过来（`online`→`true`，其余→`false`，删旧键）。
+- **配置按宿主模式拆成两套键、相互独立**（2026-10-07 用户定）：从哪种模式（宿主 profile）进来就只认哪套。
+  设 `mode` = `ctx.get('profileContext')?.name === 'desktop' ? 'desktop' : 'web'`（取不到/老宿主按 web 兜底）。
+  - **web 模式**（`expressWebEnabled` + `expressWebBase`）：回 `base + /api/whale-craft/express/<uuid>/<rel>` 完整 URL；
+    缺 base 回 `EXPRESS_NEED_BASE_TEXT`（报错不抛异常）。文件走**宿主 webServer** 的那条路由。
+  - **desktop 模式**（`expressDesktopEnabled` + `expressDesktopPort`，默认 16049）：插件**自起一个只监听
+    localhost 的 http 服务**（`ExpressShareServer`，`src/express-server.mjs`；宿主 `webServer` 那条路由在 desktop 下不服务），
+    地址 `http://localhost:<port>/<uuid>/<rel>`（**无** `/api/whale-craft/express` 前缀）；端口起不来（占用/失败）
+    回 `EXPRESS_PORT_BUSY_TEXT(port)`。仅"启用且服务在监听"才真正开放。
+- 关（默认）→ `mc_kit_express` 恒回 `EXPRESS_OFF_TEXT`（让 AI 把绝对路径给用户），服务不开（访问即 404）。
+- `syncExpressServer`：desktop 期望态 = 启用 ? 端口 : 关闭；PATCH 或启动时对齐（换端口/开关即重启），串行化避免并发 bind；卸载 `stop()`。
+- 🔴 历史：2026-10-04 前是 `expressMode: 'off' | 'online'`（还一度有 `local`）→ 降级成开关 `expressEnabled`；
+  2026-10-07 再拆成上面四键。`PluginConfig.migrate` 逐档搬（`online`→`expressWebEnabled`，`expressEnabled`/`expressBase`→ web 那套，删旧键）。
 - 前端渲染只认**绝对 http(s)** 图片地址 ⇒ 只有开启分享的 URL 能内联成图。
 
 ## 11. 停止、归档与保护

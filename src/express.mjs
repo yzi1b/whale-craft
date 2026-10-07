@@ -36,6 +36,45 @@ export const EXPRESS_URL_PREFIX = '/api/whale-craft/express'
 /** 工作区 uuid 的形态（正式是标准 UUID；放宽一点，规则同 preset id 那种保守写法） */
 export const WORKSPACE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 
+/* ── 桌面模式的"独立托管端口"（用户 2026-10-07 定）────────────────────────────
+ * 桌面版没有稳定可配的 base ⇒ 插件**自起一个只监听 localhost 的 http 服务**，
+ * 直接托管 `.express/` 文件，地址固定为 `http://localhost:<port>/<工作区uuid>/<剩余路径>`
+ * （**不带** `/api/whale-craft/express` 前缀 —— 已是我们自己的专用端口）。
+ * ────────────────────────────────────────────────────────────────────────── */
+export const DEFAULT_EXPRESS_PORT = 16049
+/** 只绑回环：绝不开 LAN（用户："我们的 express 要有只监听 localhost 的策略"）。 */
+export const EXPRESS_HOST = '127.0.0.1'
+
+/** 合法端口（整数 1–65535） */
+export function isExpressPort (v) {
+  const n = Number(v)
+  return Number.isInteger(n) && n >= 1 && n <= 65535
+}
+
+/** 归一化成端口整数；非法/超范围 → null（调用方据此拒绝或回退默认） */
+export function normalizeExpressPort (v) {
+  if (!isExpressPort(v)) return null
+  return Number(v)
+}
+
+/**
+ * 解析桌面托管的路径 `/<工作区 uuid>/<剩余路径>`（**无** `/api/whale-craft/express` 前缀）。
+ * 与 {@link parseExpressPath} 同规矩：只认首段合法 uuid、其后 ≥1 段非空。
+ * @param {string} pathname `url.pathname`（**已解码**）
+ * @returns {{workspaceId:string, segments:string[]}|null}
+ */
+export function parseExpressLocalPath (pathname) {
+  const raw = String(pathname ?? '')
+  if (!raw.startsWith('/')) return null
+  const rest = raw.slice(1)
+  if (!rest) return null
+  const parts = rest.split('/')
+  const workspaceId = parts.shift() ?? ''
+  if (!WORKSPACE_ID_RE.test(workspaceId)) return null
+  if (!parts.length) return null
+  return { workspaceId, segments: parts }
+}
+
 /** 发布区根目录（给 fs 用） */
 export const expressRootOf = (memoryRoot) => join(memoryRoot, EXPRESS_DIR)
 
@@ -115,14 +154,17 @@ export function mimeOf (file) {
  */
 export const SANDBOX_TYPES = /^(?:image\/svg\+xml|text\/html|text\/xml|application\/xml|text\/javascript|application\/javascript)/
 
-/* ── 「文件分享」（用户 2026-09-17 定；2026-10-04 从"模式"改成**开关**）──────────
- * `expressEnabled` 决定 `mc_kit_express` **回什么**，以及 `/api/mc/whale-craft/…` 这条路由**开不开**：
- *   · 关：只回一句话（{@link EXPRESS_OFF_TEXT}），让 AI 把**绝对路径**告诉用户，用户自己打开；服务不开；
- *   · 开：回 `base + 相对路径` 的**完整 URL**；这条路由**只在**开启时开。
- * 默认 **关**。
- * 🔴 原先是 `off | online` 两模式（还一度有 `local`）。2026-10-04 用户："以后只有在线这一种方式"
- *    ⇒ 模式降级成一个开关；老值 `'online'` → `true`、其余 → `false`（迁移见 src/config.mjs `PluginConfig.migrate`）。
- * 🔴 两种状态都**只认发布区**里的文件 —— "目录即白名单"不变。
+/* ── 「文件分享」（用户 2026-09-17 定；2026-10-04 改开关；2026-10-07 按宿主模式拆键）──────────
+ * 开关决定 `mc_kit_express` **回什么**、服务**开不开**；**按宿主模式分两套键、相互独立**：
+ *   · web（`expressWebEnabled` + `expressWebBase`）：回 `base + /api/whale-craft/express/<uuid>/<rel>`，
+ *     文件走宿主 webServer 的 `/api/whale-craft/…` 路由（本模块的 `EXPRESS_URL_PREFIX`）；
+ *   · desktop（`expressDesktopEnabled` + `expressDesktopPort`）：回 `http://localhost:<port>/<uuid>/<rel>`，
+ *     插件**自起一个只监听 localhost 的独立端口**直接托管（见 src/express-server.mjs）。
+ * 关（默认）：只回 {@link EXPRESS_OFF_TEXT}，让 AI 把**绝对路径**告诉用户；地址/端口没配好 → {@link EXPRESS_NEED_BASE_TEXT}
+ * 或 {@link EXPRESS_PORT_BUSY_TEXT}（**都不抛错**）。
+ * 🔴 历史：更早是 `off | online` 两模式（曾含 `local`）→ 2026-10-04 降成单开关 → 2026-10-07 拆成上面四键
+ *    （老键迁移见 src/config.mjs `PluginConfig.migrate`）。
+ * 🔴 两种模式都**只认发布区**里的文件 —— "目录即白名单"不变。
  * ────────────────────────────────────────────────────────────────────────── */
 
 /** 关闭时**恒回**的这句话（用户定稿，逐字照抄） */
@@ -131,6 +173,14 @@ export const EXPRESS_OFF_TEXT = '文件分享已关闭，请告知用户文件�
 /** 开启但没配 base 时回的话（**不抛错**：让 AI 直接转达用户去设置） */
 export const EXPRESS_NEED_BASE_TEXT
   = '文件分享还没有设置 base：请让用户在「MC设置 → 文件分享」里填写 base。'
+
+/**
+ * 桌面模式：已启用、但托管端口没起来（被占用 / 启动失败）时回的话（**不抛错**）。
+ * @param {number|string} port 用户配置的端口
+ */
+export function EXPRESS_PORT_BUSY_TEXT (port) {
+  return `文件分享已开启，但端口 ${String(port ?? '')} 无法监听（被占用或启动失败）：请让用户在「MC设置 → 文件分享」里换一个端口。`
+}
 
 /**
  * 归一化 base。空 = 未设置（返回 `''`）；非法（不是 http/https 完整地址）返回 `null`。
@@ -160,7 +210,7 @@ export function onlineUrlOf (base, relUrl) {
  * @param {string} absPath 文件绝对路径
  * @param {string} memoryRoot 记忆根（`<工作区>/.whale-craft`，或 memoryDir 指定的目录）
  * @param {string} workspaceId 工作区 uuid（**必须来自 `workspaceRegistry`**；非法/缺失 → null）
- * @returns {{rel:string, url:string, markdown:string}|null}
+ * @returns {{rel:string, url:string, localPath:string, markdown:string}|null}
  */
 export function expressRefFor (absPath, memoryRoot, workspaceId) {
   const id = String(workspaceId ?? '').trim()
@@ -173,6 +223,8 @@ export function expressRefFor (absPath, memoryRoot, workspaceId) {
   if (!rel) return null
   const parts = rel.split(/[/\\]+/).filter(Boolean)
   if (!parts.length) return null
-  const url = `${EXPRESS_URL_PREFIX}/${encodeURIComponent(id)}/${parts.map(encodeURIComponent).join('/')}`
-  return { rel, url, markdown: `![](${url})` }
+  // `localPath` = `/工作区uuid/剩余路径`：web 拼在 base 后（见 url），desktop 拼在 `http://localhost:<port>` 后
+  const localPath = `/${encodeURIComponent(id)}/${parts.map(encodeURIComponent).join('/')}`
+  const url = `${EXPRESS_URL_PREFIX}${localPath}`
+  return { rel, url, localPath, markdown: `![](${url})` }
 }

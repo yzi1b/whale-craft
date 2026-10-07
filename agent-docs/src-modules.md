@@ -116,12 +116,14 @@
 | `allowAllCommands` | `false` | 指令白名单总开关 |
 | （提示词三开关 `injectWhaleCraftAgentsMd` / `injectWorkspaceAgentsMd` / `rulesFollowVersion` **已下放为按工作区**，存 `<工作区>/.whale-craft/config.json`，见 [§14 wsconfig](#14-srcwsconfigmjs--按工作区的配置)） | | |
 | `ensureMcPreset` | `true` | 旧宿主遗留：目录式自举「MC模式」（0.2.0-rc.2+ 由 `presets/*.patch.yml` 声明提供，此键 no-op） |
-| `expressEnabled` | `false` | 文件分享开关（2026-10-04 起是布尔；老 `expressMode` 由 `migrate` 搬） |
-| `expressBase` | `''` | 文件分享的访问 base |
+| `expressWebEnabled` | `false` | **web 模式**文件分享开关 |
+| `expressWebBase` | `''` | **web 模式**的访问 base（如 https://example.com） |
+| `expressDesktopEnabled` | `false` | **desktop 模式**文件分享开关 |
+| `expressDesktopPort` | `16049` | **desktop 模式**的独立托管端口（只监听 localhost） |
 | `exposeDebugTools` | `false` | 「MC设置 → 调试」页的「开放助手调试工具」开关（工作区无关）：是否向助手暴露调试用途的工具 |
 
-- `PluginConfig`：`load`（坏配置不崩、记 `lastError` 按默认跑；**顺带跑 `migrate()`**）、`set` 只认 `TOP_KEYS`（= DEFAULT_CONFIG 键）且过 `validate`、`values()` 深合并（数组整体覆盖）；语义 getter（`mcModePresets/mcPlusPresets/memoryDir/expressEnabled/expressBase/commandAllowed/isMcModePreset/isMcPlusPreset`…）每次现读 ⇒ **改完热生效**。
-- `migrate()`：目前一档 —— 老 `expressMode: 'off'|'online'`（曾含 `'local'`）→ `expressEnabled`（`online`→`true`，其余→`false`），**删旧键**、只在真改动时落盘。
+- `PluginConfig`：`load`（坏配置不崩、记 `lastError` 按默认跑；**顺带跑 `migrate()`**）、`set` 只认 `TOP_KEYS`（= DEFAULT_CONFIG 键）且过 `validate`、`values()` 深合并（数组整体覆盖）；语义 getter（`mcModePresets/mcPlusPresets/memoryDir/expressWebEnabled/expressWebBase/expressDesktopEnabled/expressDesktopPort/commandAllowed/isMcModePreset/isMcPlusPreset`…）每次现读 ⇒ **改完热生效**。
+- `migrate()`：文件分享键逐档搬（都**删旧键**、只在真改动时落盘）——① 老 `expressMode: 'off'|'online'`（曾含 `'local'`）→ `expressWebEnabled`（`online`→`true`，其余→`false`）；② 2026-10-07 拆键：`expressEnabled`→`expressWebEnabled`、`expressBase`→`expressWebBase`。
 - `legacyPromptSwitches()`：从**文件原值**里取旧版全局存过的三个提示词开关（只取显式设过且类型合法的）—— 只作工作区建档时的一次性 seed 来源（消费方 index.js → `wsconfig.migrate`）。
 - `resolveStateDir`：`WHALE_CRAFT_STATE_DIR` → `WHALE_CRAFT_DIR`+whaleDir → `$DSH_HOME/whale_craft` → `~/.dsh/whale_craft`。
 
@@ -148,7 +150,14 @@
 - `parseExpressPath`：要求**已解码**的 pathname（`%2e%2e` 先还原成 `..` 才可判）；首段 workspaceId 过正则，其后 ≥1 段。
 - `safeExpressTarget(root, segments)` 逐段拒：空段/`.`/`..`/含 `/` 或 `\`/盘符/`~` 开头/控制字符/段 >255；拼完复查仍在 root 内（纵深防御，真正兜底是路由层 `realpath`）。
 - `mimeOf`（全扩展名放行，未知 octet-stream）、`SANDBOX_TYPES`（svg/html/xml/js → CSP sandbox 头）。
-- `resolveExpressMode`（仅 `online` 算开）、`normalizeExpressBase`（必须 http(s)、去尾斜杠、非法 null）、`onlineUrlOf`、`expressRefFor`（abs 必须落在 `.express/` 下，`.out` 文件返回 null；产出 `{rel, url, markdown}`）、文案常量 `EXPRESS_OFF_TEXT` / `EXPRESS_NEED_BASE_TEXT`（逐字：自检断言原文）。
+- `normalizeExpressBase`（必须 http(s)、去尾斜杠、非法 null）、`onlineUrlOf`、`expressRefFor`（abs 必须落在 `.express/` 下，`.out` 文件返回 null；产出 `{rel, url, localPath, markdown}`——`url`=含 `EXPRESS_URL_PREFIX` 的 web 形态，`localPath`=`/<uuid>/<rel>` 供 desktop 拼 `http://localhost:<port>`）、文案常量 `EXPRESS_OFF_TEXT` / `EXPRESS_NEED_BASE_TEXT` / `EXPRESS_PORT_BUSY_TEXT(port)`（逐字：自检断言原文）。
+- **桌面独立端口**：`DEFAULT_EXPRESS_PORT=16049`、`EXPRESS_HOST='127.0.0.1'`、`isExpressPort` / `normalizeExpressPort`、`parseExpressLocalPath(pathname)`（解析 `/<uuid>/<seg…>`，**无** `/api/…` 前缀）。
+
+## 10b. `src/express-server.mjs` —— 桌面模式的发布区独立端口
+
+- `ExpressShareServer`：`start(port)`（先 `stop()` 再绑 `127.0.0.1`，**尽力**再补 `::1`；**只绑回环**）、`stop()`、`status`=`{listening, port, wantPort, error}`。出错（EADDRINUSE/EACCES…）**不抛**，落 `error`。
+- `hostIsLoopback(host)`：最小 Host 回环栅栏（防 DNS-rebinding，外部域名解析到 127.0.0.1 也拒）→ 403。
+- `portAvailable(port)`：一次性 bind+close 探测（`/api/mc/express/port` 用；当前已监听端口由调用方特判为可用）。
 
 ## 11. `src/image.mjs` + `src/png.mjs` —— 图像
 

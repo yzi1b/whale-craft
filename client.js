@@ -401,6 +401,8 @@ select[data-wc-in]{appearance:none;padding-right:22px;
 [data-wc-textarea][data-wc-dimmed]{opacity:.45;cursor:not-allowed;}
 [data-wc-hint]{margin:8px 0 0;font-size:11px;line-height:17px;color:var(--dsw-alias-label-tertiary);}
 [data-wc-hint][data-wc-dirty]{color:var(--dsw-alias-state-warn-primary,rgba(255,180,0,1));}
+/* 出错提示（如分享端口被占用）—— 红字 */
+[data-wc-hint][data-wc-error]{color:var(--dsw-alias-state-error-primary,#e5484d);}
 [data-wc-code]{padding:0 4px;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   background:var(--dsw-alias-bg-overlay,rgba(128,128,128,.14));}
 [data-wc-warnnote]{margin:0 0 10px;padding:8px 10px;border-radius:8px;font-size:11px;line-height:16px;
@@ -1661,67 +1663,136 @@ select[data-wc-in]{appearance:none;padding-right:22px;
 
     /* ------------------------------------------------------------ 页 4：文件分享 */
 
+    /** 桌面模式托管端口的默认值（须与 src/express.mjs `DEFAULT_EXPRESS_PORT` 一致） */
+    const EXPRESS_DEFAULT_PORT = 16049
+
     /**
-     * 「文件分享」页（用户 2026-09-17 定）：两种模式 + 在线 base + 清除分享数据。
-     *   关闭（默认）/ 在线 —— 决定 `mc_kit_express` 回什么、以及那条服务开不开：
-     *     · 关闭：AI 只会把**绝对路径**告诉用户（服务不开）；
-     *     · 在线：回 `base + 路径` 的**完整 URL**（只有这个模式开服务，图能直接在对话里显示）。
+     * 「文件分享」页（用户 2026-09-17 定；2026-10-07 按宿主模式拆键）。
+     * 视觉上仍是**一个**开关，但它按当前模式绑定到各自的配置键：
+     *   · web 模式：开关 + base（回 `base + /api/whale-craft/express/…` 完整 URL）；
+     *   · 桌面模式：开关 + **托管端口**（插件自起 localhost 服务，回 `http://localhost:<port>/<uuid>/<rel>`）。
+     * 关闭（默认）：AI 只会把**绝对路径**告诉用户。
      */
     function SharePane(props) {
       const {
-        on, base, share, busyKey, hasWorkspace,
-        onToggle, onSaveBase, onUseCurrent, onClear,
+        on, base, mode, port, share, portStatus, busyKey, hasWorkspace,
+        onToggle, onSaveBase, onUseCurrent, onClear, onSavePort, onResetPort, onCheckPort,
       } = props
       const busy = busyKey !== null
+      const isDesktop = mode === 'desktop'
       const [baseText, setBaseText] = React.useState(base ?? '')
+      const [portText, setPortText] = React.useState(port != null ? String(port) : '')
+      const [portLive, setPortLive] = React.useState(null)   // { available, current, reason } | null
       const [confirmClear, setConfirmClear] = React.useState(false)
       React.useEffect(() => { setBaseText(base ?? '') }, [base])
+      React.useEffect(() => { setPortText(port != null ? String(port) : '') }, [port])
+
+      // 端口实时自检（防抖 300ms）：只在桌面模式 + 已开启时跑
+      React.useEffect(() => {
+        if (!isDesktop || !on) { setPortLive(null); return undefined }
+        const text = String(portText ?? '').trim()
+        const n = /^\d+$/.test(text) ? Number(text) : NaN
+        if (!Number.isInteger(n) || n < 1 || n > 65535) {
+          setPortLive(text ? { available: false, current: false, reason: 'invalid' } : null)
+          return undefined
+        }
+        let alive = true
+        const t = setTimeout(() => {
+          Promise.resolve(onCheckPort ? onCheckPort(n) : null)
+            .then((r) => { if (alive) setPortLive(r ?? null) })
+            .catch(() => { if (alive) setPortLive(null) })
+        }, 300)
+        return () => { alive = false; clearTimeout(t) }
+      }, [isDesktop, on, portText, onCheckPort])
 
       const baseBusy = busyKey === 'share:base'
+      const portBusy = busyKey === 'share:port'
       const clearBusy = busyKey === 'share:clear'
       const dirty = (baseText ?? '') !== (base ?? '')
+      const portDirty = String(portText ?? '') !== (port != null ? String(port) : '')
+      const portIsDefault = /^\d+$/.test(String(portText).trim()) && Number(portText) === EXPRESS_DEFAULT_PORT
+
+      // 端口错误（红字）：不合法 / 被占用
+      const portError = (on && portLive && !portLive.available)
+        ? (portLive.reason === 'invalid'
+          ? '端口不合法：应为 1–65535 的整数。'
+          : `端口 ${String(portText).trim()} 已被占用，请换一个。`)
+        : ''
+      // 服务端反馈：开关开着，但独立端口没起来（被占用 / 启动失败）
+      const serverDown = isDesktop && on && portStatus && portStatus.listening === false
+      const serverDownText = serverDown ? `端口服务未运行（${portStatus.portError || '未知原因'}）。` : ''
+      const portHint = !on
+        ? '开启文件分享后才能设置端口。'
+        : (portError || serverDownText || `分享地址：http://localhost:${String(portText).trim() || EXPRESS_DEFAULT_PORT}`)
 
       return React.createElement(
         'div',
         { 'data-wc-pane-page': 'share' },
         React.createElement('div', { 'data-wc-sec': '' },
           React.createElement('div', { 'data-wc-h': '' }, '文件分享'),
-          // 只有"开 / 关"（2026-10-04 用户定：不再有"模式"，在线是**唯一**方式）
+          // 只有"开 / 关"（2026-10-04 用户定：不再有"模式"）——但开关按当前宿主模式绑定各自的配置键
           React.createElement(Switch, {
             label: '启用文件分享',
             desc: on
-              ? '回完整 URL：图片可以直接在对话里显示'
+              ? (isDesktop
+                ? '回完整 URL：从本机独立端口直接托管分享文件'
+                : '回完整 URL：图片可以直接在对话里显示')
               : '不分享：AI 只会告诉你文件的绝对路径，让你自己打开',
             disabled: busy,
             on: on === true,
             onToggle: (next) => onToggle(next),
           }),
         ),
-        // base 只在「开启」时可用：关闭时**禁用**（但保留可见，别让人以为设置消失了）
-        React.createElement('div', { 'data-wc-sec': '' },
-          React.createElement('div', { 'data-wc-h': '' }, 'base 地址'),
-          React.createElement('div', { 'data-wc-field': '' },
-            React.createElement('input', {
-              'data-wc-in': '', value: baseText, spellCheck: false, disabled: busy || !on,
-              placeholder: 'https://example.com（可以带路径前缀）',
-              onChange: (e) => setBaseText(e.target.value),
-            }),
+        // 地址设置只在「开启」时可用：关闭时**禁用**（但保留可见，别让人以为设置消失了）。
+        // 桌面模式 = 托管端口；web 模式 = base。
+        isDesktop
+          ? React.createElement('div', { 'data-wc-sec': '' },
+            React.createElement('div', { 'data-wc-h': '' }, '托管端口'),
+            React.createElement('div', { 'data-wc-field': '' },
+              React.createElement('input', {
+                'data-wc-in': '', value: portText, spellCheck: false, disabled: busy || !on,
+                inputMode: 'numeric', placeholder: String(EXPRESS_DEFAULT_PORT),
+                onChange: (e) => setPortText(e.target.value.replace(/[^\d]/g, '')),
+              }),
+            ),
+            React.createElement('p',
+              { ...(on && (portError || serverDownText) ? { 'data-wc-hint': '', 'data-wc-error': '' } : { 'data-wc-hint': '' }) },
+              portHint),
+            React.createElement('div', { 'data-wc-acts': '' },
+              React.createElement('button', {
+                type: 'button', 'data-wc-btn': '', 'data-wc-tiny': '', 'data-wc-primary': '',
+                disabled: busy || !on || !portDirty, onClick: () => onSavePort(String(portText).trim()),
+              }, portBusy ? '保存中…' : '保存端口'),
+              React.createElement('button', {
+                type: 'button', 'data-wc-btn': '', 'data-wc-tiny': '',
+                disabled: busy || !on || portIsDefault, title: `恢复默认端口 ${EXPRESS_DEFAULT_PORT}`,
+                onClick: onResetPort,
+              }, '恢复默认')),
+          )
+          : React.createElement('div', { 'data-wc-sec': '' },
+            React.createElement('div', { 'data-wc-h': '' }, 'base 地址'),
+            React.createElement('div', { 'data-wc-field': '' },
+              React.createElement('input', {
+                'data-wc-in': '', value: baseText, spellCheck: false, disabled: busy || !on,
+                placeholder: 'https://example.com（可以带路径前缀）',
+                onChange: (e) => setBaseText(e.target.value),
+              }),
+            ),
+            React.createElement('p', { ...(on && !base ? { 'data-wc-hint': '', 'data-wc-dirty': '' } : { 'data-wc-hint': '' }) },
+              !on
+                ? '开启文件分享后才能设置 base。'
+                : (!base ? '还没填 base：AI 暂时只能让你去设置。' : '填你访问这台 DSH 用的地址。')),
+            React.createElement('div', { 'data-wc-acts': '' },
+              React.createElement('button', {
+                type: 'button', 'data-wc-btn': '', 'data-wc-tiny': '', 'data-wc-primary': '',
+                disabled: busy || !on || !dirty, onClick: () => onSaveBase(baseText.trim()),
+              }, baseBusy ? '保存中…' : '保存 base'),
+              React.createElement('button', {
+                type: 'button', 'data-wc-btn': '', 'data-wc-tiny': '',
+                disabled: busy || !on, title: '用你现在访问这个页面的地址填好并保存',
+                onClick: onUseCurrent,
+              }, '获取当前')),
           ),
-          React.createElement('p', { ...(on && !base ? { 'data-wc-hint': '', 'data-wc-dirty': '' } : { 'data-wc-hint': '' }) },
-            !on
-              ? '开启文件分享后才能设置 base。'
-              : (!base ? '还没填 base：AI 暂时只能让你去设置。' : '填你访问这台 DSH 用的地址。')),
-          React.createElement('div', { 'data-wc-acts': '' },
-            React.createElement('button', {
-              type: 'button', 'data-wc-btn': '', 'data-wc-tiny': '', 'data-wc-primary': '',
-              disabled: busy || !on || !dirty, onClick: () => onSaveBase(baseText.trim()),
-            }, baseBusy ? '保存中…' : '保存 base'),
-            React.createElement('button', {
-              type: 'button', 'data-wc-btn': '', 'data-wc-tiny': '',
-              disabled: busy || !on, title: '用你现在访问这个页面的地址填好并保存',
-              onClick: onUseCurrent,
-            }, '获取当前')),
-        ),
         hasWorkspace ? React.createElement('div', { 'data-wc-sec': '' },
           React.createElement('div', { 'data-wc-h': '' }, '分享数据', h(WsMark)),
           React.createElement('p', { 'data-wc-hint': '' },
@@ -2059,9 +2130,12 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       const [pluginVersion, setPluginVersion] = React.useState('')
       // 版本内置提示词（随版本发布、只读）——**无工作区时也要显示**，来自 agents-md 顶层字段
       const [versionPrompt, setVersionPrompt] = React.useState(null)
-      // 「文件分享」：模式（off 关闭 / online 在线）+ base + 发布区现状
+      // 「文件分享」：宿主模式（web/desktop）+ 当前模式的开关 + base(web) / port(desktop) + 发布区现状
+      const [shareMode, setShareMode] = React.useState('web')
       const [shareOn, setShareOn] = React.useState(false)
       const [shareBase, setShareBase] = React.useState('')
+      const [sharePort, setSharePort] = React.useState(null)
+      const [sharePortStatus, setSharePortStatus] = React.useState(null)   // /api/mc/express 回的 { listening, port, portError }
       const [exposeDebugTools, setExposeDebugTools] = React.useState(false)
       const [shareInfo, setShareInfo] = React.useState(null)
       const [wsPath, setWsPath] = React.useState('')
@@ -2116,8 +2190,17 @@ select[data-wc-in]{appearance:none;padding-right:22px;
             setAllowAll(c.allowAllCommands === true)
             setInjectWc(c.injectWhaleCraftAgentsMd !== false)
             setInjectWs(c.injectWorkspaceAgentsMd === true)
-            setShareOn(c.expressEnabled === true)
-            setShareBase(String(c.expressBase ?? ''))
+            // 文件分享按宿主模式各认一套键：web = enabled+base；desktop = enabled+port
+            const mode = c.mode === 'desktop' ? 'desktop' : 'web'
+            setShareMode(mode)
+            setShareOn(mode === 'desktop' ? c.expressDesktopEnabled === true : c.expressWebEnabled === true)
+            setShareBase(String(c.expressWebBase ?? ''))
+            setSharePort(c.expressDesktopPort ?? null)
+            setSharePortStatus({
+              listening: c.expressDesktopListening === true,
+              port: c.expressDesktopPort ?? null,
+              portError: c.expressDesktopError ?? null,
+            })
             setExposeDebugTools(c.exposeDebugTools === true)
             // 发布区是**按工作区**的：没有工作区时那个接口直接 400，别去碰它。
             if (!hasWs) { setShareInfo(null); return null }
@@ -2263,14 +2346,14 @@ select[data-wc-in]{appearance:none;padding-right:22px;
           .then((ok) => { if (!ok) setFollowVersion(prev); return ok })
       }, [run, followVersion])
 
-      /* ── 页 4：文件分享 ──
-       * 开关**一拨就存**（同"允许所有指令"那个开关：错了回滚）；base 走「保存」按钮；
-       * 「获取当前」= 用**你现在访问这个页面的地址**填好并保存；
-       * 🔴 **开启**而 base 还没设时，自动做一次"获取当前"（不然开启当场没用）；
-       * 但**不去调就不写**：不开、不点按钮，base 永远保持原样。
+      /* ── 页 4：文件分享（2026-10-07 按宿主模式拆键）──
+       * 开关**一拨就存**（同"允许所有指令"：错了回滚）——**视觉上一个开关**，但按 `shareMode` 发对应的
+       * `expressWebEnabled` / `expressDesktopEnabled`（从哪种模式进来就认哪种）。
+       * web：base 走「保存」按钮 +「获取当前」；desktop：端口走「保存端口」+「恢复默认」+ 防抖占用自检。
+       * 🔴 web 模式**开启**而 base 还没设时，自动做一次"获取当前"（不然开启当场没用）；desktop 不自动填。
        * 清除分享数据**必须确认**（不可撤销）。
-       * ⚠️ 输入框的文本状态在 SharePane 内部（`baseText`），这里**不能**去 setBaseText：
-       *    保存完 `load()` 会刷新 `shareBase`，pane 的 useEffect（+ key 变化）会自己同步回输入框。 */
+       * ⚠️ 输入框文本状态在 SharePane 内部（`baseText`/`portText`），这里**不能**去 set：
+       *    保存完 `load()` 会刷新，pane 的 useEffect（+ key 变化）会自己同步回输入框。 */
       /** 向服务端要「当前地址」：把浏览器**自己正在用的** origin 一起报上去（最精准）。 */
       const fetchCurrentBase = React.useCallback(() => {
         const here = (typeof location !== 'undefined' && location.origin) ? location.origin : ''
@@ -2282,28 +2365,44 @@ select[data-wc-in]{appearance:none;padding-right:22px;
         const prev = shareOn
         if (next === prev) return Promise.resolve(true)
         setShareOn(next)                                             // 乐观更新
-        // 开启且还没 base → 顺手把当前地址一起保存（一次动作，别让用户自己去找地址）
-        const autoBase = next === true && !shareBase
+        const onKey = shareMode === 'desktop' ? 'expressDesktopEnabled' : 'expressWebEnabled'
+        // web 且开启且还没 base → 顺手把当前地址一起保存（desktop 不自动填）
+        const autoBase = shareMode !== 'desktop' && next === true && !shareBase
         return run('share:on', () => (autoBase
           ? fetchCurrentBase().then((cur) => apiPatch(withSid('/api/mc/config'),
-            cur ? { expressEnabled: true, expressBase: cur } : { expressEnabled: true }))
-          : apiPatch(withSid('/api/mc/config'), { expressEnabled: next })),
+            cur ? { expressWebEnabled: true, expressWebBase: cur } : { expressWebEnabled: true }))
+          : apiPatch(withSid('/api/mc/config'), { [onKey]: next })),
         next
           ? (autoBase ? '文件分享已开启，base 用当前地址填好了' : '文件分享：已开启')
           : '文件分享：已关闭')
           .then((ok) => { if (!ok) setShareOn(prev); return ok })    // 失败回滚
-      }, [run, shareOn, shareBase, fetchCurrentBase])
+      }, [run, shareOn, shareBase, shareMode, fetchCurrentBase])
 
       const saveShareBase = React.useCallback((text) =>
-        run('share:base', () => apiPatch(withSid('/api/mc/config'), { expressBase: String(text ?? '') }),
+        run('share:base', () => apiPatch(withSid('/api/mc/config'), { expressWebBase: String(text ?? '') }),
           'base 已保存'), [run])
 
       /** 「获取当前」：填进输入框并立即保存（拿不到就明确报错，别存一个空值） */
       const useCurrentBase = React.useCallback(() =>
         run('share:base', () => fetchCurrentBase().then((cur) => {
           if (!cur) throw new Error('拿不到当前地址：请手动填写（例如 http://127.0.0.1:14640）')
-          return apiPatch(withSid('/api/mc/config'), { expressBase: cur })
+          return apiPatch(withSid('/api/mc/config'), { expressWebBase: cur })
         }), '已用当前地址填好'), [run, fetchCurrentBase])
+
+      /* desktop：保存端口 / 恢复默认端口 / 端口占用自检（SharePane 防抖调用）。
+       * ⚠️ 服务端会在 PATCH 后立即尝试起服务，`load()` 再拉一次拿到 listening/portError。 */
+      const saveSharePort = React.useCallback((text) =>
+        run('share:port', () => apiPatch(withSid('/api/mc/config'), { expressDesktopPort: Number(text) }),
+          '端口已保存'), [run])
+
+      const resetSharePort = React.useCallback(() =>
+        run('share:port', () => apiPatch(withSid('/api/mc/config'), { expressDesktopPort: EXPRESS_DEFAULT_PORT }),
+          `已恢复默认端口 ${EXPRESS_DEFAULT_PORT}`), [run])
+
+      const checkSharePort = React.useCallback((port) =>
+        apiGet(`/api/mc/express/port?port=${encodeURIComponent(String(port))}`)
+          .then((r) => ({ available: r?.available === true, current: r?.current === true, reason: String(r?.reason ?? '') }))
+          .catch(() => null), [])
 
       const clearShare = React.useCallback(() =>
         run('share:clear', () => apiDelete(withSid('/api/mc/express')), '分享数据已清除'), [run])
@@ -2339,9 +2438,11 @@ select[data-wc-in]{appearance:none;padding-right:22px;
           })
           : (tab === 'share'
             ? React.createElement(SharePane, {
-              key: 'share:' + (shareOn ? 'on' : 'off') + ':' + shareBase,
-              on: shareOn, base: shareBase, share: shareInfo, busyKey, hasWorkspace,
+              key: 'share:' + shareMode + ':' + (shareOn ? 'on' : 'off') + ':' + shareBase + ':' + sharePort,
+              on: shareOn, base: shareBase, mode: shareMode, port: sharePort, share: shareInfo,
+              portStatus: sharePortStatus, busyKey, hasWorkspace,
               onToggle: toggleShare, onSaveBase: saveShareBase, onUseCurrent: useCurrentBase, onClear: clearShare,
+              onSavePort: saveSharePort, onResetPort: resetSharePort, onCheckPort: checkSharePort,
             })
             : (tab === 'debug'
               ? React.createElement(DebugPane, {

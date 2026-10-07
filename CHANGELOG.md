@@ -5,6 +5,14 @@
 > 这里只写**用户**看得到的版本变化（现象 / 用户能懂的根因 / 用户影响）。
 > 完整技术档案（根因代码、上游源码行号、自检断言、踩坑记录）在 [`agent-docs/history.md`](agent-docs/history.md)，不进本文件。
 
+## [Unreleased]
+
+- 【变更】文件分享配置**按宿主模式拆成两套、相互独立**（从哪种模式进来就只认哪套，设置页也只显示那套）：
+  - **web 模式**：沿用 `base`（原 `expressEnabled` / `expressBase` 自动迁移为 `expressWebEnabled` / `expressWebBase`）；
+  - **桌面模式**：不再需要 `base`，改用**独立端口**（`expressDesktopEnabled` / `expressDesktopPort`，默认 `16049`）——
+    插件自起一个**只监听本机**的端口直接托管分享文件，地址形如 `http://localhost:16049/<工作区>/<文件名>`。
+- 【新增】桌面模式下设置页可改端口、可恢复默认；端口被占用时输入框旁**红字提示**。只有"已启用且端口服务正常监听"才真正开放分享，否则 AI 调用分享工具会得到相应提示。
+
 ## [0.2.0-beta.2] - 2026-10-06
 
 > 预览版，面向 DSH **0.2.0-rc.2 及以上**。相较于 0.1 的变更，详见 [0.2.0-beta.1 更新日志](https://github.com/yzi1b/whale-craft/releases/tag/v0.2.0-beta.1)。**预览版可能存在未知问题，如遇到请向我们反馈。**
