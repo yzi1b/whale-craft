@@ -78,6 +78,7 @@
 - **`safePath(rel)` 是路径安全关口**：拒空/绝对路径/盘符/`.`/`..`/深层/超长/非法段，`resolve` 后必须仍在 root 内。**不再做文件名封锁** —— 根级的受保护文件（RULES.md/AGENTS.md/config.json，见 src/protected.mjs）在这里**放行（读允许）**，结果带 `protected:true`，由写类方法显式拒绝（用户 2026-10-03：可读不可写）。
 - 方法：`ensureRoot/ensureReadme`（骨架只建一次）· `pathFor({topic,server})`（server 缺省 `_global/`；无扩展名补 `.md`）· `list()`（根级 README 与受保护文件不算记忆；解析标题/条目数/摘要）· `renderTree()`/`indexText()`（5s 缓存；注入用 = README 正文 + 目录树）· `read()`（文本→content；**图片→附件**（工具层 `attachments.saveImage`）；二进制→元信息）· `put()`（**把工作区任意文件复制进记忆**，16MB，name 清洗）· `append({text,key})`（单条 ≤4000 字；同 key 正则替换旧 bullet）· `write()`（整文件覆盖，拒图片）· `delete()` · `search()`（跨文本文件逐行，limit ≤100）· `overview()`。
 - `append/write/delete/put` 对 `protected` 目标一律抛"只读"（`protectedWriteError`）。写后清 `_textCache`（投递的索引恒新）。⚠️ `list()` 只跳过**根级**的 README 与受保护文件，`.out/`/`.express/` 会被遍历进去（未专门跳过）。
+- 🔴 **工具 `mc_kit_memory` 已于 2026-10-07 移除**：agent 改用宿主受限文件工具（read/write/edit/glob/grep/read_image）直接读写 `.whale-craft/`。本模块**保留为库**——`put/append/write/delete/search/overview/read` 不再有生产消费方，仍由自检单元测试直接覆盖；`read()` 的图片附件化接线随工具移除（看图改由宿主 `read_image` 承担）。
 
 ## 5. `src/agentsmd.mjs` —— RULES.md 行事准则
 
@@ -91,7 +92,7 @@
 ## 6. `src/version-prompt.mjs` —— 版本硬提示词
 
 - 导出 `versionPromptText/versionPromptHash/versionPromptTitle/versionPromptSource`。哈希 = 正文 sha256 前 8 位（只标正文；正文**不含版本号**，跨版本稳定）。
-- 正文两条：① 本版本 `mc_move/mc_act/mc_build` 不成熟 → 优先 `mc_command`（`/tp` `/setblock` `/fill` `/clone`），被拒再回退；② 发文件流程（先放 `.express/` 或 `mc_kit_memory put`，再 `mc_kit_express`；按分享模式给路径或 URL）。
+- 正文两条：① 本版本 `mc_move/mc_act/mc_build` 不成熟 → 优先 `mc_command`（`/tp` `/setblock` `/fill` `/clone`），被拒再回退；② 本版本生存/冒险能力极弱 → 先明确告知用户再尽力（已有记忆优先按记忆行事）。
 - **不可编辑、无开关**（硬编码随版本发布）——与 RULES.md（Master 维护）、记忆（玩出来的经验）三分工。
 
 ## 7. `src/user-message.mjs` —— 插件提示行构造
@@ -211,7 +212,7 @@
 > 用户 2026-10-03 定：RULES.md / AGENTS.md（老名）/ config.json 对 MC 模式 AI **只读**。统一收编前身的散落判定：`agentsmd.mjs:isAgentsMdPath`（工具参数 JSON 全文匹配，已删）、`memory.mjs` 的根级文件名封锁。
 
 - `PROTECTED_FILES / isProtectedName`（根级、大小写不敏感）；`isProtectedPathArg(raw)`（guard 用：裸名 或 含 `.whale-craft`/`whale_craft` 段的路径；嵌套记忆文件如 `_global/config.json` 不算）。
-- `WRITE_FILE_TOOLS=/^(write|edit)$/`、`MEMORY_WRITE_ACTIONS=append/write/delete/put`；`rejectionText()` / `protectedWriteError(rel)` 统一文案。
+- `WRITE_FILE_TOOLS=/^(write|edit)$/`、`MEMORY_WRITE_ACTIONS=append/write/delete/put`（**现无消费方**：guard 侧随 `mc_kit_memory` 于 2026-10-07 移除，保留供将来写类工具复用）；`rejectionText()` / `protectedWriteError(rel)` 统一文案。
 - guard（index.js）对文件工具用它 + **解析到记忆根后正好是该文件**的二次判定（memoryDir 重定向时绝对路径不含 `.whale-craft` 段）；写入路径以 memory.mjs 的 `target.protected` 为兜底。
 
 ## 16. `src/tool-def.mjs` —— 工具定义（宿主优先 + 内置兜底）

@@ -268,11 +268,12 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   const { readFileSync } = await import('node:fs')
   const idx = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
   console.log(`  ${!tools.has('mc_kit_share') ? '✅' : '❌'} 🔴 mc_kit_share 已移除（它只是在调宿主**另装**的 dsh-file-host，插件本身没有文件服务器）`)
-  console.log(`  ${tools.size === 32 ? '✅' : '❌'} 工具数 32（实际 ${tools.size}）：mc_* 26 + mc_kit_* 3 + mc_admin_* 1 + mc_debug_* 2`)
+  console.log(`  ${tools.size === 31 ? '✅' : '❌'} 工具数 31（实际 ${tools.size}）：mc_* 26 + mc_kit_* 2 + mc_admin_* 1 + mc_debug_* 2`)
   // 只看**代码**，不看注释：注释里留着"为什么删"的说明（那是要留的）
   const codeOnly = idx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
   console.log(`  ${!/uploadToFileHost|dsh-file-host|\/serve\/file-host|mc_kit_share/.test(codeOnly) ? '✅' : '❌'} 源码里没有上传/文件服务器残留（注释里保留"为什么删"的说明）`)
-  console.log(`  ${tools.has('mc_kit_image') && tools.has('mc_kit_memory') ? '✅' : '❌'} mc_kit_image / mc_kit_memory 仍在（一个渲染 PNG、一个记忆语义层）`)
+  console.log(`  ${tools.has('mc_kit_image') ? '✅' : '❌'} mc_kit_image 仍在（渲染 PNG）`)
+  console.log(`  ${!tools.has('mc_kit_memory') ? '✅' : '❌'} 🔴 mc_kit_memory 已移除（长期记忆改走宿主文件工具；索引注入仍保留）`)
   // 2026-10-05：新增观察工具 + 诊断工具改名进 mc_debug_*
   console.log(`  ${tools.has('mc_context') && tools.has('mc_players') ? '✅' : '❌'} 新增观察工具 mc_context / mc_players`)
   console.log(`  ${tools.has('mc_debug_sessions') && tools.has('mc_debug_diag') && !tools.has('mc_sessions') && !tools.has('mc_diag') ? '✅' : '❌'} 🔴 mc_sessions/mc_diag 已改名 mc_debug_sessions / mc_debug_diag`)
@@ -1411,11 +1412,6 @@ console.log('\n--- 记忆能力（.whale-craft / README 索引 / 任意格式）
   mem.delete({ path: 'mc.example.com/maps' })
   console.log(`  ${!existsSync(join(root, 'mc.example.com', 'maps')) ? '✅' : '❌'} delete 可整目录删`)
 
-  // 工具层（用插件的真实记忆库）
-  const ovTool = await tools.get('mc_kit_memory').execute({ action: 'index' }, A)
-  console.log(`  ${ovTool.root && 'totalFiles' in ovTool && 'readme' in ovTool ? '✅' : '❌'} mc_kit_memory{index} 可用（真实库 ${ovTool.totalFiles} 个文件）`)
-  const badAct = await tools.get('mc_kit_memory').execute({ action: '不存在' }, A).catch((e) => e.message)
-  console.log(`  ${/未知 action/.test(String(badAct)) ? '✅' : '❌'} 未知 action 报错并列出可用值`)
 }
 
 // ── 图像地图（需求 7）──
@@ -1963,22 +1959,16 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   console.log(`  ${secretsRead ? '✅' : '❌'} MC 模式读 secrets/ 明文凭据备忘也被拒：${String(secretsRead).slice(0, 28)}`)
   const mdRead = callGuard({ name: 'read', arguments: { path: 'RULES.md' }, agent: mcGuardAgent })
   console.log(`  ${mdRead === undefined ? '✅' : '❌'} 🔴 受保护文件 RULES.md **可读**（guard 放行 —— 可读不可写）`)
-  const mdViaMemoryRead = callGuard({ name: 'mc_kit_memory', arguments: { action: 'read', path: 'AGENTS.md' }, agent: mcGuardAgent })
-  console.log(`  ${mdViaMemoryRead === undefined ? '✅' : '❌'} 记忆工具读 AGENTS.md 也放行（读路径统一放行）`)
   const protectedWrites = [
     ['write', { path: 'RULES.md', content: '改' }],
     ['write', { path: 'AGENTS.md', content: '改' }],
     ['edit', { path: 'config.json' }],
     ['edit', { path: join(memRoot, 'config.json') }],
-    ['mc_kit_memory', { action: 'append', path: 'config.json', text: 'x' }],
-    ['mc_kit_memory', { action: 'write', path: 'RULES.md', content: 'x' }],
-    ['mc_kit_memory', { action: 'delete', path: 'AGENTS.md' }],
-    ['mc_kit_memory', { action: 'put', path: 'config.json', source: 'x' }],
+    ['edit', { path: 'AGENTS.md' }],
   ]
   const missedWrites = protectedWrites.filter(([name, args]) => callGuard({ name, arguments: args, agent: mcGuardAgent }) === undefined)
   console.log(`  ${missedWrites.length === 0 ? '✅' : '❌'} 🔴 受保护文件的各种写法**写全被拒**（${protectedWrites.length - missedWrites.length}/${protectedWrites.length}）：${missedWrites.map(([n]) => n).join(', ') || '无漏网'}`)
-  const nestedOk = callGuard({ name: 'mc_kit_memory', arguments: { action: 'write', path: '_global/config.json', content: 'x' }, agent: mcGuardAgent }) === undefined
-    && callGuard({ name: 'write', arguments: { path: '_global/config.json', content: 'x' }, agent: mcGuardAgent }) === undefined
+  const nestedOk = callGuard({ name: 'write', arguments: { path: '_global/config.json', content: 'x' }, agent: mcGuardAgent }) === undefined
   console.log(`  ${nestedOk ? '✅' : '❌'} 嵌套的普通记忆文件（_global/config.json）不受影响，照常可写`)
   // 🔴 用户 2026-09-16："读写文件都只能在记忆文件夹内！"
   const jail = [
@@ -2029,9 +2019,9 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const plusMc = callGuard({ name: 'mc_status', agent: plusAgent })
     console.log(`  ${plusMc === undefined ? '✅' : '❌'} MC+ 的 mc / mc_kit 工具照常放行（与 MC 模式行为一致）`)
     const plainMcDeny = callGuard({ name: 'mc_status', agent: { id: 'sess-P', ctx: plainCtxObj } })
-    const plainKitDeny = callGuard({ name: 'mc_kit_memory', arguments: { action: 'read', path: 'x.md' }, agent: { id: 'sess-P', ctx: plainCtxObj } })
+    const plainKitDeny = callGuard({ name: 'mc_kit_express', arguments: { path: 'x.png' }, agent: { id: 'sess-P', ctx: plainCtxObj } })
     const plainAdminOk = callGuard({ name: 'mc_admin_config', agent: { id: 'sess-P', ctx: plainCtxObj } })
-    console.log(`  ${plainMcDeny && plainKitDeny ? '✅' : '❌'} 🔴 其他模式调 mc_status / mc_kit_memory 被 guard 硬拒（"不再暴露 mc 和 mckit"的第二道锁）`)
+    console.log(`  ${plainMcDeny && plainKitDeny ? '✅' : '❌'} 🔴 其他模式调 mc_status / mc_kit_express 被 guard 硬拒（"不再暴露 mc 和 mckit"的第二道锁）`)
     console.log(`  ${plainAdminOk === undefined ? '✅' : '❌'} 其他模式**保留** mc_admin_config（它的用途就是在普通会话里管理）`)
   }
 
@@ -2196,7 +2186,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     console.log(`  ${/v\d+\.\d+\.\d+/.test(vTitle) && /（[0-9a-f]{8}）$/.test(vTitle) ? '✅' : '❌'} 折叠标题带版本号 + 短哈希：${vTitle}`)
     const body2 = (third?.content ?? []).map((c) => c.text ?? '').join('')
     console.log(`  ${third?.source?.form === 'notice' && /^Instructions from: \.whale-craft\/README\.md$/.test(body2.split('\n')[0] ?? '') ? '✅' : '❌'} 第 3 条 = 记忆索引（.whale-craft/README.md），同样是插件提示行`)
-    console.log(`  ${/长期记忆/.test(body2) && /mc_kit_memory/.test(body2) ? '✅' : '❌'} 记忆索引正文含"怎么记/怎么读"（${body2.length} 字）—— 不需要再单独往系统提示里塞一段`)
+    console.log(`  ${/长期记忆/.test(body2) && !/mc_kit_memory/.test(body2) ? '✅' : '❌'} 记忆索引正文含"怎么记/怎么读"（${body2.length} 字）—— 已改指宿主文件工具`)
     console.log(`  ${plainAgent.inbox.nextStep.length === 0 ? '✅' : '❌'} 普通会话**不投递**（只有 MC 模式才投）`)
     const plainStep = await preStepMessages(plainAgent)
     console.log(`  ${plainStep.filter((m) => m?.source?.kind === 'plugin:whale_craft').length === 0 ? '✅' : '❌'} 🔴 普通会话**走到请求组装前**也一条都不投（现场判 preset，不靠"当时是 MC 就永久算数"）`)
@@ -2218,7 +2208,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   const denyList = mcRestrict?.f?.deny ?? []
   console.log(`  ${Array.isArray(allowList) ? '✅' : '❌'} MC 模式走的是**白名单**（restrict({allow})），不是"只藏自家工具"${allowList ? `（${allowList.length} 个）` : ''}`)
   console.log(`  ${allowList && !allowList.includes('pwsh') && !allowList.includes('subagent') && !allowList.includes('workflow') ? '✅' : '❌'} 🔴 白名单里**没有** pwsh / subagent / workflow：${JSON.stringify((allowList ?? []).slice(0, 6))}…`)
-  console.log(`  ${allowList && allowList.includes('mc_status') && allowList.includes('mc_kit_memory') && allowList.includes('mc_build') ? '✅' : '❌'} 自己的工具还在（mc_status / mc_kit_memory / mc_build）`)
+  console.log(`  ${allowList && allowList.includes('mc_status') && allowList.includes('mc_kit_image') && allowList.includes('mc_build') ? '✅' : '❌'} 自己的工具还在（mc_status / mc_kit_image / mc_build）`)
   console.log(`  ${allowList && allowList.every((n) => !n.startsWith('mc_admin_')) ? '✅' : '❌'} 管理工具不在白名单里（hideAdminTools 默认 true）`)
   console.log(`  ${allowList && ['read', 'write', 'edit', 'read_image'].every((n) => allowList.includes(n)) ? '✅' : '❌'} 在场的文件工具在白名单里（路径由 guard 限在 .whale-craft/）`)
   console.log(`  ${allowList && allowList.includes('present') ? '✅' : '❌'} present 也在白名单里（显式文件交付：卡片 + 可预览/打开）`)
@@ -2235,7 +2225,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const stdCalls = restrictCalls.filter((c) => c.preset === 'standard')
     const stdDeny = stdCalls.find((c) => Array.isArray(c.f?.deny))
     console.log(`  ${stdDeny && stdDeny.f.allow === undefined ? '✅' : '❌'} 非 MC 模式的会话套的是 **deny**（不是白名单）：宿主工具面不受影响`)
-    console.log(`  ${stdDeny && stdDeny.f.deny.includes('mc_status') && stdDeny.f.deny.includes('mc_kit_memory') ? '✅' : '❌'} deny 里含 mc_* / mc_kit_*（从可见面摘掉）`)
+    console.log(`  ${stdDeny && stdDeny.f.deny.includes('mc_status') && stdDeny.f.deny.includes('mc_kit_image') ? '✅' : '❌'} deny 里含 mc_* / mc_kit_*（从可见面摘掉）`)
     console.log(`  ${stdDeny && !stdDeny.f.deny.includes('mc_admin_config') && stdDeny.f.deny.every((n) => n.startsWith('mc_')) ? '✅' : '❌'} 🔴 deny 里**不含** mc_admin_*、也不含任何非 mc 工具（不误伤普通会话）`)
     // 2026-10-05：MC+ 仍**不套白名单**（标准工具 + mc/mckit 全量）；只在调试开关关时 deny 掉 mc_debug_*
     const plusCalls = restrictCalls.filter((c) => c.preset === 'minecraft-plus')
@@ -2385,22 +2375,38 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     console.log('  ✅ 🔴 走到这里就说明**进程没被 Unhandled \'error\' 带走**（否则自检当场崩，后面的断言一条都不会跑）')
   }
 
-  /* ⑦b 记忆索引**是活的**：写一条记忆 → 新会话的提示行里必须带上它；删掉就不再出现。
-   *    （以前这条测的是 systemPrompt 段的 `text()`；现在同一份文字走提示行，测法一样。） */
+  /* ⑦b 记忆索引**是活的**：往记忆根写一条 → 新会话的提示行必须带上它；盘上没了就不再出现。
+   *    （工具 mc_kit_memory 已于 2026-10-07 移除；改用 MemoryStore 直接写盘 + 真实注入路径验证。
+   *      每次换**全新**记忆根：插件侧 indexText 有 5s 缓存，复用旧根会读到陈旧索引。） */
   {
-    const mm = await tools.get('mc_kit_memory').execute(
-      { action: 'append', topic: 'selftest-tmp', server: '_global', text: '这是一条自检临时记忆' }, A)
-    const idxAgent = { id: 'sess-IDX', session: mkSession('whale-idx-'), ctx: makeAgentCtx('minecraft'), inbox: mkInbox() }
-    fire('agent/created', idxAgent)
-    const idxBody = (await preStepMessages(idxAgent)).filter((m) => m?.source?.kind === 'plugin:whale_craft')
-      .map((m) => (m.content ?? []).map((c) => c.text ?? '').join('')).join('\n')
-    console.log(`  ${idxBody.includes('selftest-tmp') && /先读/.test(idxBody) ? '✅' : '❌'} 写进记忆后，新会话的提示行立刻带上该文件 + "先读"提醒`)
-    await tools.get('mc_kit_memory').execute({ action: 'delete', path: String(mm.path) }, A)
-    const idxAgent2 = { id: 'sess-IDX2', session: mkSession('whale-idx2-'), ctx: makeAgentCtx('minecraft'), inbox: mkInbox() }
-    fire('agent/created', idxAgent2)
-    const idxBody2 = (await preStepMessages(idxAgent2)).filter((m) => m?.source?.kind === 'plugin:whale_craft')
-      .map((m) => (m.content ?? []).map((c) => c.text ?? '').join('')).join('\n')
-    console.log(`  ${!idxBody2.includes('selftest-tmp') ? '✅' : '❌'} 删掉后不再出现（索引是投递那一刻现读的，不是缓存）`)
+    const { MemoryStore } = await import('./src/memory.mjs')
+    const { mkdtempSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const savedLiveRoot = process.env.WHALE_CRAFT_MEMORY_DIR
+    let liveSeq = 0
+    /** 在全新记忆根上跑一次真实注入，返回投递正文（prep 里可预置盘上内容） */
+    const injectWithRoot = async (freshRoot, prep) => {
+      process.env.WHALE_CRAFT_MEMORY_DIR = freshRoot
+      const store = new MemoryStore(freshRoot)
+      if (prep) prep(store)
+      const tag = ++liveSeq
+      const ag = { id: `sess-LIVE-${tag}`, session: mkSession(`whale-live-${tag}-`), ctx: makeAgentCtx('minecraft'), inbox: mkInbox() }
+      fire('agent/created', ag)
+      return (await preStepMessages(ag)).filter((m) => m?.source?.kind === 'plugin:whale_craft')
+        .map((m) => (m.content ?? []).map((c) => c.text ?? '').join('')).join('\n')
+    }
+    try {
+      const rootA = join(mkdtempSync(join(tmpdir(), 'whale-liveA-')), 'memory')
+      const bodyA = await injectWithRoot(rootA, (s) => s.append({ topic: 'selftest-tmp', server: '_global', text: '这是一条自检临时记忆' }))
+      console.log(`  ${bodyA.includes('selftest-tmp') && /先读/.test(bodyA) ? '✅' : '❌'} 写进记忆后，新会话的提示行立刻带上该文件 + "先读"提醒`)
+      const rootB = join(mkdtempSync(join(tmpdir(), 'whale-liveB-')), 'memory')
+      const bodyB = await injectWithRoot(rootB, (s) => { const r = s.append({ topic: 'selftest-tmp', server: '_global', text: 'x' }); s.delete({ path: String(r.path) }) })
+      console.log(`  ${!bodyB.includes('selftest-tmp') ? '✅' : '❌'} 盘上删掉后不再出现（索引是投递那一刻现读的，不是缓存）`)
+    } finally {
+      if (savedLiveRoot === undefined) delete process.env.WHALE_CRAFT_MEMORY_DIR
+      else process.env.WHALE_CRAFT_MEMORY_DIR = savedLiveRoot
+    }
   }
 
   /* ⑧ 🔴 用户："插件初始化就要检查 `.whale-craft` 是否存在，不存在则建立；README.md 是否存在，
@@ -2985,34 +2991,28 @@ console.log('\n--- 行事准则 RULES.md / 新开关 / 边界信息 ---')
     console.log(`  ${/asUser = body\.asUser === true/.test(isrc) && /\[system\] \$\{text\}/.test(isrc) && /source: \{ kind: 'user' \}/.test(isrc) ? '✅' : '❌'} 🔴 新对话页：改投**玩家消息**（source kind='user'、正文前加 [system] ）`)
   }
 
-  /* 受保护文件在记忆工具里：**可读不可写**（RULES.md / AGENTS.md / config.json 同一套，用户 2026-10-03 定）*/
+  /* 受保护文件在记忆库（MemoryStore）里：**可读不可写**（RULES.md / AGENTS.md / config.json 同一套，用户 2026-10-03 定）*/
   {
     const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
+    const { MemoryStore } = await import('./src/memory.mjs')
     const cwd = mkdtempSync(join(tmpdir(), 'whale-prot-'))
     const root = join(cwd, '.whale-craft')
     mkdirSync(root, { recursive: true })
     writeFileSync(join(root, 'RULES.md'), '# 受保护的准则\n', 'utf8')
     writeFileSync(join(root, 'config.json'), '{"schema":1,"rulesVersion":"9.9.9"}\n', 'utf8')
-    const mdExec = { agent: { id: 'sess-PROT', session: { header: { cwd } } } }
-    const savedMem2 = process.env.WHALE_CRAFT_MEMORY_DIR
-    delete process.env.WHALE_CRAFT_MEMORY_DIR      // 让记忆根跟着这个工作区走
-    try {
-      const memReadRules = await tools.get('mc_kit_memory').execute({ action: 'read', path: 'RULES.md' }, mdExec)
-      console.log(`  ${/受保护的准则/.test(String(memReadRules.content)) ? '✅' : '❌'} 🔴 记忆工具**可以读**行事准则（可读不可写）`)
-      const memReadCfg = await tools.get('mc_kit_memory').execute({ action: 'read', path: 'config.json' }, mdExec)
-      console.log(`  ${/"rulesVersion":"9\.9\.9"/.test(String(memReadCfg.content)) ? '✅' : '❌'} 🔴 记忆工具**可以读**工作区 config.json`)
-      const protW1 = await tools.get('mc_kit_memory').execute({ action: 'write', path: 'config.json', content: '{}' }, mdExec).catch((e) => e.message)
-      const protW2 = await tools.get('mc_kit_memory').execute({ action: 'delete', path: 'RULES.md' }, mdExec).catch((e) => e.message)
-      const protW3 = await tools.get('mc_kit_memory').execute({ action: 'append', path: 'AGENTS.md', text: 'x' }, mdExec).catch((e) => e.message)
-      console.log(`  ${/只读/.test(String(protW1)) && /只读/.test(String(protW2)) && /只读/.test(String(protW3)) ? '✅' : '❌'} 🔴 记忆工具对受保护文件的写/删全被拒（config.json / RULES.md / AGENTS.md）`)
-      const listAfter = await tools.get('mc_kit_memory').execute({ action: 'index' }, mdExec)
-      console.log(`  ${!(listAfter.tree ?? '').includes('config.json') && !(listAfter.tree ?? '').includes('RULES.md') ? '✅' : '❌'} 受保护文件不进记忆索引/目录树（list 里看不到）`)
-    } finally {
-      if (savedMem2 === undefined) delete process.env.WHALE_CRAFT_MEMORY_DIR
-      else process.env.WHALE_CRAFT_MEMORY_DIR = savedMem2
-    }
+    const store = new MemoryStore(root, { create: false })
+    const memReadRules = store.read({ path: 'RULES.md' })
+    console.log(`  ${/受保护的准则/.test(String(memReadRules.content)) ? '✅' : '❌'} 🔴 记忆库**可以读**行事准则（可读不可写）`)
+    const memReadCfg = store.read({ path: 'config.json' })
+    console.log(`  ${/"rulesVersion":"9\.9\.9"/.test(String(memReadCfg.content)) ? '✅' : '❌'} 🔴 记忆库**可以读**工作区 config.json`)
+    const protW1 = (() => { try { store.write({ path: 'config.json', content: '{}' }); return '' } catch (e) { return e.message } })()
+    const protW2 = (() => { try { store.delete({ path: 'RULES.md' }); return '' } catch (e) { return e.message } })()
+    const protW3 = (() => { try { store.append({ path: 'AGENTS.md', text: 'x' }); return '' } catch (e) { return e.message } })()
+    console.log(`  ${/只读/.test(protW1) && /只读/.test(protW2) && /只读/.test(protW3) ? '✅' : '❌'} 🔴 记忆库对受保护文件的写/删全被拒（config.json / RULES.md / AGENTS.md）`)
+    const tree = (store.list() ?? []).map((f) => f.rel).join(',')
+    console.log(`  ${!tree.includes('config.json') && !tree.includes('RULES.md') ? '✅' : '❌'} 受保护文件不进记忆目录树（list 里看不到）`)
   }
 
   // 边界信息工具

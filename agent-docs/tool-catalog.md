@@ -1,7 +1,7 @@
-# 工具目录（32 个）
+# 工具目录（31 个）
 
 > 快照：**0.2.0**（开发中，未发布）。注册全部在 `index.js` 的 `apply()` 内（`ctx.tools.register(asTool({...}))`），
-> 分四段：`mc_*`（游戏内，26）/ `mc_kit_*`（游戏外辅助，3）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
+> 分四段：`mc_*`（游戏内，26）/ `mc_kit_*`（游戏外辅助，2）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
 > 可见性按模式分档（2026-10-04）：**MC模式** 只见 mc/mckit + 文件工具；**MC+模式** 全量可见（含 admin）；
 > **其他模式** 隐藏 mc_* / mc_kit_*（仅保留 `mc_admin_*`），另有 guard 硬拒兜底。
 > 🔴 **调试工具（`mc_debug_*`）另受「MC设置 → 调试」的 `exposeDebugTools` 开关门控**（2026-10-05）：关时在 MC/MC+ 也不暴露（白名单 / MC+ deny / guard 三处）。
@@ -63,11 +63,10 @@
 | `mc_sequence` | 连串动作 | **最多 64 步**；`stopOnError` 默认 true；`budgetMs ≤570s`、`timeoutMs 600s`；步类型 wait≤30s/move/look/toward/place/break/dig/use/attack/equip/give/toss/say/jump。比让模型写脚本稳 |
 | `mc_command` | 服务器指令 | **最后手段**：要 OP、受白名单（`commandWhitelist` 精确名/`/正则/`/`"*"`；`allowAllCommands` 全放行） |
 
-## 五、游戏外辅助（3，`mc_kit_*`）
+## 五、游戏外辅助（2，`mc_kit_*`）
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
-| `mc_kit_memory` | 记忆树读写 | `index/read/append/write/put/delete/search`；`topic`/`server` 自动定位路径（`server` 缺省 = 当前 `bot.sub`）；`append` 带 `key` 覆盖同 key 那条；`put` 把**工作区内任意文件（含图片）**存进记忆；`read` 图片 → **图片附件**；`search` 跨文件。受保护文件（RULES.md/AGENTS.md/config.json）**可读不可写**（写/删被拒） |
 | `mc_kit_image` | 图像处理 | `info/embed/render/grid/save`：SVG→PNG 光栅化（`sharp`，可选依赖，缺失只影响 `render`）、引图进 SVG、拼网格（≤64 张，返回 SVG）、落盘。输入输出都限制在本会话工作区内（`insideWorkspace`） |
 | `mc_kit_express` | 把发布区文件换成"给用户的东西" | 路径解析先记忆根后 cwd；只认 `.express/`（目录即白名单）；**按宿主模式回不同 URL** —— web：`base + /api/whale-craft/express/<uuid>/…`；desktop：`http://localhost:<port>/<uuid>/…`（端口服务没起来回占用文案）；关闭恒回"文件分享已关闭…绝对路径…"；工作区 uuid 查不到即拒。宿主另有 `present`（显式文件交付组，MC 模式白名单里放行）——两者互补 |
 
@@ -102,6 +101,7 @@
 
 ## 历史变更（防混淆）
 
+- **`mc_kit_memory` 已删除**（2026-10-07）：长期记忆改由**宿主受限文件工具**（`read/write/edit/glob/grep/read_image`，MC 模式 guard 已限在 `.whale-craft/` 内）直接读写。**记忆模型本身保留**：固定 `<工作区>/.whale-craft/`、AI 维护 `README.md` 索引、每轮自动注入索引（`memoryIndexText`）都不变；`MemoryStore`（`src/memory.mjs`）保留为库。自检里有"mc_kit_memory 已移除"的断言——老名字不要再出现。已知缺口（等宿主补）：宿主暂无删文件工具、也无二进制 `put`。
 - **`mc_kit_share`（及 `mc_map` 的 `share` 参数）已删除**（2026-09-16）：它只是在调宿主**另装**的 `dsh-file-host`，插件本身没有文件服务器。"让用户看到文件"改走：宿主 `present`（显式文件交付）+ 本插件的 `mc_kit_express`。自检里有"mc_kit_share 已移除 / 源码无文件服务器残留"的断言——老名字不要再出现。
 - 文件分享 2026-10-04 起是**开关**（`expressEnabled`），不再有"模式"；老配置里的 `expressMode`（含 `local`）由 `PluginConfig.migrate` 搬成布尔（`online`→`true`，其余→`false`）。
 - **2026-10-07 文件分享按宿主模式拆键**：`expressEnabled`/`expressBase` → **web 那套** `expressWebEnabled`/`expressWebBase`；新增 **desktop 那套** `expressDesktopEnabled`/`expressDesktopPort`（默认 16049，独立端口只监听 localhost）。从哪种模式（宿主 profile）进来只认哪套；`expressMode` 与两个旧键都由 `migrate` 逐档搬（见 architecture §10）。

@@ -42,7 +42,7 @@ import { PluginConfig, DEFAULT_CONFIG, resolveStateDir, pickPresetTarget, pickPr
 import { AccountStore, parseAuthlibCard, normalizeServerUrl, dashUuid } from './src/accounts.mjs'
 import { DEFAULT_AGENTS_MD, agentsMdPath, legacyAgentsMdPath, migrateLegacyAgentsMd, readAgentsMd, writeAgentsMd, resetAgentsMd, syncRulesVersion } from './src/agentsmd.mjs'
 import { wsConfigPath, isWsConfigData, migrate as migrateWorkspaceConfig, values as workspaceConfigValues, patch as patchWorkspaceConfig, readRulesVersion } from './src/wsconfig.mjs'
-import { PROTECTED_FILES, isProtectedPathArg, WRITE_FILE_TOOLS, MEMORY_WRITE_ACTIONS, rejectionText } from './src/protected.mjs'
+import { PROTECTED_FILES, isProtectedPathArg, WRITE_FILE_TOOLS, rejectionText } from './src/protected.mjs'
 import { encodePng } from './src/png.mjs'
 import { userMessage, messageFactoryKind, pluginLoadNote } from './src/user-message.mjs'
 import { ImageEngine, imageEngineAvailable, imageEngineError } from './src/image.mjs'
@@ -2136,7 +2136,7 @@ export function apply(ctx, rawConfig) {
         tools: {
           namespaces: {
             mc_: '游戏内',
-            mc_kit_: '游戏外辅助（记忆/画图/交付）',
+            mc_kit_: '游戏外辅助（画图/交付）',
             mc_admin_: '管理（MC 模式看不见也调不动；普通模式与 MC+ 模式可见）',
             mc_debug_: '调试（需在「MC设置 → 调试」开启「开放助手调试工具」才在 MC/MC+ 暴露）',
             note: 'mc_* / mc_kit_* 只在 MC模式 / MC+模式 会话里暴露（其他模式隐藏 + guard 硬拒）。',
@@ -2845,7 +2845,7 @@ export function apply(ctx, rawConfig) {
       if (!ref) {
         throw new Error('这个文件不在发布区里，所以没有可分享的地址。'
           + `请先把它放到 .whale-craft/${EXPRESS_DIR}/<子目录>/ 下（出图时把 out 写成那里，`
-          + '或用 mc_kit_memory {action:"put", path:".express/<子目录>/x.png"} 复制过去），再来取。')
+          + '或用写文件工具把文件放进去），再来取。')
       }
       // 关闭（默认）：恒回那一句（**不抛错** —— 让 AI 直接把话转达用户，而不是去试别的歪招）
       if (hostMode() === 'desktop') {
@@ -2865,103 +2865,13 @@ export function apply(ctx, rawConfig) {
     },
   }))
 
-  /* ── 长期记忆（游戏外通用能力，所以叫 mc_kit_ 不叫 mc_）──
-   * 固定 <工作区>/.whale-craft/：AI 维护 README.md 索引，按服务器建子文件夹，
-   * 任意格式文件可读写（含图片），**不执行任何东西**。
+  /* ── 长期记忆：专用工具已移除，模型改用宿主文件工具 ──────────────────────────
+   * 2026-10-07：用户决定移除 `mc_kit_memory` —— agent 改用宿主文件工具
+   * （read/write/edit/glob/grep/read_image）直接读写工作区 `.whale-craft/` 内的文件。
+   * 记忆模型本身保留：固定 `<工作区>/.whale-craft/`、AI 维护 README.md 索引、
+   * 每轮自动注入索引（见 memoryIndexText）都不变，只是不再有专属工具。
+   * ⚠️ 已知缺口：宿主暂无删文件工具、也无二进制 `put`（等宿主补，插件不另造）。
    * ------------------------------------------------------------------------ */
-
-  ctx.tools.register(asTool({
-    name: 'mc_kit_memory',
-    description: '长期记忆（跨会话、重启后还在）。固定放在工作区的 **`.whale-craft/`** 文件夹里，'
-      + '按服务器建子文件夹（`_global/` 放通用的）。\n'
-      + '**索引由你自己维护**：`.whale-craft/README.md`（插件每轮把它的内容 + 一份自动目录树注入你的上下文，'
-      + '所以就算忘了更新 README 也不会失真；但记得**改了记忆就顺手更新 README**）。\n'
-      + 'action：\n'
-      + '· index（默认）看总览：有哪些文件夹/文件、各多少条、README 现状\n'
-      + '· read    读文件（path 或 topic+server）；**读图片会作为附件给你，你能直接看到**\n'
-      + '· append  追加一条（最常用；给 key 则**覆盖**同 key 的那条，不会堆积）——只对文本文件\n'
-      + '· write   整文件覆盖（重组内容、写小标题/表格）——文本文件\n'
-      + '· put     把自己读到的**任意文件（图片最常用）复制进记忆**，之后可随时 read 出来看\n'
-      + '· delete  删文件（path 指向目录则整目录删）\n'
-      + '· search  跨文本文件搜关键词，返回命中行\n'
-      + '路径写法：`path:"mc.example.com/maps/town.png"`，或 `topic:"landmarks"`（server 默认取你当前所在服，'
-      + '不传 server 就写进 `_global/`）。\n'
-      + '⚠️ 这个文件夹里**只读写文件，不执行任何东西**（没有 shell、不跑脚本）。',
-    parameters: {
-      action: { type: 'string', description: 'index（默认）/ read / append / write / put / delete / search' },
-      path: { type: 'string', description: '相对路径，如 mc.example.com/landmarks.md（与 topic 二选一）' },
-      topic: { type: 'string', description: '主题名（会拼成 <server>/<topic>.md）' },
-      server: { type: 'string', description: '服务器文件夹；默认当前所在服，不传则 _global' },
-      text: { type: 'string', description: 'append 的内容（一条事实，一句话说清）' },
-      content: { type: 'string', description: 'write 的完整内容（文本文件）' },
-      key: { type: 'string', description: 'append 用：同 key 覆盖（如 "用户叫什么"）' },
-      source: { type: 'string', description: 'put 用：要存入记忆的文件路径（工作区内；图片最常用）' },
-      name: { type: 'string', description: 'put 用：存进去的名字（缺省用原文件名）' },
-      query: { type: 'string', description: 'search 的关键词' },
-      limit: { type: 'number', description: 'search 最多几条（默认 30）' },
-    },
-    output: {
-      schema: { type: 'object', properties: {}, additionalProperties: true },
-      render: (args, value) => {
-        const blocks = [{ type: 'text', text: String(value?.text ?? JSON.stringify(value, null, 2)) }]
-        // read 到图片时把它作为附件带出去 —— 这样模型**能直接看到**存下来的图
-        if (value?.attachment) blocks.push({ type: 'image', attachment: value.attachment })
-        return blocks
-      },
-    },
-    async execute(args, exec) {
-      const mem = memoryFor(workspaceOf(exec?.agent))
-      const action = String(args.action ?? 'index').toLowerCase()
-      if (action === 'index') return mem.overview()
-
-      // put：把工作区里的源文件复制进记忆（图片最常用；任何格式都行）
-      if (action === 'put') {
-        const src = insideWorkspace(args.source, exec?.agent)
-        let server = args.server
-        if (server === undefined && args.path === undefined) {
-          const sess = getSession(exec)
-          server = sess.bot.sub ?? null
-        }
-        return mem.put({ source: src, name: args.name, path: args.path, server })
-      }
-
-      // 只在"没显式给 server 且没给 path"时，才用当前所在服兜底
-      let server = args.server
-      if (server === undefined && args.path === undefined) {
-        const sess = getSession(exec)
-        server = sess.bot.sub ?? null      // 不在线 → null → 落进 _global
-      }
-
-      const sel = { path: args.path, topic: args.topic, server }
-      switch (action) {
-        case 'read': {
-          const r = mem.read(sel)
-          // 读的是图片 → 顺手做成附件，render 会把它当 image 块发出去（模型就能看到）
-          if (r.kind === 'image') {
-            const att = ctx.get('attachments')
-            if (att && typeof att.saveImage === 'function') {
-              try {
-                const { readFileSync } = await import('node:fs')
-                r.attachment = await att.saveImage({
-                  data: new Uint8Array(readFileSync(r.file)),
-                  mediaType: r.mediaType ?? 'image/png',
-                  name: r.path.split('/').pop(),
-                })
-              } catch (e) { r.attachmentError = e.message }
-            } else {
-              r.attachmentError = '宿主没有 attachments 服务'
-            }
-          }
-          return r
-        }
-        case 'append': return mem.append({ ...sel, text: args.text, key: args.key })
-        case 'write':  return mem.write({ ...sel, content: args.content })
-        case 'delete': return mem.delete(sel)
-        case 'search': return mem.search({ query: args.query, limit: args.limit })
-        default: throw new Error(`未知 action："${action}"（可用 index/read/append/write/put/delete/search）`)
-      }
-    },
-  }))
 
   /* ── 总索引自动注入系统提示（用户要求：自动注入 + 提醒及时读）── */
 
@@ -2972,13 +2882,13 @@ export function apply(ctx, rawConfig) {
     const files = store.list()
     if (!files.length) {
       return '【麦块长期记忆】现在是空的（`.whale-craft/`）。学到值得记住的事（用户是谁、地标坐标、约定）就用 '
-        + '`mc_kit_memory {action:"append", topic:"<主题>", text:"..."}` 记下来，'
+        + '写文件工具（write / edit）记到 `.whale-craft/` 下的文件里，'
         + '并在 `.whale-craft/README.md` 里补一行索引。'
     }
     return '【麦块长期记忆】根目录 `.whale-craft/`（其中 `README.md` 是**你维护的索引**）\n\n'
       + store.indexText()
-      + '\n\n**要动手前先读相关文件**（`mc_kit_memory {action:"read", path:"..."}`）——'
-      + '别凭印象做事；不确定就先 `search`。新学到的事实随手 `append`，'
+      + '\n\n**要动手前先读相关文件**（用 read 读 `.whale-craft/` 下的文件）——'
+      + '别凭印象做事；不确定就先用 grep 搜。新学到的事实随手写进对应文件（write / edit），'
       + '并且**改了记忆就顺手更新 `.whale-craft/README.md`**。'
   }
 
@@ -4182,7 +4092,7 @@ export function apply(ctx, rawConfig) {
       const isPlus = pluginConfig.isMcPlusPreset(presetId)
 
       // ① 凭据硬拒：两种 MC 模式都保留（"凭据不进模型上下文"是插件不变式）
-      if ((isMc || isPlus) && /^(read|edit|write|glob|grep|ls|cat|read_image|mc_kit_memory)$/i.test(name)) {
+      if ((isMc || isPlus) && /^(read|edit|write|glob|grep|ls|cat|read_image)$/i.test(name)) {
         const text = JSON.stringify(exec?.arguments ?? {})
         if (/(\.credentials|credentials\.yaml|[/\\]\.dsh[/\\])/i.test(text)) {
           return 'MC 模式不允许触碰宿主凭据文件；账号密码在「MC设置」里维护，AI 不需要也不应该看到。'
@@ -4214,10 +4124,9 @@ export function apply(ctx, rawConfig) {
         return '调试工具未启用——请在「MC设置 → 调试」里打开「开放助手调试工具」。'
       }
 
-      if (/^(read|edit|write|glob|grep|ls|cat|read_image|mc_kit_memory)$/i.test(name)) {
-        const args = exec?.arguments ?? {}
+      if (/^(read|edit|write|glob|grep|ls|cat|read_image)$/i.test(name)) {
         // 受保护文件（RULES.md / AGENTS.md / config.json，src/protected.mjs）：**可读不可写**。
-        // 宿主文件工具里只有 write|edit 会写；记忆工具按 action 判定（memory.mjs 内还有一道兜底）。
+        // 宿主文件工具里只有 write|edit 会写。
         // 判定 = 路径写法命中（裸名/含 .whale-craft 段）**或**解析到记忆根后正好是那个文件
         // （记忆根可被 memoryDir 重定向，绝对路径不一定含 `.whale-craft` 段）。
         const protectedHit = (raw) => {
@@ -4229,11 +4138,6 @@ export function apply(ctx, rawConfig) {
           return PROTECTED_FILES.some((f) => abs === join(root, f))
         }
         if (WRITE_FILE_TOOLS.test(name) && protectedHit(fileToolPath(exec))) {
-          return rejectionText()
-        }
-        if (name.toLowerCase() === 'mc_kit_memory'
-          && MEMORY_WRITE_ACTIONS.has(String(args.action ?? ''))
-          && protectedHit(args.path)) {
           return rejectionText()
         }
       }

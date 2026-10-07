@@ -201,12 +201,6 @@
 
 ## 游戏外辅助（`mc_kit_*`）
 
-### `mc_kit_memory`
-
-- **描述**：长期记忆（工作区 `.whale-craft/`）读写：index/read/append/write/put/delete/search
-- **参数**：`action:string=index`、`path:string`、`topic:string`、`server:string`、`text:string`、`content:string`、`key:string`、`source:string`、`name:string`、`query:string`、`limit:number=30`
-- **超时**：默认
-
 ### `mc_kit_image`
 
 - **描述**：图像：info/embed/render（SVG→PNG）/grid/save

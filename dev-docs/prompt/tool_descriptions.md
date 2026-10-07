@@ -277,33 +277,6 @@ action：
 如果要分享的文件是图片，期望在回复中内嵌展示出来，回复 `![图片名](url)` 即可。其他文件，或期望是可以下载的URL，回复 `[文件名](url)` 即可。
 本工具只用于生成URL。只要用户开启分享功能，`.whale-craft/.express/` 下的文件都会分享出去。如果用户没有开启分享功能，调用本工具会有相应报错。如果用户反映仍然无法看到图片或访问文件，且你的操作并无问题，提醒用户去「MC设置 → 文件分享」检查配置（web 模式看 base，桌面模式看端口）。
 
-### mc_kit_memory
-
-- action：index（默认）/ read / append / write / put / delete / search
-- path：相对路径，如 mc.example.com/landmarks.md（与 topic 二选一）
-- topic：主题名（会拼成 <server>/<topic>.md）
-- server：服务器文件夹；默认当前所在服，不传则 _global
-- text：append 的内容（一条事实，一句话说清）
-- content：write 的完整内容（文本文件）
-- key：append 用：同 key 覆盖（如 "用户叫什么"）
-- source：put 用：要存入记忆的文件路径（工作区内；图片最常用）
-- name：put 用：存进去的名字（缺省用原文件名）
-- query：search 的关键词
-- limit：search 最多几条（默认 30）
-
-长期记忆（跨会话、重启后还在）。固定放在工作区的 **`.whale-craft/`** 文件夹里，按服务器建子文件夹（`_global/` 放通用的）。
-**索引由你自己维护**：`.whale-craft/README.md`（插件每轮把它的内容 + 一份自动目录树注入你的上下文，所以就算忘了更新 README 也不会失真；但记得**改了记忆就顺手更新 README**）。
-action：
-· index（默认）看总览：有哪些文件夹/文件、各多少条、README 现状
-· read    读文件（path 或 topic+server）；**读图片会作为附件给你，你能直接看到**
-· append  追加一条（最常用；给 key 则**覆盖**同 key 的那条，不会堆积）——只对文本文件
-· write   整文件覆盖（重组内容、写小标题/表格）——文本文件
-· put     把自己读到的**任意文件（图片最常用）复制进记忆**，之后可随时 read 出来看
-· delete  删文件（path 指向目录则整目录删）
-· search  跨文本文件搜关键词，返回命中行
-路径写法：`path:"mc.example.com/maps/town.png"`，或 `topic:"landmarks"`（server 默认取你当前所在服，不传 server 就写进 `_global/`）。
-⚠️ 这个文件夹里**只读写文件，不执行任何东西**（没有 shell、不跑脚本）。
-
 ## mc_admin_* 管理（MC 模式看不见也调不动；普通模式与 MC+ 可见）
 
 ### mc_admin_config
