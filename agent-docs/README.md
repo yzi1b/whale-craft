@@ -3,7 +3,7 @@
 > 面向接手本仓库的 AI agent（**只给 agent 看、由 agent 维护**；需要人看的底层设计放 [`dev-docs/`](../dev-docs/)）。**先读这一页**，再按需进入各专题。
 > 仓库根有一份 [`AGENTS.md`](../AGENTS.md) 作为引导入口（DSH 宿主会把根 `AGENTS.md` 当工作区指令自动注入），
 > 它只放"先读这里 + 最硬的几条铁律 + 验证命令"，完整地图与铁律速查以本页为准。
-> 快照：whale_craft **0.2.0**（**开发中，未发布**；自 `v0.1.7` 起累计：issue #1 修复、`tools/dev.mjs`、26.2 兼容层移除、DSH 版本范围、插件页本地化、按工作区 config.json、**设置两态 + 插件页「设置」入口 + 「连接到MC」弹窗 + 文件分享改开关**）；**0.2.0-beta.1（2026-10-06）**已作为预览发布，已知：registry 安装后 `failed to import`（宿主 resolver bug，见 history.md F14，`src/resolver-shim.mjs` 临时兜底），2026-10-06。
+> 快照：whale_craft **0.2.0**（**开发中，未发布**；自 `v0.1.7` 起累计：issue #1 修复、`tools/dev.mjs`、26.2 兼容层移除、DSH 版本范围、插件页本地化、按工作区 config.json、**设置两态 + 插件页「设置」入口 + 「连接到MC」弹窗 + 文件分享改开关 + 调试/联网搜索开关**）；**0.2.0-beta.1（2026-10-06）**已作为预览发布，已知：registry 安装后 `failed to import`（宿主 resolver bug，见 history.md F14，`src/resolver-shim.mjs` 临时兜底），2026-10-06。
 > 本文档写"机制与不变式（为什么）"；**细节以代码为准**，文档负责给地图与避坑指引。
 
 ## 项目一句话

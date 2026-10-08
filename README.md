@@ -157,7 +157,6 @@ CI 跑的就是这两条（`.github/workflows/ci.yml`）：**ubuntu（Node 22 / 
 - 文件分享的 `base`（web）/ 端口（桌面）**不做连通性自检**：web 的 base 填错了只有你自己能发现（AI 拿到的 URL 打不开）；桌面端口占用会在设置页红字提示。
 - 🔴 **行事准则为什么叫 `RULES.md`**（见上）：`AGENTS.md` 会被 DSH 当工作区指令自动注入到任何碰过该目录的会话，
   与 MC 模式无关 —— 所以这个名字是刻意的。
-- 把 `memoryDir` 指到共享目录时，多个工作区会**共用**同一份记忆与 `config.json`（按工作区的设置也随之共享）。
 - 工具描述与文档目前是**中文**。
 - **能连的 MC 版本取决于依赖里的 `mineflayer`**；想连官方还没支持的新版本，可以自行替换 profile 里的那一份。
 - 归档保护依赖宿主内部方法，DSH 升级后可能需要跟进。
@@ -355,8 +354,6 @@ first (`prepublishOnly`) — **a broken tree cannot be published**.
   noticeable by you (the URL the agent gets won't open); a busy desktop port is flagged in the settings page.
 - 🔴 **Why the conduct file is `RULES.md`**: `AGENTS.md` is picked up by DSH as a workspace instruction
   file and injected into any session that touched that directory, MC or not — so the name is deliberate.
-- If `memoryDir` points at a shared directory, multiple workspaces **share** one memory and `config.json`
-  (and the per-workspace settings with them).
 - Tool descriptions and docs are currently in **Chinese**.
 - **Which MC versions you can connect to depends on the bundled `mineflayer`**; to connect to a version
   the official one doesn't support yet, replace that copy in the profile.

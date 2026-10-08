@@ -8,7 +8,7 @@
 
 | 模式         | 暴露范围                                                                                                                                                                                                          |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **MC模式**   | 本插件：`mc_*` 除 `mc_admin_config` 外的 + `mc_kit_*` <br>宿主：文件工具 `read`/`write`/`edit`/`glob`/`grep`/`read_image` + 后台任务 `job_list`/`job_output`/`job_kill` + 目标 `get_goal`/`create_goal`/`update_goal` + `todo_write` + `mcMode.allowOtherTools` 配置项<br>**不含** `mc_admin_config`、`present`（交付走 `mc_kit_express`） |
+| **MC模式**   | 本插件：`mc_*` 除 `mc_admin_config` 外的 + `mc_kit_*` <br>宿主：文件工具 `read`/`write`/`edit`/`glob`/`grep`/`read_image` + 后台任务 `job_list`/`job_output`/`job_kill` + 目标 `get_goal`/`create_goal`/`update_goal` + `todo_write` + 联网搜索 `web_search`（受「MC设置 → 联网搜索」的 `allowWebSearch` 开关控制，默认开）+ `mcMode.allowOtherTools` 配置项<br>**不含** `mc_admin_config`、`present`（交付走 `mc_kit_express`）、`web_fetch`（抓取走 `mc_kit_web_fetch`） |
 | **MC+模式**  | 全部本插件工具（含`mc_admin_config`）；不套白名单，另见标准模式全量工具                                                                                                                                             |
 | **其他模式** | 仅`mc_admin_config`（`mc_*` / `mc_kit_*` 全部隐藏，另有 guard 硬拒兜底）                                                                                                                                          |
 

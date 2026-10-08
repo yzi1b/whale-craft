@@ -93,8 +93,6 @@ export const DEFAULT_CONFIG = {
    * guard 对它只保留凭据路径拒绝。
    */
   mcPlusPresets: ['minecraft-plus'],
-  /** 记忆根目录；null = `<工作区>/.whale-craft` */
-  memoryDir: null,
   /** 「MC设置 → 指令白名单」页的开关：允许所有服务器指令（默认关 = 只放行白名单里的） */
   allowAllCommands: false,
   /* 注：`injectWhaleCraftAgentsMd` / `injectWorkspaceAgentsMd` / `rulesFollowVersion` 三个提示词
@@ -145,6 +143,13 @@ export const DEFAULT_CONFIG = {
    * **工作区无关**（全局 config.json）。
    */
   exposeDebugTools: false,
+  /**
+   * 「MC设置 → 联网搜索」页的「允许联网搜索」开关（**默认开**）：是否让 **MC 模式**的助手用宿主的
+   * `web_search`（`@deepseek-ai/dsh-tool-web`，MC 模式 preset 只挂 search、不挂 fetch）联网搜索。
+   * **MC+ 模式不受本键影响**（它的组成本来就有标准全量的 tool-web）。
+   * **工作区无关**（全局 config.json）。
+   */
+  allowWebSearch: true,
 
 }
 
@@ -608,11 +613,6 @@ export class PluginConfig {
     }
   }
 
-  get memoryDir () {
-    const v = this.get('memoryDir')
-    return typeof v === 'string' && v.trim() ? v.trim() : null
-  }
-
   /** 「文件分享」web 模式开关（默认关） */
   get expressWebEnabled () {
     return this.get('expressWebEnabled') === true
@@ -636,6 +636,11 @@ export class PluginConfig {
   /** 「开放助手调试工具」开关（默认关）——是否向助手暴露调试用途的工具 */
   get exposeDebugTools () {
     return this.get('exposeDebugTools') === true
+  }
+
+  /** 「允许联网搜索」开关（**默认开**；只在显式 `false` 时关）——MC 模式下 `web_search` 是否进可见面 */
+  get allowWebSearch () {
+    return this.get('allowWebSearch') !== false
   }
 
   /** 这个 preset id 算不算 MC 模式 */
@@ -696,12 +701,8 @@ function validate (top, rest, value) {
     if (!isStrArray) throw new Error('mcPlusPresets 必须是字符串数组（如 ["minecraft-plus"]）')
     return
   }
-  if (top === 'memoryDir') {
-    if (value !== null && typeof value !== 'string') throw new Error('memoryDir 必须是字符串（绝对路径）或 null')
-    return
-  }
   if (top === 'allowAllCommands' || top === 'ensureMcPreset' || top === 'exposeDebugTools'
-    || top === 'expressWebEnabled' || top === 'expressDesktopEnabled') {
+    || top === 'allowWebSearch' || top === 'expressWebEnabled' || top === 'expressDesktopEnabled') {
     if (typeof value !== 'boolean') throw new Error(`${top} 必须是 true/false`)
     return
   }

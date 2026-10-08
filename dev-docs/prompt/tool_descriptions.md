@@ -301,7 +301,7 @@ action：
 · get（默认）看生效配置；给 path 只看某一项
 · set   改一项（path + value）
 · unset 删掉一项（回到默认值）· reset 全部恢复默认 · list 看默认值 + 生效值
-可用键：`commandWhitelist`（字符串数组；支持 "tp" 精确名、"/^gi.*/" 正则、"*" 全放行）· `mcModePresets`（哪些 preset 算 MC 模式——应含 MC+ 的 id）· `mcPlusPresets`（哪些算 MC+ 变体：开放标准模式全部工具）· `mcMode.allowOtherTools`（MC 模式白名单里**额外**放行的工具）· `mcMode.hideAdminTools`（默认 true）· `expressWebEnabled` / `expressWebBase`（**web 模式**文件分享开关 + base，如 https://example.com）· `expressDesktopEnabled` / `expressDesktopPort`（**桌面模式**文件分享开关 + 独立托管端口，默认 16049）· `exposeDebugTools`（是否向助手暴露调试用途的工具，默认 false）· `memoryDir`。
+可用键：`commandWhitelist`（字符串数组；支持 "tp" 精确名、"/^gi.*/" 正则、"*" 全放行）· `mcModePresets`（哪些 preset 算 MC 模式——应含 MC+ 的 id）· `mcPlusPresets`（哪些算 MC+ 变体：开放标准模式全部工具）· `mcMode.allowOtherTools`（MC 模式白名单里**额外**放行的工具）· `mcMode.hideAdminTools`（默认 true）· `expressWebEnabled` / `expressWebBase`（**web 模式**文件分享开关 + base，如 https://example.com）· `expressDesktopEnabled` / `expressDesktopPort`（**桌面模式**文件分享开关 + 独立托管端口，默认 16049）· `exposeDebugTools`（是否向助手暴露调试用途的工具，默认 false）· `allowWebSearch`（是否让 MC 模式的助手联网搜索，默认 true；MC+ 不受影响）。
 改完**立即生效**，落在 `$DSH_HOME/whale_craft/config.json`。（白名单只能"收窄"，不能凭空添加 preset 没挂的工具。）
 
 ## mc_debug_* 调试（默认不暴露；开「调试」开关后 MC / MC+ 可见）

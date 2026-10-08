@@ -113,7 +113,6 @@
 | `mcPlusPresets` | `['minecraft-plus']` | 其中哪些是 **MC+ 变体**（开放标准模式全部工具；须同时 ∈ mcModePresets） |
 | `mcMode.allowOtherTools` | `[]` | MC 模式白名单**额外**放行（只能收窄，不能凭空加；MC+ 不适用） |
 | `mcMode.hideAdminTools` | `true` | 隐藏 `mc_admin_*`（仅 MC 模式；MC+ 可见；另有 guard 硬拒） |
-| `memoryDir` | `null` | null = `<工作区>/.whale-craft` |
 | `allowAllCommands` | `false` | 指令白名单总开关 |
 | （提示词三开关 `injectWhaleCraftAgentsMd` / `injectWorkspaceAgentsMd` / `rulesFollowVersion` **已下放为按工作区**，存 `<工作区>/.whale-craft/config.json`，见 [§14 wsconfig](#14-srcwsconfigmjs--按工作区的配置)） | | |
 | `ensureMcPreset` | `true` | 旧宿主遗留：目录式自举「MC模式」（0.2.0-rc.2+ 由 `presets/*.patch.yml` 声明提供，此键 no-op） |
@@ -122,8 +121,9 @@
 | `expressDesktopEnabled` | `false` | **desktop 模式**文件分享开关 |
 | `expressDesktopPort` | `16049` | **desktop 模式**的独立托管端口（只监听 localhost） |
 | `exposeDebugTools` | `false` | 「MC设置 → 调试」页的「开放助手调试工具」开关（工作区无关）：是否向助手暴露调试用途的工具 |
+| `allowWebSearch` | `true` | 「MC设置 → 联网搜索」页的「允许联网搜索」开关（工作区无关）：MC 模式下是否暴露宿主 `web_search`；**MC+ 不受影响** |
 
-- `PluginConfig`：`load`（坏配置不崩、记 `lastError` 按默认跑；**顺带跑 `migrate()`**）、`set` 只认 `TOP_KEYS`（= DEFAULT_CONFIG 键）且过 `validate`、`values()` 深合并（数组整体覆盖）；语义 getter（`mcModePresets/mcPlusPresets/memoryDir/expressWebEnabled/expressWebBase/expressDesktopEnabled/expressDesktopPort/commandAllowed/isMcModePreset/isMcPlusPreset`…）每次现读 ⇒ **改完热生效**。
+- `PluginConfig`：`load`（坏配置不崩、记 `lastError` 按默认跑；**顺带跑 `migrate()`**）、`set` 只认 `TOP_KEYS`（= DEFAULT_CONFIG 键）且过 `validate`、`values()` 深合并（数组整体覆盖）；语义 getter（`mcModePresets/mcPlusPresets/expressWebEnabled/expressWebBase/expressDesktopEnabled/expressDesktopPort/commandAllowed/isMcModePreset/isMcPlusPreset`…）每次现读 ⇒ **改完热生效**。
 - `migrate()`：文件分享键逐档搬（都**删旧键**、只在真改动时落盘）——① 老 `expressMode: 'off'|'online'`（曾含 `'local'`）→ `expressWebEnabled`（`online`→`true`，其余→`false`）；② 2026-10-07 拆键：`expressEnabled`→`expressWebEnabled`、`expressBase`→`expressWebBase`。
 - `legacyPromptSwitches()`：从**文件原值**里取旧版全局存过的三个提示词开关（只取显式设过且类型合法的）—— 只作工作区建档时的一次性 seed 来源（消费方 index.js → `wsconfig.migrate`）。
 - `resolveStateDir`：`WHALE_CRAFT_STATE_DIR` → `WHALE_CRAFT_DIR`+whaleDir → `$DSH_HOME/whale_craft` → `~/.dsh/whale_craft`。
@@ -214,7 +214,7 @@
 - `PROTECTED_FILES / isProtectedName`（根级、大小写不敏感）；`isProtectedPathArg(raw)`（guard 用：裸名 或 含 `.whale-craft`/`whale_craft` 段的路径；嵌套记忆文件如 `_global/config.json` 不算）。
 - `WRITE_FILE_TOOLS=/^(write|edit)$/`、`MEMORY_WRITE_ACTIONS=append/write/delete/put`（**现无消费方**：guard 侧随 `mc_kit_memory` 于 2026-10-07 移除，保留供将来写类工具复用）；`rejectionText()` / `protectedWriteError(rel)` 统一文案。
 - `CREDENTIAL_PATH_RE`（`\.credentials`/`credentials.yaml`/`.dsh`）与 `SECRETS_DIR_RE`（`secrets/`）：凭据相关路径判定，**guard 与 `mc_kit_fs`（src/fsops.mjs）共用一份**（2026-10-08 从 guard 的两个内联正则提取）。
-- guard（index.js）对文件工具用它 + **解析到记忆根后正好是该文件**的二次判定（memoryDir 重定向时绝对路径不含 `.whale-craft` 段）；写入路径以 memory.mjs 的 `target.protected` 为兜底。
+- guard（index.js）对文件工具用它 + **解析到记忆根后正好是该文件**的二次判定（绝对路径不一定含 `.whale-craft` 段也照样判定）；写入路径以 memory.mjs 的 `target.protected` 为兜底。
 
 ## 15b. `src/fsops.mjs` —— `mc_kit_fs` 的文件系统操作（2026-10-08）
 
@@ -247,5 +247,5 @@
 ## 17. 模块依赖与不变式
 
 - 模块间 import：`config.mjs → express.mjs`（`EXPRESS_MODES/normalizeExpressBase/resolveExpressMode`）；`agentsmd.mjs → wsconfig.mjs`（版本读写）；`memory.mjs → protected.mjs`（保护判定）；`tool-def.mjs` 自解析宿主包（可缺省）；index.js 组装其余；`resolver-shim.mjs` 无导出、纯副作用（index.js 首条 import，必须早于其余全部）。
-- 记忆根定位（index.js `memoryRootFor`）：`WHALE_CRAFT_MEMORY_DIR` env → `pluginConfig.memoryDir` → `<会话 cwd>/.whale-craft` → `stateDir/memory` 兜底。
+- 记忆根定位（index.js `memoryRootFor`）：**就是** `<会话 cwd>/.whale-craft`；没有会话工作区 → `null`（无兜底目录、无 env/config 重定向 —— 2026-10-08 删掉旧的 `WHALE_CRAFT_MEMORY_DIR` 与 `config.memoryDir`）。
 - 跨模块不变式：① 记忆路径全过 `safePath`，受保护文件（RULES/AGENTS/config.json）**可读不可写**（写类方法拒绝）；② 凭据只进宿主凭据服务，`view()`/工具返回/HTTP 永不见；③ 发布区只服务 `.express/`，`.out/` 永不对外；④ LAN 只被动听；⑤ ping 永不 reject；⑥ 一切写给模型的注入都是"提示行"。

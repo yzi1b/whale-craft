@@ -18,13 +18,18 @@ import { fileURLToPath } from 'node:url'
 //    `%E4%B8%80…`，那个目录不存在 ⇒ 自检在"每会话实例分离"处 `EPERM: mkdir` 崩掉。
 //    运行时不受影响（它走 `homedir()`），只有自检会被卡住。
 process.env.MC_LOG = fileURLToPath(new URL('./logs/selfcheck.log', import.meta.url))
+/**
+ * 自检专用**临时工作区**：记忆根现在只认 `<会话工作区>/.whale-craft`（2026-10-08 删掉了
+ * `WHALE_CRAFT_MEMORY_DIR` 重定向），所以需要记忆的测试 agent 一律带这个 cwd。
+ */
+let checkWs
 {
   const { mkdtempSync } = await import('node:fs')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
   const whaleTmp = mkdtempSync(join(tmpdir(), 'whale-craft-'))
-  process.env.WHALE_CRAFT_DIR = whaleTmp                 // 配置 + 记忆的固定文件夹
-  process.env.WHALE_CRAFT_MEMORY_DIR = join(whaleTmp, 'memory')
+  process.env.WHALE_CRAFT_DIR = whaleTmp                 // 全局配置（stateDir）的固定文件夹
+  checkWs = mkdtempSync(join(tmpdir(), 'whale-ws-'))     // 测试用会话工作区
 }
 
 const tools = new Map()
@@ -292,6 +297,8 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   console.log(`  ${tools.has('mc_context') && tools.has('mc_players') ? '✅' : '❌'} 新增观察工具 mc_context / mc_players`)
   console.log(`  ${tools.has('mc_debug_sessions') && tools.has('mc_debug_diag') && !tools.has('mc_sessions') && !tools.has('mc_diag') ? '✅' : '❌'} 🔴 mc_sessions/mc_diag 已改名 mc_debug_sessions / mc_debug_diag`)
   console.log(`  ${/startsWith\('mc_debug_'\)/.test(codeOnly) && /exposeDebugTools/.test(codeOnly) ? '✅' : '❌'} 🔴 调试工具受 exposeDebugTools 门控（白名单 / MC+ deny / guard 三处）`)
+  // 2026-10-08：「允许联网搜索」开关（默认开）—— 白名单 + guard 两处按 allowWebSearch 收放 web_search
+  console.log(`  ${/MC_WEB_SEARCH_TOOL = 'web_search'/.test(codeOnly) && /allowWebSearch \? \[MC_WEB_SEARCH_TOOL\] : \[\]/.test(codeOnly) && /name === MC_WEB_SEARCH_TOOL && !pluginConfig\.allowWebSearch/.test(codeOnly) ? '✅' : '❌'} 🔴 web_search 受 allowWebSearch 门控（白名单 + guard 两处；MC+ 不套白名单故不受影响）`)
   console.log(`  ${/MC_PRESENT_TOOL = 'present'/.test(idx) && !/^\s+MC_PRESENT_TOOL,$/m.test(idx) ? '✅' : '❌'} 🔴 present **不再**进 MC 模式白名单（交付走 mc_kit_express；判定保留供 guard 兜底）`)
   console.log(`  ${/MC_PRESET_TOOL_GROUPS/.test(idx) && /availableToolGroups\(\)/.test(idx) ? '✅' : '❌'} 复制/重建 preset 时会补齐 MC 模式需要的工具组（tool-fs / tool-fs-search / tool-jobs / tool-goal / tool-todo / compaction）`)
   console.log(`  ${/const ensureToolGroupsInPreset/.test(idx) && /ensureToolGroupsInPreset\(svc, existingId\)/.test(idx) ? '✅' : '❌'} 🔴 **已存在的** preset（含本机手写那份）也会被补齐那几组（不动别的行）`)
@@ -811,37 +818,29 @@ console.log('\n--- 强制停止：UI 路径的真实顺序（停LLM → 退游�
   const cfgFollow = await callApi('PATCH', '/api/mc/config', { rulesFollowVersion: false })
   const md3 = await callApi('GET', '/api/mc/agents-md')
   console.log(`  ${cfgFollow.ok && cfgFollow.rulesFollowVersion === false && md3.followVersion === false ? '✅' : '❌'} PATCH 能关掉「随版本更新」（配置里记着，页面也读得到）`)
-  // 🔴 2026-10-03：三个提示词开关**按工作区**存（<工作区>/.whale-craft/config.json），不再写全局
-  // ⚠️ 自检默认把 WHALE_CRAFT_MEMORY_DIR 指向全局临时目录——这里临时摘掉，
-  //    让记忆根（连同 config.json）跟着**会话工作区**走（真机就是这么配的）
+  // 🔴 2026-10-03：三个提示词开关**按工作区**存（<工作区>/.whale-craft/config.json），不再写全局。
+  //    2026-10-08：记忆根没有 env 重定向了，本来就跟着**会话工作区**走。
   {
     const { readFileSync: rf } = await import('node:fs')
     const { join: jn } = await import('node:path')
-    const savedMem = process.env.WHALE_CRAFT_MEMORY_DIR
-    delete process.env.WHALE_CRAFT_MEMORY_DIR
-    try {
-      const cfgFollowA = await callApi('PATCH', '/api/mc/config', { rulesFollowVersion: false })
-      const cfgApi2 = await callApi('GET', '/api/mc/config')
-      const wsCfgFile = jn(apiWs, '.whale-craft', 'config.json')
-      let wsCfgRaw = null
-      try { wsCfgRaw = JSON.parse(rf(wsCfgFile, 'utf8')) } catch { wsCfgRaw = null }
-      console.log(`  ${cfgFollowA.ok && wsCfgRaw?.rulesFollowVersion === false && wsCfgRaw?.schema === 1 ? '✅' : '❌'} 🔴 开关落在**本工作区**的 .whale-craft/config.json（schema:1 + rulesFollowVersion:false）`)
-      console.log(`  ${cfgApi2.workspaceConfigFile === wsCfgFile && cfgApi2.rulesFollowVersion === false ? '✅' : '❌'} 配置接口报出工作区配置文件路径并回读新值（${String(cfgApi2.workspaceConfigFile)}）`)
-      const globalRaw = (() => { try { return JSON.parse(rf(cfgApi2.configFile, 'utf8')) } catch { return {} } })()
-      console.log(`  ${globalRaw.rulesFollowVersion === undefined && globalRaw.injectWorkspaceAgentsMd === undefined ? '✅' : '❌'} 🔴 全局 config.json 里不再写这三个键（只留迁移 seed 语义）`)
-      const cfgFollow2 = await callApi('PATCH', '/api/mc/config', { rulesFollowVersion: true, injectWorkspaceAgentsMd: true }, 'sess-API2')
-      const mdWs1 = await callApi('GET', '/api/mc/agents-md')
-      const mdWs2 = await callApi('GET', '/api/mc/agents-md', undefined, 'sess-API2')
-      console.log(`  ${cfgFollow2.ok && cfgFollow2.injectWorkspaceAgentsMd === true && mdWs1.followVersion === false && mdWs2.followVersion === true ? '✅' : '❌'} 🔴 两个工作区互不影响（A 关随版本更新 / B 开 + 额外注入工作区 AGENTS.md）`)
-      let wsCfgA2 = null
-      let wsCfgB = null
-      try { wsCfgA2 = JSON.parse(rf(wsCfgFile, 'utf8')) } catch {}
-      try { wsCfgB = JSON.parse(rf(jn(apiWs2, '.whale-craft', 'config.json'), 'utf8')) } catch {}
-      console.log(`  ${wsCfgB?.injectWorkspaceAgentsMd === true && wsCfgA2?.injectWorkspaceAgentsMd === undefined ? '✅' : '❌'} 🔴 B 的注入开关没有串到 A（文件级隔离）`)
-    } finally {
-      if (savedMem === undefined) delete process.env.WHALE_CRAFT_MEMORY_DIR
-      else process.env.WHALE_CRAFT_MEMORY_DIR = savedMem
-    }
+    const cfgFollowA = await callApi('PATCH', '/api/mc/config', { rulesFollowVersion: false })
+    const cfgApi2 = await callApi('GET', '/api/mc/config')
+    const wsCfgFile = jn(apiWs, '.whale-craft', 'config.json')
+    let wsCfgRaw = null
+    try { wsCfgRaw = JSON.parse(rf(wsCfgFile, 'utf8')) } catch { wsCfgRaw = null }
+    console.log(`  ${cfgFollowA.ok && wsCfgRaw?.rulesFollowVersion === false && wsCfgRaw?.schema === 1 ? '✅' : '❌'} 🔴 开关落在**本工作区**的 .whale-craft/config.json（schema:1 + rulesFollowVersion:false）`)
+    console.log(`  ${cfgApi2.workspaceConfigFile === wsCfgFile && cfgApi2.rulesFollowVersion === false ? '✅' : '❌'} 配置接口报出工作区配置文件路径并回读新值（${String(cfgApi2.workspaceConfigFile)}）`)
+    const globalRaw = (() => { try { return JSON.parse(rf(cfgApi2.configFile, 'utf8')) } catch { return {} } })()
+    console.log(`  ${globalRaw.rulesFollowVersion === undefined && globalRaw.injectWorkspaceAgentsMd === undefined ? '✅' : '❌'} 🔴 全局 config.json 里不再写这三个键（只留迁移 seed 语义）`)
+    const cfgFollow2 = await callApi('PATCH', '/api/mc/config', { rulesFollowVersion: true, injectWorkspaceAgentsMd: true }, 'sess-API2')
+    const mdWs1 = await callApi('GET', '/api/mc/agents-md')
+    const mdWs2 = await callApi('GET', '/api/mc/agents-md', undefined, 'sess-API2')
+    console.log(`  ${cfgFollow2.ok && cfgFollow2.injectWorkspaceAgentsMd === true && mdWs1.followVersion === false && mdWs2.followVersion === true ? '✅' : '❌'} 🔴 两个工作区互不影响（A 关随版本更新 / B 开 + 额外注入工作区 AGENTS.md）`)
+    let wsCfgA2 = null
+    let wsCfgB = null
+    try { wsCfgA2 = JSON.parse(rf(wsCfgFile, 'utf8')) } catch {}
+    try { wsCfgB = JSON.parse(rf(jn(apiWs2, '.whale-craft', 'config.json'), 'utf8')) } catch {}
+    console.log(`  ${wsCfgB?.injectWorkspaceAgentsMd === true && wsCfgA2?.injectWorkspaceAgentsMd === undefined ? '✅' : '❌'} 🔴 B 的注入开关没有串到 A（文件级隔离）`)
   }
   const mdPut = await callApi('PUT', '/api/mc/agents-md', { text: '# 自检临时准则' })
   const md1 = await callApi('GET', '/api/mc/agents-md')
@@ -905,8 +904,8 @@ console.log('\n--- 发布区：目录即白名单 / 不用 token / 必须防穿�
   console.log(`  ${E.EXPRESS_DIR === '.express' && E.OUT_DIR === '.out' ? '✅' : '❌'} 目录名：发布区 .express / 默认输出 .out（都以点开头）`)
   const cwd = join(mkdtempSync(join(tmpdir(), 'whale-express-')), 'myproj')
   mkdirSync(cwd, { recursive: true })        // 工作区目录本身得存在（闸门会 statSync 它）
-  // 自检里记忆根被 WHALE_CRAFT_MEMORY_DIR 指到临时目录 → 发布区跟着它（这是**正确**行为，测试照它建）
-  const memRoot = String(process.env.WHALE_CRAFT_MEMORY_DIR ?? '') || join(cwd, '.whale-craft')
+  // 记忆根 = <会话工作区>/.whale-craft（2026-10-08 起无 env 重定向）→ 发布区跟着它
+  const memRoot = join(cwd, '.whale-craft')
   const exRoot = E.expressRootOf(memRoot)
   mkdirSync(join(exRoot, 'world1'), { recursive: true })
   writeFileSync(join(exRoot, 'world1', 'example.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
@@ -1034,9 +1033,7 @@ console.log('\n--- 发布区：目录即白名单 / 不用 token / 必须防穿�
   {
     const tool = tools.get('mc_kit_express')
     console.log(`  ${tool ? '✅' : '❌'} 工具已注册：mc_kit_express（参数 ${JSON.stringify(Object.keys(tool?.parameters ?? {}))}）`)
-    // 真机上记忆根就是 <工作区>/.whale-craft → 这里临时去掉自检的 WHALE_CRAFT_MEMORY_DIR，按真机形态测
-    const savedMem = process.env.WHALE_CRAFT_MEMORY_DIR
-    delete process.env.WHALE_CRAFT_MEMORY_DIR
+    // 记忆根就是 <工作区>/.whale-craft（2026-10-08 起无 env 重定向）
     try {
       const wsEx = join(cwd, '.whale-craft', E.EXPRESS_DIR, 'world1')
       mkdirSync(wsEx, { recursive: true })
@@ -1219,8 +1216,7 @@ console.log('\n--- 发布区：目录即白名单 / 不用 token / 必须防穿�
       // 模式字段：web ctx（无 profileContext）应报 web；四键齐全
       console.log(`  ${bd.mode === 'web' && 'expressDesktopEnabled' in bd && 'expressDesktopPort' in bd ? '✅' : '❌'} config 回 mode=web + web/desktop 两套键（desktop 默认端口 ${bd.expressDesktopPort}）`)
     } finally {
-      if (savedMem === undefined) delete process.env.WHALE_CRAFT_MEMORY_DIR
-      else process.env.WHALE_CRAFT_MEMORY_DIR = savedMem
+      /* 记忆根不再有 env 重定向（2026-10-08 删） */
     }
   }
 }
@@ -1900,12 +1896,14 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const PLUS_PREFIX = '你是一个由 {{model}} 模型驱动的编程 agent。同时 whale_craft 插件赋予你使用无头机器人进入 Minecraft Java 版服务器的能力。你可以调用工具与世界和玩家互动。编程与系统操作相关的工具仍然暴露，用于扩展自身 MC 能力或进行调试研究。'
     const personaOk = mcSrc.includes(MC_PREFIX) && plusSrc.includes(PLUS_PREFIX)
     console.log(`  ${personaOk ? '✅' : '❌'} 🔴 两个 preset 的 persona 各自是我们的（MC 游戏助理 / 编程 agent；不复制官方那句）`)
-    const mcNeeds = ['@deepseek-ai/dsh-persona', '@deepseek-ai/dsh-tool-fs', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-tool-jobs', '@deepseek-ai/dsh-tool-goal', '@deepseek-ai/dsh-tool-todo', '@deepseek-ai/dsh-compaction-basic']
-    console.log(`  ${mcNeeds.every((n) => mcSrc.includes(n)) && !mcSrc.includes('@deepseek-ai/dsh-tool-present') ? '✅' : '❌'} MC模式组成含 persona/tool-fs/tool-fs-search/tool-jobs/tool-goal/tool-todo/compaction，且**不含** present`)
+    const mcNeeds = ['@deepseek-ai/dsh-persona', '@deepseek-ai/dsh-tool-fs', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-tool-jobs', '@deepseek-ai/dsh-tool-goal', '@deepseek-ai/dsh-tool-todo', '@deepseek-ai/dsh-tool-web', '@deepseek-ai/dsh-compaction-basic']
+    console.log(`  ${mcNeeds.every((n) => mcSrc.includes(n)) && !mcSrc.includes('@deepseek-ai/dsh-tool-present') ? '✅' : '❌'} MC模式组成含 persona/tool-fs/tool-fs-search/tool-jobs/tool-goal/tool-todo/tool-web/compaction，且**不含** present`)
+    // 🔴 2026-10-08：MC 模式挂 tool-web 只为 web_search —— fetch 必须关（网页抓取走 mc_kit_web_fetch）
+    console.log(`  ${/name: '@deepseek-ai\/dsh-tool-web'\n\s+config:\n\s+fetch: false/.test(mcSrc) ? '✅' : '❌'} 🔴 MC模式只挂 search、不挂 fetch（tool-web 的 fetch: false）`)
     const plusNeeds = ['@deepseek-ai/dsh-persona', '@deepseek-ai/dsh-agent-instructions', '@deepseek-ai/dsh-tool-pwsh', '@deepseek-ai/dsh-tool-bash', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-skill-filesystem', '@deepseek-ai/dsh-plan-mode', '@deepseek-ai/dsh-tool-subagent', '@deepseek-ai/dsh-tool-web', '@deepseek-ai/dsh-plugin-manager/tools']
     console.log(`  ${plusNeeds.every((n) => plusSrc.includes(n)) ? '✅' : '❌'} MC+模式组成 = 标准模式全表（persona 除外）：${plusNeeds.filter((n) => !plusSrc.includes(n)).join(', ') || '无缺'}`)
     const mountsSelf = /\bname:\s*whale_craft\b/.test(mcSrc) || /\bname:\s*whale_craft\b/.test(plusSrc)
-    console.log(`  ${!mcSrc.includes('@deepseek-ai/dsh-tool-pwsh') && !mountsSelf ? '✅' : '❌'} 🔴 MC模式**不挂**标准工具、preset 里**不挂**插件自己（工具走全局注册 + restrict/guard；persona 正文里出现 "whale_craft" 不算）`)
+    console.log(`  ${!mcSrc.includes('@deepseek-ai/dsh-tool-pwsh') && !mountsSelf ? '✅' : '❌'} 🔴 MC模式**不挂**标准工具（唯一例外 = tool-web，只为 web_search）、preset 里**不挂**插件自己（工具走全局注册 + restrict/guard；persona 正文里出现 "whale_craft" 不算）`)
     console.log(`  ${pkg.files?.includes('presets') ? '✅' : '❌'} files 里列了 presets/（发布包才带得上声明）`)
   }
   const { mkdtempSync } = await import('node:fs')
@@ -2047,9 +2045,9 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
 
   // guard 硬化：MC 模式不许用文件工具绕去读凭据 / 碰记忆文件夹以外的任何文件；
   // 受保护文件（RULES.md / AGENTS.md / config.json）**可读不可写**（用户 2026-10-03 定）
-  const memRoot = String(process.env.WHALE_CRAFT_MEMORY_DIR)
+  const memRoot = join(checkWs, '.whale-craft')
   const callGuard = (spec) => guards.map((g) => { try { return g(spec) } catch { return undefined } }).find(Boolean)
-  const mcGuardAgent = { id: 'sess-MC', ctx: mcCtxObj }
+  const mcGuardAgent = { id: 'sess-MC', ctx: mcCtxObj, session: { header: { cwd: checkWs } } }
   const credRead = callGuard({ name: 'read', arguments: { path: 'C:\\Users\\x\\.dsh\\.credentials.yaml' }, agent: mcGuardAgent })
   console.log(`  ${credRead ? '✅' : '❌'} MC 模式读 .credentials.yaml 被 guard 拒绝：${String(credRead).slice(0, 28)}`)
   const secretsRead = callGuard({ name: 'read', arguments: { path: 'E:\\x\\.agent-docs\\secrets\\example.md' }, agent: mcGuardAgent })
@@ -2083,20 +2081,20 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     ['mc_kit_fs', { action: 'delete', path: 'E:\\x\\secret.txt' }],          // mc_kit_fs 也受同一把沙箱锁
     ['mc_kit_fs', { action: 'copy', from: 'ok.md', to: 'E:\\x\\out.md' }],  // to 在外 → 越界
   ]
-  const escaped = jail.filter(([name, args]) => callGuard({ name, arguments: args, agent: { id: 'sess-MC', ctx: mcCtxObj } }) === undefined)
+  const escaped = jail.filter(([name, args]) => callGuard({ name, arguments: args, agent: mcGuardAgent }) === undefined)
   console.log(`  ${escaped.length === 0 ? '✅' : '❌'} 🔴 MC 模式的文件工具越界全被拒（${jail.length - escaped.length}/${jail.length}）：${escaped.map(([n]) => n).join(', ') || '无漏网'}`)
   const insideOk = [['read', { path: join(memRoot, 'notes.md') }], ['glob', { pattern: '*.md', path: memRoot }], ['write', { path: 'notes.md' }], ['mc_kit_fs', { action: 'make_dir', path: join(memRoot, 'newdir') }]]
-    .every(([name, args]) => callGuard({ name, arguments: args, agent: { id: 'sess-MC', ctx: mcCtxObj } }) === undefined)
+    .every(([name, args]) => callGuard({ name, arguments: args, agent: mcGuardAgent }) === undefined)
   console.log(`  ${insideOk ? '✅' : '❌'} 记忆文件夹**内**的读写放行（绝对路径 + 相对路径都行）`)
   const plainExec3 = { name: 'pwsh', arguments: { command: 'whoami' }, agent: { id: 'sess-MC', ctx: mcCtxObj } }
   const plainRead = guards.every((g) => { try { return g(plainExec3) === undefined } catch { return true } })
   console.log(`  ${plainRead ? '✅' : '❌'} guard 不拦 pwsh（它靠白名单**看不见**，不是靠 guard）`)
   // `present`（显式文件交付）：允许交付**工作区内**的文件（out/ 与 .whale-craft/ 都在里面），外面一律拒
-  const presentIn = callGuard({ name: 'present', arguments: { files: [{ path: 'out/map.png', description: '地图' }] }, agent: { id: 'sess-MC', ctx: mcCtxObj } })
+  const presentIn = callGuard({ name: 'present', arguments: { files: [{ path: 'out/map.png', description: '地图' }] }, agent: mcGuardAgent })
   console.log(`  ${presentIn === undefined ? '✅' : '❌'} present 交付工作区内的文件放行（out/x.png）`)
-  const presentInMem = callGuard({ name: 'present', arguments: { files: [{ path: '.whale-craft/README.md' }] }, agent: { id: 'sess-MC', ctx: mcCtxObj } })
+  const presentInMem = callGuard({ name: 'present', arguments: { files: [{ path: '.whale-craft/README.md' }] }, agent: mcGuardAgent })
   console.log(`  ${presentInMem === undefined ? '✅' : '❌'} present 交付记忆夹里的文件也放行`)
-  const presentOut = callGuard({ name: 'present', arguments: { files: [{ path: 'E:\\<dsh-checkout>\\x.png' }] }, agent: { id: 'sess-MC', ctx: mcCtxObj } })
+  const presentOut = callGuard({ name: 'present', arguments: { files: [{ path: 'E:\\<dsh-checkout>\\x.png' }] }, agent: mcGuardAgent })
   console.log(`  ${presentOut ? '✅' : '❌'} present 交付工作区外的文件被拒：${String(presentOut).slice(0, 34)}`)
   const presentNorm = guards.every((g) => { try { return g({ name: 'present', arguments: { files: [{ path: 'E:\\x\\y.png' }] }, agent: { id: 'sess-P', ctx: plainCtxObj } }) === undefined } catch { return true } })
   console.log(`  ${presentNorm ? '✅' : '❌'} 普通会话的 present 不受影响（隔离只管 MC 模式）`)
@@ -2313,6 +2311,25 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   console.log(`  ${allowList && ['read', 'write', 'edit', 'read_image'].every((n) => allowList.includes(n)) ? '✅' : '❌'} 在场的文件工具在白名单里（路径由 guard 限在 .whale-craft/）`)
   console.log(`  ${allowList && !allowList.includes('present') ? '✅' : '❌'} 🔴 present **不在**白名单里（MC 模式不暴露文件交付；走 mc_kit_express）`)
   console.log(`  ${allowList && ['job_list', 'job_output', 'job_kill', 'get_goal', 'create_goal', 'update_goal', 'todo_write'].every((n) => allowList.includes(n)) ? '✅' : '❌'} 🔴 后台任务/目标/待办（job_* / goal_* / todo_write）按 dsh-tools.md 进入了白名单`)
+  // 🔴 2026-10-08「允许联网搜索」（默认开）：开 → web_search 进白名单；关 → 不进 + guard 硬拒
+  console.log(`  ${allowList && allowList.includes('web_search') ? '✅' : '❌'} 🔴 默认（开关开）白名单**含** web_search`)
+  {
+    const before = restrictCalls.length
+    await tools.get('mc_admin_config').execute({ action: 'set', path: 'allowWebSearch', value: false }, A)
+    const offAgent = { id: 'sess-MC-NOWEB', session: mkSession('whale-mcnoweb-'), ctx: makeAgentCtx('minecraft'), inbox: mkInbox() }
+    fire('agent/created', offAgent)
+    const offAllow = restrictCalls.slice(before).find((c) => c.preset === 'minecraft')?.f?.allow ?? null
+    console.log(`  ${Array.isArray(offAllow) && !offAllow.includes('web_search') ? '✅' : '❌'} 🔴 开关关掉后新建的 MC 会话白名单**不含** web_search${offAllow ? `（${offAllow.length} 个）` : ''}`)
+    const offGuard = callGuard({ name: 'web_search', arguments: {}, agent: { id: 'sess-MC-NOWEB', ctx: makeAgentCtx('minecraft') } })
+    console.log(`  ${/联网搜索未启用/.test(String(offGuard)) ? '✅' : '❌'} 🔴 开关关掉后 guard 硬拒 web_search：${String(offGuard).slice(0, 30)}`)
+    const plainWeb = callGuard({ name: 'web_search', arguments: {}, agent: { id: 'sess-P3', ctx: makeAgentCtx('standard') } })
+    console.log(`  ${plainWeb === undefined ? '✅' : '❌'} 联网搜索开关**不误伤普通会话**（标准模式的 web_search 照常）`)
+    // MC+ 不受本开关影响（不套白名单 ⇒ 不经过这条 allow 列表）
+    const plusOffAgent = { id: 'sess-MCP-NOWEB', session: mkSession('whale-mcpnoweb-'), ctx: makeAgentCtx('minecraft-plus'), inbox: mkInbox() }
+    fire('agent/created', plusOffAgent)
+    console.log(`  ${restrictCalls.slice(before).every((c) => !(c.preset === 'minecraft-plus' && Array.isArray(c.f?.allow))) ? '✅' : '❌'} 🔴 开关关掉后 MC+ 仍**不套白名单**（web_search 照常可见）`)
+    await tools.get('mc_admin_config').execute({ action: 'unset', path: 'allowWebSearch' }, A)
+  }
   // 🔴 宿主对不认识的名字**抛错**；要是直接放弃，隔离就等于没做（pwsh 又回来了）
   console.log(`  ${allowList && !allowList.includes('glob') && !allowList.includes('grep') ? '✅' : '❌'} 🔴 不在场的工具（这台 preset 没挂 tool-fs-search ⇒ glob/grep）被过滤掉，**不是**整次白名单作废`)
   console.log(`  ${allowList && allowList.length > 5 ? '✅' : '❌'} 过滤后白名单仍然生效（${allowList?.length ?? 0} 个）`)
@@ -2486,8 +2503,6 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const ws = mkdtempSync(join(tmpdir(), 'whale-ws-'))
-    const savedMemDir = process.env.WHALE_CRAFT_MEMORY_DIR
-    delete process.env.WHALE_CRAFT_MEMORY_DIR        // 让记忆根跟着**会话工作区**走（真机就是这么配的）
     const seedAgent = { id: 'sess-SEED', session: mkSession2(ws), ctx: makeAgentCtx('minecraft'), inbox: mkInbox() }
     fire('agent/created', seedAgent)
     const wsRoot = join(ws, '.whale-craft')
@@ -2565,8 +2580,6 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const restrictBefore = restrictCalls.length
     fire('agent/created', noWs)
     console.log(`  ${restrictCalls.length === restrictBefore ? '✅' : '❌'} 没工作区的 MC 会话**不套权限策略**（拒绝进入 MC 模式）`)
-    if (savedMemDir === undefined) delete process.env.WHALE_CRAFT_MEMORY_DIR
-    else process.env.WHALE_CRAFT_MEMORY_DIR = savedMemDir
   }
 
   // ⑥ 「MC设置」入口的模式门控接口（2026-09-16 真机事故：普通会话也显示了设置按钮）
@@ -2640,8 +2653,6 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   console.log(`  ${noWsCfg.json?.ok === true && noWsCfg.json?.hasWorkspace === false ? '✅' : '❌'} 会话没工作区 → 无工作区模式（放行；工作区键为 null）`)
 
   // 反面：有工作区 → 放行，并且**在这个时机**把 `.whale-craft/` 备好（"点开设置即建"）
-  const memDirBefore = process.env.WHALE_CRAFT_MEMORY_DIR
-  delete process.env.WHALE_CRAFT_MEMORY_DIR          // 让记忆根跟着会话工作区走（真机就是这么配的）
   const ws3 = (await import('node:fs')).mkdtempSync(join((await import('node:os')).tmpdir(), 'whale-ws3-'))
   const wsAgent = { id: 'sess-WSOK', session: { header: { cwd: ws3 } }, ctx: makeAgentCtx('minecraft') }
   fakeCtx.agents = { get: (id) => (id === 'sess-WSOK' ? wsAgent : id === 'sess-NOWS' ? noWsAgent2 : undefined) }
@@ -2665,8 +2676,6 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   console.log(`  ${nowsMd.json?.ok === true && nowsMd.json?.readOnly === true && nowsMd.json?.hasWorkspace === false && typeof nowsMd.json?.text === 'string' && nowsMd.json.text.length > 0 && nowsMd.json?.rulesVersion === null ? '✅' : '❌'} 无工作区 → 提示词**只读**返回内置默认（readOnly / rulesVersion=null）`)
   const nowsEx = await callMc2('GET', '/api/mc/express')
   console.log(`  ${nowsEx.json?.ok === false ? '✅' : '❌'} 无工作区 → 发布区接口仍拒绝（分享发布区无工作区不可用）`)
-  if (memDirBefore === undefined) delete process.env.WHALE_CRAFT_MEMORY_DIR
-  else process.env.WHALE_CRAFT_MEMORY_DIR = memDirBefore
 }
 
 // ── MC账户体系（元数据 / 凭据分离；LLM 只能看基本信息）──
@@ -2995,6 +3004,16 @@ console.log('\n--- 行事准则 RULES.md / 新开关 / 边界信息 ---')
   console.log(`  ${debugOn.value === true ? '✅' : '❌'} 管理员工具能设 exposeDebugTools（当前 ${debugOn.value}）`)
   const debugBad = await tools.get('mc_admin_config').execute({ action: 'set', path: 'exposeDebugTools', value: 'yes' }, A).catch((e) => e.message)
   console.log(`  ${/exposeDebugTools 必须是/.test(String(debugBad)) ? '✅' : '❌'} 非布尔被拒：${String(debugBad).slice(0, 40)}…`)
+  await tools.get('mc_admin_config').execute({ action: 'reset' }, A)
+
+  /* 「允许联网搜索」开关（2026-10-08）：全局配置键、**默认开**、有类型校验 */
+  const webDefault = await tools.get('mc_admin_config').execute({ action: 'get', path: 'allowWebSearch' }, A)
+  console.log(`  ${webDefault.value === true ? '✅' : '❌'} 🔴 allowWebSearch 默认**开**（${webDefault.value}）`)
+  await tools.get('mc_admin_config').execute({ action: 'set', path: 'allowWebSearch', value: false }, A)
+  const webOff = await tools.get('mc_admin_config').execute({ action: 'get', path: 'allowWebSearch' }, A)
+  console.log(`  ${webOff.value === false ? '✅' : '❌'} 管理员工具能关掉 allowWebSearch（当前 ${webOff.value}）`)
+  const webBad = await tools.get('mc_admin_config').execute({ action: 'set', path: 'allowWebSearch', value: 1 }, A).catch((e) => e.message)
+  console.log(`  ${/allowWebSearch 必须是/.test(String(webBad)) ? '✅' : '❌'} 非布尔被拒：${String(webBad).slice(0, 40)}…`)
   await tools.get('mc_admin_config').execute({ action: 'reset' }, A)
 
   /* 🔴 老配置迁移（两档）：expressMode → expressWebEnabled；expressEnabled/expressBase → expressWebEnabled/expressWebBase（都删旧键、落盘） */
@@ -4051,6 +4070,12 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
     ['不可撤销那句用 <strong>（HTML 不认 markdown 的 **）', /React\.createElement\('strong', \{\}, '全部删掉'\)/.test(code)],
     ['UI 里没有 markdown 式 `**`（渲染出来是字面星号）', !/'[^'\n]*\*\*[^'\n]*'/.test(code)],
     ['清除走 DELETE /api/mc/express', /apiDelete\(withSid\('\/api\/mc\/express'\)\)/.test(code)],
+    // ── 「联网搜索」页（2026-10-08）：工作区无关的「允许联网搜索」开关（默认开）──
+    ['「联网搜索」页存在（WebSearchPane + data-wc-pane-page:websearch）', /function WebSearchPane/.test(code) && /'data-wc-pane-page': 'websearch'/.test(code)],
+    ['标签页叫「联网搜索」，排在「调试」之前', /label: '联网搜索'/.test(code) && code.indexOf("label: '联网搜索'") < code.indexOf("label: '调试'")],
+    ['开关叫「允许联网搜索」，描述逐字（MC+ 不受限）', /label: '允许联网搜索'/.test(code) && /允许MC模式下的助手联网搜索内容，MC\+模式不受限制/.test(code)],
+    ['「允许联网搜索」开关一拨就存（乐观更新 + 失败回滚）', /setAllowWebSearch\(want\)/.test(code) && /allowWebSearch: want/.test(code) && /if \(!ok\) setAllowWebSearch\(prev\)/.test(code)],
+    ['前端把服务端值按"默认开"读（!== false）', /setAllowWebSearch\(c\.allowWebSearch !== false\)/.test(code)],
     // ── 「调试」页（2026-10-05）：工作区无关的「开放助手调试工具」开关 ──
     ['「调试」页存在（DebugPane + data-wc-pane-page:debug）', /function DebugPane/.test(code) && /'data-wc-pane-page': 'debug'/.test(code)],
     ['标签页叫「调试」，开关叫「开放助手调试工具」', /label: '调试'/.test(code) && /label: '开放助手调试工具'/.test(code)],

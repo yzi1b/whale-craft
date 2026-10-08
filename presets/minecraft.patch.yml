@@ -6,9 +6,10 @@
 # （`preset-minecraft`）覆盖 `config.plugins`，不要直接改这个文件（包更新会覆盖）。
 #
 # 组成刻意保持"窄"：persona + 文件工具 + 文件检索 + job controller（看门狗要挂 job）+
-# 目标 + 待办 + 压缩组。宿主的标准工具（shell/子代理/网络/技能/present…）一律不挂，
+# 目标 + 待办 + 联网搜索 + 压缩组。宿主其余标准工具（shell/子代理/技能/present…）一律不挂，
 # 工具面由插件在运行时再收一道白名单（index.js applyMcModePolicy）。
-# 暴露清单与 +/−/? 标记见 dev-docs/tools/dsh-tools.md（2026-10-08：开 glob/grep + job_* + goal_* + todo_write；present 不开，交付走 mc_kit_express）。
+# 暴露清单与 +/−/? 标记见 dev-docs/tools/dsh-tools.md（2026-10-08：开 glob/grep + job_* + goal_* + todo_write + web_search；
+# web_search 另受「MC设置 → 联网搜索」的 allowWebSearch 开关（默认开）门控；present 不开，交付走 mc_kit_express）。
 - insert:
     - id: preset-minecraft
       name: '@deepseek-ai/dsh-agent-preset'
@@ -37,6 +38,14 @@
             name: '@deepseek-ai/dsh-tool-todo'
             config:
               allowParallelInProgress: true
+          # 联网搜索：**只挂 web_search**（fetch 关掉 —— 网页抓取仍走 mc_kit_web_fetch）。
+          # tool-web 那一行在 host 平面被 dsh-web-app 禁掉了，由各 preset 自己组合，所以这里必须挂。
+          # 是否对模型可见由「MC设置 → 联网搜索」的 allowWebSearch（默认开）在运行时再收一道
+          # （index.js 白名单 + guard 双保险）。
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: false
           - id: compaction
             name: cordis:group
             group: true

@@ -14,8 +14,8 @@
  *   · DSH_HOME=仓库内 .dev/home —— 账户库/配置/会话/预设/插件状态全在里面，随便造，删了重来。
  *   · 首次从 ~/.dsh 拷一份 `.credentials.yaml`（模型 key）与 whale_craft 的
  *     accounts.json / config.json 当底子；之后两边互不影响，**绝不写回生产**。
- *   · 记忆根默认钉在 .dev/home/memory（WHALE_CRAFT_MEMORY_DIR），不往任何真实工作区写
- *     `.whale-craft/`；`--shared-memory` 可切回"按会话工作区"的真实行为。
+ *   · 记忆跟**会话工作区**走（`<工作区>/.whale-craft`，与生产完全一致，不再有任何重定向）：
+ *     请用一个**专门的调试工作区**开会话，别拿真实工作区 —— 否则 `.whale-craft/` 会写进那边。
  *
  * 🔴 为什么必须走 link 安装：DSH 的运行时解析只认 profile 目录内的包，仓库在 profile 之外，
  *    靠 profile 里一条 cordis.patch.yml 是接不进去的 —— 必须 `dsh plugin add link:<仓库>`。
@@ -271,17 +271,16 @@ async function pickPort (wanted) {
 }
 
 /**
- * 子进程环境：DSH_HOME 钉在调试 home；记忆根默认隔离。
+ * 子进程环境：DSH_HOME 钉在调试 home（记忆根跟会话工作区走，见文件头）。
  * 🔴 ELECTRON_RUN_AS_NODE 必须带上 —— 少它的话那个 exe 会以**桌面应用本体**启动
  *    （真实事故：bootWeb 漏了它，`dev:web` 拉起的是 GUI 窗口 + desktop profile）。
  *    只有 launchDesktop 那个真正要开窗口的地方才把它摘掉。
  */
-function childEnv (opts = {}) {
+function childEnv () {
   return {
     ...process.env,
     ELECTRON_RUN_AS_NODE: '1',
     DSH_HOME: DEV_HOME,
-    ...(opts.sharedMemory ? {} : { WHALE_CRAFT_MEMORY_DIR: join(DEV_HOME, 'memory') }),
   }
 }
 
@@ -309,7 +308,7 @@ async function startWeb (opts) {
     `  插件   ${PKG}（link）`,
     `  运行时 ${runtime.label}`,
     `  热更   改 ${WATCH_FILES.join('/')}、${WATCH_DIRS.join('/')}/ 要重启${opts.watch ? ' —— --watch 已开，自动重启' : '，加 --watch 让它自己重启'}；改 client.js 只需刷新浏览器`,
-    opts.sharedMemory ? '  记忆   按会话工作区（真实行为）' : `  记忆   ${join(DEV_HOME, 'memory')}（隔离，不写真实工作区）`,
+    '  记忆   跟会话工作区走：<工作区>/.whale-craft（与生产一致；请用专门的调试工作区）',
     '  停止   Ctrl+C',
   ])
   bootWeb(port, opts, opts.open, runtime)
@@ -512,7 +511,7 @@ function status () {
   console.log(`  生产 home  ${PROD_HOME}（只在首次拷一份底子，之后互不影响）`)
   console.log(`  web        ${profileState('web')}`)
   console.log(`  desktop    ${profileState('desktop')}`)
-  console.log(`  记忆       ${existsSync(join(DEV_HOME, 'memory')) ? join(DEV_HOME, 'memory') + '（隔离）' : '还没起过（默认会隔离到 .dev/home/memory）'}`)
+  console.log('  记忆       跟会话工作区走：<工作区>/.whale-craft（请用专门的调试工作区）')
   console.log(`  web 实例   ${running ? `在跑 pid=${running.pid} port=${running.port}（${running.at}）` : '没在跑'}`)
   console.log(`  桌面应用   ${desktopAppRunning() ? '在跑（⚠️ 与 desktop 调试实例互斥，先退出它）' : '没在跑'}`)
 }
@@ -529,7 +528,7 @@ function stop () {
 const say = (lines) => { for (const l of lines) console.log(l) }
 
 function parseArgs (argv) {
-  const opts = { port: null, open: true, watch: false, sharedMemory: false }
+  const opts = { port: null, open: true, watch: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--port') opts.port = Number(argv[++i]) || null
@@ -537,7 +536,6 @@ function parseArgs (argv) {
     else if (a === '--no-open') opts.open = false
     else if (a === '--open') opts.open = true
     else if (a === '--watch') opts.watch = true
-    else if (a === '--shared-memory') opts.sharedMemory = true
     else { console.error(`不认识的参数：${a}`); process.exit(2) }
   }
   return opts
@@ -557,6 +555,6 @@ else if (cmd === 'link') {
 } else if (cmd === 'status') status()
 else if (cmd === 'stop') stop()
 else {
-  console.error('用法: node tools/dev.mjs [web|desktop|link|status|stop] [--port N] [--no-open] [--watch] [--shared-memory]')
+  console.error('用法: node tools/dev.mjs [web|desktop|link|status|stop] [--port N] [--no-open] [--watch]')
   process.exit(2)
 }

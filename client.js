@@ -1837,7 +1837,33 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       return `${(v / 1024 / 1024).toFixed(1)} MB`
     }
 
-    /* ------------------------------------------------------------ 页 5：调试 */
+    /* ------------------------------------------------------------ 页 5：联网搜索 */
+
+    /**
+     * 「联网搜索」页：只有一个「允许联网搜索」开关（工作区无关、落全局 config.json）——
+     * 是否向 **MC 模式**的助手暴露宿主 `web_search`（联网搜索）。MC+ 模式**不受本开关影响**
+     * （它的组成本来就有标准全量的联网工具）。
+     * 「一拨就存」：同「开放助手调试工具」那个开关（乐观更新，失败回滚）。
+     */
+    function WebSearchPane(props) {
+      const { allowWebSearch, busyKey, onToggle } = props
+      const toggleBusy = busyKey === 'cfg:websearch'
+      return React.createElement(
+        'div',
+        { 'data-wc-pane-page': 'websearch' },
+        React.createElement('div', { 'data-wc-sec': '' },
+          React.createElement(Switch, {
+            label: '允许联网搜索',
+            desc: '允许MC模式下的助手联网搜索内容，MC+模式不受限制',
+            disabled: toggleBusy,
+            on: allowWebSearch === true,
+            onToggle: (next) => onToggle(next),
+          }),
+        ),
+      )
+    }
+
+    /* ------------------------------------------------------------ 页 6：调试 */
 
     /**
      * 「调试」页：目前只有一个「开放助手调试工具」开关（工作区无关、落全局 config.json）——
@@ -1867,6 +1893,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       { id: 'whitelist', label: '指令白名单' },
       { id: 'prompt', label: '提示词' },
       { id: 'share', label: '文件分享' },
+      { id: 'websearch', label: '联网搜索' },
       { id: 'debug', label: '调试' },
     ]
 
@@ -2137,6 +2164,8 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       const [sharePort, setSharePort] = React.useState(null)
       const [sharePortStatus, setSharePortStatus] = React.useState(null)   // /api/mc/express 回的 { listening, port, portError }
       const [exposeDebugTools, setExposeDebugTools] = React.useState(false)
+      // 「联网搜索」开关（默认**开**）：控制 MC 模式下 web_search 是否暴露（MC+ 不受影响）
+      const [allowWebSearch, setAllowWebSearch] = React.useState(true)
       const [shareInfo, setShareInfo] = React.useState(null)
       const [wsPath, setWsPath] = React.useState('')
       const [wsExists, setWsExists] = React.useState(false)
@@ -2202,6 +2231,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
               portError: c.expressDesktopError ?? null,
             })
             setExposeDebugTools(c.exposeDebugTools === true)
+            setAllowWebSearch(c.allowWebSearch !== false)
             // 发布区是**按工作区**的：没有工作区时那个接口直接 400，别去碰它。
             if (!hasWs) { setShareInfo(null); return null }
             return apiGet(withSid('/api/mc/express')).then((s) => {
@@ -2407,7 +2437,18 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       const clearShare = React.useCallback(() =>
         run('share:clear', () => apiDelete(withSid('/api/mc/express')), '分享数据已清除'), [run])
 
-      /* ── 页 5：调试 ──「开放助手调试工具」开关**一拨就存**（同"允许所有指令"：失败回滚）。 */
+      /* ── 页 5：联网搜索 ──「允许联网搜索」开关**一拨就存**（同上：失败回滚）。 */
+      const toggleAllowWebSearch = React.useCallback((next) => {
+        const prev = allowWebSearch === true
+        const want = next === true
+        if (want === prev) return Promise.resolve(true)
+        setAllowWebSearch(want)                              // 乐观更新
+        return run('cfg:websearch', () => apiPatch(withSid('/api/mc/config'), { allowWebSearch: want }),
+          want ? '已允许联网搜索' : '已关闭联网搜索')
+          .then((ok) => { if (!ok) setAllowWebSearch(prev); return ok })   // 失败回滚
+      }, [run, allowWebSearch])
+
+      /* ── 页 6：调试 ──「开放助手调试工具」开关**一拨就存**（同"允许所有指令"：失败回滚）。 */
       const toggleExposeDebugTools = React.useCallback((next) => {
         const prev = exposeDebugTools === true
         const want = next === true
@@ -2444,16 +2485,20 @@ select[data-wc-in]{appearance:none;padding-right:22px;
               onToggle: toggleShare, onSaveBase: saveShareBase, onUseCurrent: useCurrentBase, onClear: clearShare,
               onSavePort: saveSharePort, onResetPort: resetSharePort, onCheckPort: checkSharePort,
             })
-            : (tab === 'debug'
-              ? React.createElement(DebugPane, {
-                exposeDebugTools, busyKey, onToggle: toggleExposeDebugTools,
+            : (tab === 'websearch'
+              ? React.createElement(WebSearchPane, {
+                allowWebSearch, busyKey, onToggle: toggleAllowWebSearch,
               })
-              : React.createElement(AccountsPane, {
-            accounts, servers, defaultAccount, busyKey,
-            onPatch: patchAccount, onRefresh: refreshAccount, onDelete: deleteAccount,
-            onCreate: createAccount, onAddServer: addServer, onAddCard: addServerCard,
-            onRemoveServer: removeServer,
-              }))))
+              : (tab === 'debug'
+                ? React.createElement(DebugPane, {
+                  exposeDebugTools, busyKey, onToggle: toggleExposeDebugTools,
+                })
+                : React.createElement(AccountsPane, {
+                  accounts, servers, defaultAccount, busyKey,
+                  onPatch: patchAccount, onRefresh: refreshAccount, onDelete: deleteAccount,
+                  onCreate: createAccount, onAddServer: addServer, onAddCard: addServerCard,
+                  onRemoveServer: removeServer,
+                })))))
 
       // 头部显示的工作区名（仅"有工作区"时显示）：注册表 title → 回退路径尾段；default-workspace 给中文名
       const wsDisplayName = hasWorkspace

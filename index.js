@@ -376,8 +376,9 @@ export function apply(ctx, rawConfig) {
    * 抽取成标准插件后，包可能装在 `node_modules/` 或任意目录，**不能**再用 `__dirname/..` 推工作区。
    * 正路：宿主给工具的 `exec.agent.session.header.cwd` 就是该会话的工作区（tool-fs 同款来源）。
    * 记忆与提示词都挂它下面：`<工作区>/.whale-craft/`。
-   * 优先级：`WHALE_CRAFT_MEMORY_DIR` → `config.memoryDir` → `<工作区>/.whale-craft`
-   *         （**没有会话上下文时**兜底 `WHALE_CRAFT_DIR` 或 `$DSH_HOME/whale_craft/memory`）。
+   * 🔴 用户 2026-10-08：**只认这一个位置** —— 没有 env、没有配置重定向（此前有
+   *    `WHALE_CRAFT_MEMORY_DIR` 与 `config.memoryDir` 两级覆盖，会让调试/生产不一致，已全部删掉）。
+   *    调试就用一个**专门的调试工作区**，记忆自然落在它的 `.whale-craft` 里。
    * ------------------------------------------------------------------------ */
   /** 会话工作区（拿不到就 null：说明调用方没有 agent 上下文） */
   const workspaceOf = (agent) => {
@@ -385,12 +386,8 @@ export function apply(ctx, rawConfig) {
     return typeof cwd === 'string' && cwd.trim() !== '' ? cwd : null
   }
 
-  const memoryRootFor = (cwd) => {
-    const explicit = process.env.WHALE_CRAFT_MEMORY_DIR ?? pluginConfig.memoryDir
-    if (explicit) return explicit
-    if (cwd) return join(cwd, '.whale-craft')
-    return process.env.WHALE_CRAFT_DIR ? stateDir : join(stateDir, 'memory')
-  }
+  /** 记忆根：**就是** `<会话工作区>/.whale-craft`；没有工作区 → null（不造兜底目录） */
+  const memoryRootFor = (cwd) => (cwd ? join(cwd, '.whale-craft') : null)
 
   /**
    * 老版本（≤0.3.x）把**全局** config/accounts 放在 `<工作区>/.whale-craft/`：每个工作区首次见到时搬一次。
@@ -420,10 +417,11 @@ export function apply(ctx, rawConfig) {
     }
   }
 
-  /** 按工作区缓存 MemoryStore（同一工作区不重复扫盘） */
+  /** 按工作区缓存 MemoryStore（同一工作区不重复扫盘）；**没有工作区 → null** */
   const memoryCache = new Map()
   const memoryFor = (cwd) => {
     const root = memoryRootFor(cwd)
+    if (!root) return null
     let store = memoryCache.get(root)
     if (!store) {
       migrateWorkspaceState(cwd)
@@ -436,13 +434,11 @@ export function apply(ctx, rawConfig) {
     return store
   }
 
-  /** 按工作区的配置（`<记忆根>/config.json`，src/wsconfig.mjs）：读值 / 改三个提示词开关 */
-  const wsCfgValues = (cwd) => workspaceConfigValues(memoryRootFor(cwd))
-  const wsCfgPatch = (cwd, partial) => patchWorkspaceConfig(memoryRootFor(cwd), partial)
+  /** 按工作区的配置（`<记忆根>/config.json`，src/wsconfig.mjs）：读值 / 改三个提示词开关（无工作区 → 空/不写） */
+  const wsCfgValues = (cwd) => (cwd ? workspaceConfigValues(memoryRootFor(cwd)) : {})
+  const wsCfgPatch = (cwd, partial) => { if (cwd) patchWorkspaceConfig(memoryRootFor(cwd), partial) }
 
   const pluginConfig = new PluginConfig(stateDir)
-  /** 无会话上下文时用的兜底记忆库（`capabilities` / 扩展 api / 全局注入用） */
-  const memory = memoryFor(null)
   /** 这个会话的工作区根（mc_kit_image / 地图落盘用）；拿不到就给个兜底目录 */
   const workspaceRootFor = (agent) => workspaceOf(agent) ?? join(stateDir, 'workspace')
 
@@ -472,7 +468,7 @@ export function apply(ctx, rawConfig) {
     if (!sessionId) return null
     try { return ctx.get('agents')?.get?.(String(sessionId)) ?? null } catch { return null }
   }
-  logLine(`whale_craft：配置 ${pluginConfig.file}｜记忆 <会话工作区>/.whale-craft（兜底 ${memory.root}）`
+  logLine(`whale_craft：配置 ${pluginConfig.file}｜记忆 <会话工作区>/.whale-craft`
     + `｜工具定义 ${toolDefKind() === 'host' ? '宿主 @deepseek-ai/dsh-tools' : '自带兜底'}`
     + `｜Config ${Config ? 'schema（宿主 schemastery）' : '无（宿主 schemastery 不可用）'}`)
 
@@ -906,10 +902,8 @@ export function apply(ctx, rawConfig) {
    * 三个提示词开关是**按工作区**的（`<记忆根>/config.json`，src/wsconfig.mjs）。
    *
    * 🔴 `cwd` 可为 **null**（从插件菜单等"无会话/无工作区"入口打开设置时）：
-   *    此时只回全局键，工作区键一律 `null`。**绝不能**把 null 喂给
-   *    `wsCfgValues` / `wsConfigPath(memoryRootFor(null))` —— `memoryRootFor(null)`
-   *    会兜底到 `stateDir(/memory)` 这个**全局**目录（见 memoryRootFor），
-   *    那等于把"无工作区"错当成一个真实工作区去读写。
+   *    此时只回全局键，工作区键一律 `null`。`memoryRootFor(null)` 返回 `null`（不再有兜底目录），
+   *    `wsCfgValues(null)` 返回 `{}`——所以即便漏了判断也不会误读写某个"假工作区"。
    */
   const configView = (cwd) => {
     const hasWorkspace = Boolean(cwd)
@@ -935,6 +929,8 @@ export function apply(ctx, rawConfig) {
       expressDesktopError: expressServer.status.wantPort === pluginConfig.expressDesktopPort ? expressServer.status.error : null,
       // 「MC设置 → 调试」页的「开放助手调试工具」开关（工作区无关）
       exposeDebugTools: pluginConfig.exposeDebugTools,
+      // 「MC设置 → 联网搜索」页的「允许联网搜索」开关（工作区无关；默认开）
+      allowWebSearch: pluginConfig.allowWebSearch,
       // 「MC设置」入口的模式门控：前端拿这份名单 + 会话记录的 preset 就能**本地**判定
       // （不必为按钮问一次服务端；2026-09-16 事故：一次性请求失败后按钮永久消失）
       mcModePresets: pluginConfig.mcModePresets,
@@ -1133,8 +1129,7 @@ export function apply(ctx, rawConfig) {
       return ok(accounts.removeAuthServer(String(body.id ?? '')))
     }
     /* `/api/mc/config` **可无工作区**（全局键照常，工作区键为 null）。
-     * 顺带承担"点开 MC设置即建档 .whale-craft"这个时机 —— 但**只在该请求真有工作区时**，
-     * 否则 `memoryRootFor(null)` 会落到全局兜底目录。 */
+     * 顺带承担"点开 MC设置即建档 .whale-craft"这个时机 —— 但**只在该请求真有工作区时**。 */
     if (path === '/api/mc/config' && req.method === 'GET') {
       const cwd = await cwdOf(null)
       if (cwd) ensureMemoryRootForCwd(cwd)
@@ -1144,12 +1139,12 @@ export function apply(ctx, rawConfig) {
       const cwd = await cwdOf(body)
       if (cwd) ensureMemoryRootForCwd(cwd)
       // 全局键 → PluginConfig（**无条件**）；三个提示词开关 → **本工作区**的 config.json（有工作区才写）
-      for (const k of ['commandWhitelist', 'allowAllCommands', 'expressWebEnabled', 'expressWebBase', 'expressDesktopEnabled', 'expressDesktopPort', 'exposeDebugTools']) {
+      for (const k of ['commandWhitelist', 'allowAllCommands', 'expressWebEnabled', 'expressWebBase', 'expressDesktopEnabled', 'expressDesktopPort', 'exposeDebugTools', 'allowWebSearch']) {
         if (body[k] !== undefined) pluginConfig.set(k, body[k])
       }
-      // 调试开关变更 → 立即重算各 MC/MC+ 会话的工具可见性（用户 2026-10-05）
-      if (body.exposeDebugTools !== undefined) {
-        try { refreshMcPolicy() } catch (e) { logLine(`调试开关变更后重算工具策略失败：${e?.message ?? e}`) }
+      // 调试 / 联网搜索开关变更 → 立即重算各 MC/MC+ 会话的工具可见性（用户 2026-10-05 / 2026-10-08）
+      if (body.exposeDebugTools !== undefined || body.allowWebSearch !== undefined) {
+        try { refreshMcPolicy() } catch (e) { logLine(`可见性开关变更后重算工具策略失败：${e?.message ?? e}`) }
       }
       // desktop 分享开关/端口变更 → 立即对齐独立端口服务（用户 2026-10-07）。
       // **await**：让响应返回时 `listening`/`portError` 已是最终态，设置页不必猜。
@@ -1773,6 +1768,15 @@ export function apply(ctx, rawConfig) {
   const MC_EXTRA_HOST_TOOLS = ['job_list', 'job_output', 'job_kill', 'get_goal', 'create_goal', 'update_goal', 'todo_write']
 
   /**
+   * MC 模式白名单里**按开关**放行的宿主工具：`web_search`（宿主 `@deepseek-ai/dsh-tool-web`；
+   * MC 模式 preset 只挂 search、不挂 fetch —— 网页抓取走 `mc_kit_web_fetch`）。
+   *
+   * 可见性由「MC设置 → 联网搜索」的 `allowWebSearch`（默认开）决定（用户 2026-10-08 定）；
+   * **MC+ 模式不受影响**（它的组成本来就有标准全量的 tool-web）。
+   */
+  const MC_WEB_SEARCH_TOOL = 'web_search'
+
+  /**
    * `present`（宿主 `@deepseek-ai/dsh-tool-present`）—— **MC 模式不再暴露它**（用户 2026-10-08：
    * "免得误导 agent"；文件交付在 MC 模式走 `mc_kit_express` 给 URL）。
    *
@@ -2160,13 +2164,13 @@ export function apply(ctx, rawConfig) {
           keys: Object.keys(DEFAULT_CONFIG),
           commandWhitelist: pluginConfig.get('commandWhitelist'),
           allowAllCommands: pluginConfig.get('allowAllCommands'),
-          memoryDir: memoryFor(workspaceOf(exec?.agent)).root,
-          workspaceConfigFile: wsConfigPath(memoryRootFor(workspaceOf(exec?.agent))),
+          memoryDir: memoryRootFor(workspaceOf(exec?.agent)),
+          workspaceConfigFile: (() => { const r = memoryRootFor(workspaceOf(exec?.agent)); return r ? wsConfigPath(r) : null })(),
           mcModePresets: pluginConfig.mcModePresets,
           mcPlusPresets: pluginConfig.mcPlusPresets,
         },
         prompt: {
-          agentsMd: agentsMdPath(memoryFor(workspaceOf(exec?.agent)).root),
+          agentsMd: (() => { const r = memoryRootFor(workspaceOf(exec?.agent)); return r ? agentsMdPath(r) : null })(),
           injectWhaleCraftAgentsMd: wsCfgValues(workspaceOf(exec?.agent)).injectWhaleCraftAgentsMd,
           injectWorkspaceAgentsMd: wsCfgValues(workspaceOf(exec?.agent)).injectWorkspaceAgentsMd,
         },
@@ -2721,6 +2725,7 @@ export function apply(ctx, rawConfig) {
     timeoutMs: 120_000,
     async execute(args, exec) {
       const inWs = (p) => insideWorkspace(p, exec?.agent)
+      if (!workspaceOf(exec?.agent)) throw new Error('这个会话没有工作区，无法操作文件。')
       if (!ImageEngine.available()) {
         throw new Error(`图像引擎不可用：${imageEngineError() ?? 'sharp 未解析到'}`)
       }
@@ -2826,6 +2831,7 @@ export function apply(ctx, rawConfig) {
     },
     async execute(args, exec) {
       const cwd = workspaceOf(exec?.agent)
+      if (!cwd) throw new Error('这个会话没有工作区，拿不到分享地址。')
       const memRoot = memoryRootFor(cwd)
       const raw = String(args.path ?? '').trim()
       if (!raw) throw new Error('path 不能为空')
@@ -3973,7 +3979,8 @@ export function apply(ctx, rawConfig) {
 
   /**
    * 按**现场判据**给这个 agent 套工具曝光策略（三种去向）：
-   *   · `mc`（MC模式）—— 白名单：mc 工具 + 文件工具 + 后台任务/目标/待办（`MC_EXTRA_HOST_TOOLS`）+ allowOtherTools；
+   *   · `mc`（MC模式）—— 白名单：mc 工具 + 文件工具 + 后台任务/目标/待办（`MC_EXTRA_HOST_TOOLS`）
+   *     + 联网搜索（`MC_WEB_SEARCH_TOOL`，按 `allowWebSearch` 开关，默认开）+ allowOtherTools；
    *   · `mc-plus`（MC+模式）—— **不限制工具面**（组成里挂了标准工具全量，mc/mckit 走全局注册直接可见）；
    *   · `other`（其它模式）—— `deny` 掉 mc_*（mc_admin_* 除外）与 mc_kit_* —— 用户 2026-10-04：
    *     "除了 MC模式和 MC+模式，不再给其他模式暴露 mc 和 mckit 工具"。
@@ -4069,6 +4076,9 @@ export function apply(ctx, rawConfig) {
         ...(hideAdminTools ? [] : adminNames),
         ...MC_FILE_TOOLS,
         ...MC_EXTRA_HOST_TOOLS,
+        // 联网搜索：按「MC设置 → 联网搜索」的开关（默认开）放行；preset 没挂 tool-web 的部署
+        // 会被下面 applyAllow 的"宿主不认识的名字"过滤掉（不会炸整次白名单）。
+        ...(pluginConfig.allowWebSearch ? [MC_WEB_SEARCH_TOOL] : []),
         ...allowOtherTools,
       ]
       // 🔴 `tools.restrict()` 对**不认识的工具名是抛错**的（宿主 index.ts:1078 拿 restrictableNames 校验）。
@@ -4099,7 +4109,7 @@ export function apply(ctx, rawConfig) {
   }
 
   /**
-   * 配置（`exposeDebugTools`）变了 → 强制重算所有 MC/MC+ 会话的工具可见性。
+   * 配置（`exposeDebugTools` / `allowWebSearch`）变了 → 强制重算所有 MC/MC+ 会话的工具可见性。
    * `applyMcModePolicy` 有"kind 没变就不动"的幂等；这里先清缓存再跑，才会真的重套（用户 2026-10-05）。
    */
   const refreshMcPolicy = () => {
@@ -4193,16 +4203,22 @@ export function apply(ctx, rawConfig) {
         return '调试工具未启用——请在「MC设置 → 调试」里打开「开放助手调试工具」。'
       }
 
+      // ②″ 联网搜索：开关没开就硬拒（同上，防 restrict 没套上；用户 2026-10-08）
+      if (name === MC_WEB_SEARCH_TOOL && !pluginConfig.allowWebSearch) {
+        return '联网搜索未启用——请在「MC设置 → 联网搜索」里打开「允许联网搜索」。'
+      }
+
       if (/^(read|edit|write|glob|grep|ls|cat|read_image)$/i.test(name)) {
         // 受保护文件（RULES.md / AGENTS.md / config.json，src/protected.mjs）：**可读不可写**。
         // 宿主文件工具里只有 write|edit 会写。
         // 判定 = 路径写法命中（裸名/含 .whale-craft 段）**或**解析到记忆根后正好是那个文件
-        // （记忆根可被 memoryDir 重定向，绝对路径不一定含 `.whale-craft` 段）。
+        // （绝对路径不一定含 `.whale-craft` 段也照样判定）。
         const protectedHit = (raw) => {
           const p = String(raw ?? '').trim()
           if (!p) return false
           if (isProtectedPathArg(p)) return true
           const root = memoryRootFor(workspaceOf(exec?.agent))
+          if (!root) return false          // 无工作区：交给下面 ③ 的 jail 整段拒绝
           const abs = resolve(root, p)
           return PROTECTED_FILES.some((f) => abs === join(root, f))
         }
@@ -4217,6 +4233,7 @@ export function apply(ctx, rawConfig) {
       const raw = fileToolPath(exec)
       if (raw !== null) {
         const root = memoryRootFor(workspaceOf(exec?.agent))
+        if (!root) return '这个会话没有工作区——MC 模式的文件工具没有可用的记忆文件夹，已拒绝。'
         const rel = String(raw ?? '').trim()
         if (!rel) {
           return `MC 模式的文件工具只能在记忆文件夹（${root}）里用——请显式给 .whale-craft/ 内的路径。`
@@ -4232,6 +4249,7 @@ export function apply(ctx, rawConfig) {
       //     权威防线在工具态（src/fsops.mjs 的包含式校验）；这里是白名单之外的硬锁。
       if (name.toLowerCase() === 'mc_kit_fs') {
         const root = memoryRootFor(workspaceOf(exec?.agent))
+        if (!root) return '这个会话没有工作区——MC 模式的 mc_kit_fs 没有可用的记忆文件夹，已拒绝。'
         const base = workspaceRootFor(exec?.agent)
         const prefix = root.endsWith(sep) ? root : root + sep
         const a = exec?.arguments ?? {}
@@ -4371,7 +4389,8 @@ export function apply(ctx, rawConfig) {
       + '开放标准模式全部工具）· `mcMode.allowOtherTools`（MC 模式白名单里**额外**放行的工具）· '
       + '`mcMode.hideAdminTools`（默认 true）· `expressWebEnabled` / `expressWebBase`（**web 模式**文件分享开关 + base，如 https://example.com）· '
       + '`expressDesktopEnabled` / `expressDesktopPort`（**桌面模式**文件分享开关 + 独立托管端口，默认 16049）· '
-      + '`exposeDebugTools`（是否向助手暴露调试用途的工具，默认 false）· `memoryDir`。\n'
+      + '`exposeDebugTools`（是否向助手暴露调试用途的工具，默认 false）· '
+      + '`allowWebSearch`（是否让 MC 模式的助手联网搜索，默认 true；MC+ 不受影响）。\n'
       + '改完**立即生效**，落在 `$DSH_HOME/whale_craft/config.json`。（白名单只能"收窄"，不能凭空添加 preset 没挂的工具。）',
     parameters: {
       action: { type: 'string', description: 'get（默认）/ set / unset / reset / list' },
@@ -4419,7 +4438,7 @@ export function apply(ctx, rawConfig) {
         try {
           const mod = await import(new URL(`./extensions/${f}`, import.meta.url).href)
           if (typeof mod.apply === 'function') {
-            await mod.apply({ ctx, config, registry, asTool, getSession, ensureWatchdog, memory, memoryFor, workspaceOf, logLine, Watchdog })
+            await mod.apply({ ctx, config, registry, asTool, getSession, ensureWatchdog, memoryFor, workspaceOf, logLine, Watchdog })
             const label = mod.name ?? f
             logLine(`扩展已加载：${label}`)
             ctx.logger?.info?.(`[whale_craft] 扩展已加载：${label}`)

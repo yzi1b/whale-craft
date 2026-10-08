@@ -208,7 +208,7 @@ export function onlineUrlOf (base, relUrl) {
  * URL 是 `/api/whale-craft/express/<工作区 uuid>/<剩余路径>`：它是"在线"模式拼 base 的后半截，
  * 也是唯一与访问方式无关的形态（`127.0.0.1` / 受信域名 / 反代前缀下都同源可用，不碰混合内容）。
  * @param {string} absPath 文件绝对路径
- * @param {string} memoryRoot 记忆根（`<工作区>/.whale-craft`，或 memoryDir 指定的目录）
+ * @param {string} memoryRoot 记忆根（`<工作区>/.whale-craft`）
  * @param {string} workspaceId 工作区 uuid（**必须来自 `workspaceRegistry`**；非法/缺失 → null）
  * @returns {{rel:string, url:string, localPath:string, markdown:string}|null}
  */

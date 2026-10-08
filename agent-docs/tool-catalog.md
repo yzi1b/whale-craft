@@ -2,16 +2,17 @@
 
 > 快照：**0.2.0**（开发中，未发布）。注册全部在 `index.js` 的 `apply()` 内（`ctx.tools.register(asTool({...}))`），
 > 分四段：`mc_*`（游戏内，26）/ `mc_kit_*`（游戏外辅助，3）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
-> 可见性按模式分档（2026-10-04）：**MC模式** 只见 mc/mckit + 文件工具 + `job_*`/`goal_*`/`todo_write`（**不含** present：交付走 `mc_kit_express`）；**MC+模式** 全量可见（含 admin）；
+> 可见性按模式分档（2026-10-04）：**MC模式** 只见 mc/mckit + 文件工具 + `job_*`/`goal_*`/`todo_write` + 宿主 `web_search`（**不含** present：交付走 `mc_kit_express`）；**MC+模式** 全量可见（含 admin）；
 > **其他模式** 隐藏 mc_* / mc_kit_*（仅保留 `mc_admin_*`），另有 guard 硬拒兜底。
 > 🔴 **调试工具（`mc_debug_*`）另受「MC设置 → 调试」的 `exposeDebugTools` 开关门控**（2026-10-05）：关时在 MC/MC+ 也不暴露（白名单 / MC+ deny / guard 三处）。
+> 🔴 **宿主 `web_search` 受「MC设置 → 联网搜索」的 `allowWebSearch` 门控（2026-10-08，默认开）**：MC 模式关时摘掉 + guard 硬拒；**MC+ 不受限**（其组成本来就有 tool-web）。
 
 ## 通用约定
 
 - **必须经 `asTool()` 注册**：它做两件事 —— ① 对返回值做 `lossless()` 无损化（类实例只留自有可枚举属性、Vec3→`{x,y,z}`、Date→ISO、NaN/±Inf→null、`-0`→0；宿主校验要求纯 JSON，Vec3 实例曾让 5 个工具全挂）；② 把 `exec.signal` 注入 `bot.setAbortSignal`（宿主取消能中断走路/挖掘循环）。
 - **超时纪律**：调 `src/core.mjs` 的方法已自带超时/中断；扩展自己写 mineflayer 调用时**必须**套 `withTimeout` / `raceAbort`（宿主无法硬杀同进程代码）。
 - **错误形态**：工具失败直接抛错（`mcTimeout:true` / `mcAborted:true` 标记可辨）；HTTP 设置 API 相反——统一 200+`{ok:false,...}`。
-- 工具名列表由 `ourToolNames` 收集（注册时自动登记）：MC 模式白名单用它 + `MC_FILE_TOOLS` + `MC_EXTRA_HOST_TOOLS`（宿主 `job_*` / `goal_*` / `todo_write`）+ `present`；其他模式的 deny 名单也用它（`mc_kit_*` + 非 admin 的 `mc_*`）。
+- 工具名列表由 `ourToolNames` 收集（注册时自动登记）：MC 模式白名单用它 + `MC_FILE_TOOLS` + `MC_EXTRA_HOST_TOOLS`（宿主 `job_*` / `goal_*` / `todo_write`）+ `MC_WEB_SEARCH_TOOL`（宿主 `web_search`，按 `allowWebSearch` 开关）+ `present`；其他模式的 deny 名单也用它（`mc_kit_*` + 非 admin 的 `mc_*`）。
 
 ---
 
@@ -106,4 +107,5 @@
 - **`mc_kit_share`（及 `mc_map` 的 `share` 参数）已删除**（2026-09-16）：它只是在调宿主**另装**的 `dsh-file-host`，插件本身没有文件服务器。"让用户看到文件"改走：宿主 `present`（显式文件交付）+ 本插件的 `mc_kit_express`。自检里有"mc_kit_share 已移除 / 源码无文件服务器残留"的断言——老名字不要再出现。
 - 文件分享 2026-10-04 起是**开关**（`expressEnabled`），不再有"模式"；老配置里的 `expressMode`（含 `local`）由 `PluginConfig.migrate` 搬成布尔（`online`→`true`，其余→`false`）。
 - **2026-10-07 文件分享按宿主模式拆键**：`expressEnabled`/`expressBase` → **web 那套** `expressWebEnabled`/`expressWebBase`；新增 **desktop 那套** `expressDesktopEnabled`/`expressDesktopPort`（默认 16049，独立端口只监听 localhost）。从哪种模式（宿主 profile）进来只认哪套；`expressMode` 与两个旧键都由 `migrate` 逐档搬（见 architecture §10）。
+- **2026-10-08 联网搜索（宿主 `web_search`）**：MC 模式 preset 挂上 `tool-web`（`fetch: false`；host 平面那一行被 `dsh-web-app` 禁掉、由各 preset 自己组合）⇒ MC 模式可以联网搜索，**默认开**，由「MC设置 → 联网搜索」的 `allowWebSearch`（工作区无关的全局键）在可见性（白名单）与 guard 两处收放；MC+ 组成本来就有全量 tool-web，不受该键影响。`web_fetch` 仍不暴露（走 `mc_kit_web_fetch`）。
 - **2026-10-05 工具面改动**：① `mc_connect`/`mc_ping` 收成单一 `address`（删 `host/port/subserver/version`；版本永远自动探测，连上后版本不支持则强制断开）② `mc_accounts` 删 `use` ③ `mc_lan` 删 `mode` ④ 新增 `mc_context`/`mc_players` ⑤ `mc_sessions`/`mc_diag` → `mc_debug_sessions`/`mc_debug_diag`（受 `exposeDebugTools` 门控）⑥ `mc_status` 改为"连接态 + 在线内联 context" ⑦ `mc_map` 改版：`out`→`dist` + `reply`、去 `both`、无默认输出目录、相对路径以工作区根为基准、chars 存 .txt、附图前查视觉；新增 **`mc_height`**（高度/地势图，chars/image/full）。工具总数 29 → **32**。

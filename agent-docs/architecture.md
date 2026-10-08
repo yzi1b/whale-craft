@@ -122,8 +122,8 @@ kind 变化先 release 再套新）：
 
 | 档 | preset | 可见性（`applyMcModePolicy`） | guard（每次调用现场判，切模式自愈） |
 | --- | --- | --- | --- |
-| `mc` | minecraft | `restrict({allow})` 白名单：mc_*（按 `hideAdminTools` 去 / 留 `mc_admin_*`）+ mc_kit_* + 文件工具（`MC_FILE_TOOLS`）+ **后台任务/目标/待办**（`job_*` / `get_goal` / `create_goal` / `update_goal` / `todo_write`，`MC_EXTRA_HOST_TOOLS`）+ `mcMode.allowOtherTools`；`mc_debug_*` 仅当 `exposeDebugTools` 开时才进（**不含** `present`：MC 模式不暴露文件交付，走 `mc_kit_express`） | ① admin 硬拒 ② `exposeDebugTools` 关时拒 `mc_debug_*` ③ 凭据/secrets 硬拒 ④ 受保护文件只读 ⑤ 文件 jailed `.whale-craft/`（空路径也算越界）⑥ present 限会话工作区（若经 allowOtherTools 放行） |
-| `mc-plus` | minecraft-plus | **不套白名单**（组成=标准全表，mc/mckit 走全局注册直接可见；`mc_admin_*` 也可见）；仅当 `exposeDebugTools` 关时 `restrict({deny})` 掉 `mc_debug_*` | 仅③凭据/secrets 硬拒（文件全工作区；受保护文件按宿主默认） |
+| `mc` | minecraft | `restrict({allow})` 白名单：mc_*（按 `hideAdminTools` 去 / 留 `mc_admin_*`）+ mc_kit_* + 文件工具（`MC_FILE_TOOLS`）+ **后台任务/目标/待办**（`job_*` / `get_goal` / `create_goal` / `update_goal` / `todo_write`，`MC_EXTRA_HOST_TOOLS`）+ **联网搜索**（宿主 `web_search`，`MC_WEB_SEARCH_TOOL`，按 `allowWebSearch`，默认开）+ `mcMode.allowOtherTools`；`mc_debug_*` 仅当 `exposeDebugTools` 开时才进（**不含** `present`：MC 模式不暴露文件交付，走 `mc_kit_express`） | ① admin 硬拒 ② `exposeDebugTools` 关时拒 `mc_debug_*` ③ `allowWebSearch` 关时拒 `web_search` ④ 凭据/secrets 硬拒 ⑤ 受保护文件只读 ⑥ 文件 jailed `.whale-craft/`（空路径也算越界）⑦ present 限会话工作区（若经 allowOtherTools 放行） |
+| `mc-plus` | minecraft-plus | **不套白名单**（组成=标准全表，mc/mckit 走全局注册直接可见；`mc_admin_*` 也可见）；仅当 `exposeDebugTools` 关时 `restrict({deny})` 掉 `mc_debug_*`。**联网搜索不受 `allowWebSearch` 影响**（全表里本来就有 tool-web） | 仅凭据/secrets 硬拒（文件全工作区；受保护文件按宿主默认） |
 | `other` | 其余 | `restrict({deny})`：`mc_*`（mc_admin_* 除外）+ `mc_kit_*` 从可见面摘掉 | **拒调** mc_* / mc_kit_*（mc_admin_* 除外）—— "不再给其他模式暴露"的第二道锁 |
 
 - ⚠️ 白名单只能**收窄**：不能凭空添加 preset 没挂的工具（宿主报错里 `known global tools:` 可直接解析后过滤重试）；`restrict` 是**黏性**的，切换靠 disposer。
@@ -138,8 +138,10 @@ kind 变化先 release 再套新）：
 本包经 `package.json → dsh.bundle.patch` **数组**携带两个声明补丁：
 
 - `presets/minecraft.patch.yml` → 「MC模式」（id `minecraft`，order 5）：persona（定稿原文）+
-  `tool-fs` + `tool-jobs`（看门狗挂 job 需要）+ `present` + `compaction` 整组。**不含**标准工具
-  （运行时白名单再收一道，见 §7）。
+  `tool-fs` + `tool-fs-search` + `tool-jobs`（看门狗挂 job 需要）+ `tool-goal` + `tool-todo` +
+  `tool-web`（只挂 search：`fetch: false`）+ `compaction` 整组。**不含**其余标准工具
+  （运行时白名单再收一道，见 §7）；⚠️ `tool-web` 是唯一"标准工具"例外，且 host 平面那一行被
+  `dsh-web-app` 禁掉、必须由 preset 自己组合，否则 MC 模式没有 `web_search`。
 - `presets/minecraft-plus.patch.yml` → 「MC+模式」（id `minecraft-plus`，order 6）：官方
   `dsh-web-app/presets/standard.patch.yml` 的**手抄副本**（persona 换成 MC 的；含 agent-instructions /
   pwsh / 子代理 / 计划 / 网络 / skills / 压缩等全表）。⚠️ 声明式 preset 没有继承机制 —— 宿主更新
@@ -231,7 +233,8 @@ kind 变化先 release 再套新）：
 | 按工作区的配置（提示词三开关 + 版本标记） | `<会话工作区>/.whale-craft/config.json`（旧版单独的 `.rules-version` 标记会迁入并删除） |
 | 调试实例的一切 | `.dev/home/`（隔离 DSH_HOME，gitignored） |
 
-环境变量阀门：`MC_LOG`（日志路径）、`DSH_HOME`、`WHALE_CRAFT_DIR` / `WHALE_CRAFT_STATE_DIR`（自检/隔离用状态目录）、`WHALE_CRAFT_MEMORY_DIR`（记忆目录，供自检/调试隔离）、`WHALE_CRAFT_NO_PRESET_WRITE`（禁止写 preset）。
+环境变量阀门：`MC_LOG`（日志路径）、`DSH_HOME`、`WHALE_CRAFT_DIR` / `WHALE_CRAFT_STATE_DIR`（自检/隔离用状态目录）、`WHALE_CRAFT_NO_PRESET_WRITE`（禁止写 preset）。
+（记忆根**没有**环境变量阀门：固定 `<会话工作区>/.whale-craft`，调试也用专门的调试工作区 —— 2026-10-08 删掉了旧的 `WHALE_CRAFT_MEMORY_DIR`。）
 
 ## 13. 宿主耦合点 / DSH 升级敏感清单
 

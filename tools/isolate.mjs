@@ -109,12 +109,13 @@ if (cmd === 'start') {
     stdio: ['ignore', out, err],
     windowsHide: true,
     // 🔴 隔离实例有**自己的**状态目录：配置/账户改动只落副本，绝不碰生产。
-    // 🔴 记忆根也钉在副本里：否则"进 MC 模式会话 / 点开 MC设置"会按会话工作区去建 `.whale-craft/`，
-    //    而那些会话的工作区是**生产工作区** → 隔离实例会往生产里写文件。
+    // ⚠️ 记忆根**不再重定向**（用户 2026-10-08：记忆只认 `<会话工作区>/.whale-craft`）——
+    //    所以隔离实例要用一个**独立临时工作区**当会话工作区，记忆自然落它的 `.whale-craft` 里；
+    //    别再拿生产工作区开会话，否则会往那边写 `.whale-craft/`。
     // 🔴 preset 根目录**没法 redirect**（它在 DSH 的 agent-presets 配置里），也就是
     //    `~/.dsh/.agent-presets` 与本机生产共用 —— 插件"给已存在的 preset 补工具组"会直接改
     //    用户手写的那份。所以隔离实例一律禁止写 preset（插件认这个开关，只记日志）。
-    env: { ...process.env, WHALE_CRAFT_STATE_DIR: stateDir, WHALE_CRAFT_MEMORY_DIR: join(stateDir, 'memory'), WHALE_CRAFT_NO_PRESET_WRITE: '1' },
+    env: { ...process.env, WHALE_CRAFT_STATE_DIR: stateDir, WHALE_CRAFT_NO_PRESET_WRITE: '1' },
   })
   child.unref()
   writeFileSync(PIDFILE, JSON.stringify({ pid: child.pid, port, stateDir, at: new Date().toISOString() }, null, 2))

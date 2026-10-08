@@ -58,8 +58,8 @@
 ## 技能 / 联网 / 交互 / 待办 / 交付
 
 - **-** skill 加载技能  *以 mc_kit_skill 替代*
-- **?** web_search 联网搜索 *在设置中设置是否启用*
-- **-** web_fetch 抓取网页内容 *以 mc_kit_web_fetch 替代*
+- **?** web_search 联网搜索 *MC 模式由「MC设置 → 联网搜索」的「允许联网搜索」（`allowWebSearch`，默认开）控制；MC+ 模式恒有*
+- **-** web_fetch 抓取网页内容 *以 mc_kit_web_fetch 替代*（MC 模式 preset 挂 `tool-web` 时 `fetch: false`；MC+ 跟随标准全表）
 - **-** ask_user_question 向用户提问
 - **+** todo_write 维护待办清单
 - **-** present 交付文件给用户

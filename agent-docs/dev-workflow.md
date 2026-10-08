@@ -57,20 +57,20 @@ npm run dev:stop              # 按 pidfile 停实例
 - 目录/常量：`DEV_HOME=.dev/home`、pidfile `.dev/web-instance.json`、`LINK_SPEC='link:'+仓库路径`、登记端口 39901 起（避开一组 FORBIDDEN 端口）。
 - 首次启动会 `seedDevHome`：从生产 `~/.dsh` **只拷缺失的**凭据/账户/配置进隔离 home（拷完生产不动）；`ensureRepoDeps` 会补 `npm install` 缺的 mineflayer。
 - `link` 校验是**双条件**：profile `dependencies.whale_craft === link:E:/Works/whale-craft` **且** `node_modules/whale_craft` realpath 指回仓库；Windows 上重装前要先摘旧软链（EPERM）。
-- 运行时分两套（`webCliRuntime()` / `requireDesktopInstall()`）：`desktop` 用 `spawn(exe, ['--expose-internals', hostCli, ...])` 绕开 .cmd 引号问题；`npm` 用 `spawn(process.execPath, [<npm 全局 dsh>/lib/bin.js, ...])`。`childEnv` 硬性带上 `ELECTRON_RUN_AS_NODE:'1'` + `DSH_HOME=DEV_HOME`（漏了写生产 home，见事故 ②）+ 默认 `WHALE_CRAFT_MEMORY_DIR=.dev/home/memory`。
+- 运行时分两套（`webCliRuntime()` / `requireDesktopInstall()`）：`desktop` 用 `spawn(exe, ['--expose-internals', hostCli, ...])` 绕开 .cmd 引号问题；`npm` 用 `spawn(process.execPath, [<npm 全局 dsh>/lib/bin.js, ...])`。`childEnv` 硬性带上 `ELECTRON_RUN_AS_NODE:'1'` + `DSH_HOME=DEV_HOME`（漏了写生产 home，见事故 ②）。记忆根**不再重定向**——跟会话工作区走，请用一个**专门的调试工作区**（2026-10-08 删掉旧的 `.dev/home/memory` 隔离）。
 - `desktop` 子命令注意：首次没有 `profiles/desktop/package.json` 时**要先让桌面应用自己建**（脚本会启动 GUI 轮询 90×2s）；`desktopAppRunning()` 用 PowerShell 查进程命令行、判据是"不含 `--expose-internals`"（因为 CLI/web 实例也叫同名 exe）。
 - `status`/`stop` 只认 pidfile 里的 pid，绝不广谱杀进程。
 
 ## 4. `tools/isolate.mjs`（老方式，供 e2e/整树验证）
 
 - `start` 需要 **DSH 源码 checkout**（`DSH_ROOT` 环境变量或 `--dsh-root`，要求存在 `apps/cli/src/bin.ts`），用当前 node `--import tsx/esm` 直接跑源码 CLI；`status` 用 netstat 查端口；`stop` 只杀自己记录的 pid。
-- 隔离不变量：`WHALE_CRAFT_STATE_DIR=logs/isolate-state`（副本）、`WHALE_CRAFT_MEMORY_DIR=stateDir/memory`、**`WHALE_CRAFT_NO_PRESET_WRITE=1`**（preset 根在真实 `~/.dsh/.agent-presets` 无法重定向，与生产共用——所以禁止写）。
+- 隔离不变量：`WHALE_CRAFT_STATE_DIR=logs/isolate-state`（副本）、**`WHALE_CRAFT_NO_PRESET_WRITE=1`**（preset 根在真实 `~/.dsh/.agent-presets` 无法重定向，与生产共用——所以禁止写）。记忆根**不再重定向**：隔离实例要用一个**独立临时工作区**开会话（记忆落它的 `.whale-craft`）。
 - 与 `dev.mjs` 同源约定（FORBIDDEN 端口、39901 起）；日常开发用 dev.mjs，isolate 用于"整树加载"级别的验收。
 
 ## 5. `selfcheck.mjs` 套件
 
 - **形态**：假 ctx（工具注册表、sessionController、jobs、agentPresets…全部 stub）+ 加载**真** `apply()`；用 `console.log('  ✅/❌ …')` 输出；只有 `apply()` 抛错才 `exit 1`，末尾恒 `process.exit(0)`。
-- **污染隔离**：`MC_LOG` → `logs/selfcheck.log`；`WHALE_CRAFT_DIR`/`WHALE_CRAFT_MEMORY_DIR` → `mkdtemp` 临时目录（构造用 `fileURLToPath` 而非 `new URL().pathname`——中文用户名路径会被百分号编码，2026-09-24 卡过自检）。
+- **污染隔离**：`MC_LOG` → `logs/selfcheck.log`；`WHALE_CRAFT_DIR`（全局配置）→ `mkdtemp` 临时目录（构造用 `fileURLToPath` 而非 `new URL().pathname`——中文用户名路径会被百分号编码，2026-09-24 卡过自检）。**记忆根没有 env 阀门**：靠给测试 agent 一个 `mkdtemp` **临时工作区** cwd，记忆落在它的 `.whale-craft`（2026-10-08 起）。
 - **覆盖分组**（节标题）：超时保护单元｜工具面与参数｜每会话实例分离｜未连接行为｜看门狗 v2（含断线同步、等待被打断）｜mc_act/give/sequence/stop｜强制停止顺序｜MC设置 HTTP（真路由）｜发布区与文件分享（防穿透/两模式/base 推导）｜玩家说话辨认｜记忆树｜图像地图｜扩展点｜归档保护｜提示词注入单通道与去重｜配置+权限隔离｜协议护栏禁发未知包｜幽灵在线｜账户/凭据分离｜受保护文件（RULES/AGENTS/config.json 可读不可写）与版本标记｜认证 URL｜未处理拒绝不留患｜唤醒投递（必须提示词注入）｜job 结算｜事件队列单一写入方｜无 OP 建造｜放置判据（与 minecraft-data 真值表比对）｜mc_connect 全参数｜client bundle 静态断言｜mc_lan/mc_ping｜设置页 UI 静态断言｜打包完整性｜**宿主包缺省**（内置 defineTool 与宿主逐字对拍 + 无宿主模拟子进程）。
 - **无宿主模拟**（2026-10-04，issue #5）：`tools/no-host-init.mjs`（module.register 解析钩子）屏蔽 `@deepseek-ai/dsh-tools`/`schemastery` 后**再跑一遍 selfcheck**（子进程），并逐字比对 29 个工具的注册形状——本机 link 安装测不出的问题靠它钉住；发布侧另有 `tools/check-standalone-import.mjs`（干净安装 import 回归，CI 必跑，改回静态 import 必红）。
 - **加断言的惯例**：断言要打在**真实实现**上（别只测 stub）；曾有"集成断言假绿"（复制完 preset 要改 persona/关 shell 那两条测不到）与"前端拿不到真路由"（真机 404）的教训，所以有一条专门**打真路由**的断言。计数口径：README 里写的 726/686 是历史数字，以实际运行为准（当前 600+ ✅）。

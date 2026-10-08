@@ -7,6 +7,7 @@
 
 ## [Unreleased]
 
+- 【新增】MC设置新增「联网搜索」页（排在「调试」之前），一个「允许联网搜索」开关，**默认打开**：允许 MC 模式下的助手联网搜索内容（**MC+模式不受限制**，始终可联网）。此前 MC 模式没有任何联网工具。
 - 【变更】文件分享配置**按宿主模式拆成两套、相互独立**（从哪种模式进来就只认哪套，设置页也只显示那套）：
   - **web 模式**：沿用 `base`（原 `expressEnabled` / `expressBase` 自动迁移为 `expressWebEnabled` / `expressWebBase`）；
   - **桌面模式**：不再需要 `base`，改用**独立端口**（`expressDesktopEnabled` / `expressDesktopPort`，默认 `16049`）——
@@ -16,6 +17,7 @@
 - 【变更】不再自动注入 `.whale-craft/README.md` 记忆索引（改由 AI 按行事准则自行阅读/维护）。记忆文件夹与既有记忆不受影响。
 - 【新增】文件系统工具 `mc_kit_fs`：复制 / 移动 / 删除 / 建目录（**均递归**）。补上此前缺失的"删文件/目录、复制二进制、建目录"能力。范围：**MC 模式**只能在 `.whale-craft/` 内、**MC+ 模式**在工作区内；**保留符号链接（不跟随）**；受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径**不可删改**。
 - 【变更】MC 模式放开一批宿主工具：文件检索 `glob`/`grep`、后台任务 `job_list`/`job_output`/`job_kill`、目标 `get_goal`/`create_goal`/`update_goal`、待办 `todo_write`（此前 MC 模式只有文件工具 + present）。同时 **MC 模式不再暴露 `present`**（文件交付走 `mc_kit_express` 给 URL），shell / 子代理 / 联网 / 技能 / 计划模式等**仍不开放**。文件工具路径依旧被限在 `.whale-craft/` 内。
+- 【变更】记忆根不再有任何重定向：**固定为 `<会话工作区>/.whale-craft`**（删掉了 `WHALE_CRAFT_MEMORY_DIR` 环境变量与 `memoryDir` 配置项）。此前调试实例默认把记忆写到 `.dev/home/memory`，与生产行为不一致；现在调试也用**专门的调试工作区**，两者完全一致。
 
 ## [0.2.0-beta.2] - 2026-10-06
 
