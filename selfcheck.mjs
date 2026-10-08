@@ -3875,9 +3875,11 @@ console.log('\n--- 单地址探测（mc_ping）---')
   const refused = await P.statusPing({ host: '127.0.0.1', port: 1, timeoutMs: 3000 })
   console.log(`  ${refused.ok === false && refused.code === 'ECONNREFUSED' && refused.elapsedMs < 3000 ? '✅' : '❌'} 端口没人听 → 立刻 ok:false + ECONNREFUSED（${refused.elapsedMs}ms｜${refused.hint}）`)
 
-  // ⑤ 域名解析不了：也要说清
-  const nodns = await P.statusPing({ host: 'no-such-host.invalid', port: 25565, timeoutMs: 3000 })
-  console.log(`  ${nodns.ok === false && /解析/.test(String(nodns.hint) + String(nodns.error)) ? '✅' : '❌'} 域名解析不了 → 指向 DNS（${nodns.hint}）`)
+  // ⑤ 域名解析不了 → 指向 DNS。
+  // 🔴 用**纯函数**断言，不拿真网络测：DNS 行为依环境而异（有的解析器把不存在的域名挂到连接超时，
+  //    而不是回 NXDOMAIN，于是走不到"解析不了"这条 hint —— 本机就是这样，那条 live 断言是假红）。
+  const dnsHint = /解析/.test(P.friendlyNetError({ code: 'ENOTFOUND' })) && /解析|DNS/.test(P.friendlyNetError({ code: 'EAI_AGAIN' }))
+  console.log(`  ${dnsHint ? '✅' : '❌'} 域名解析不了 / 解析超时 → 指向 DNS（纯函数：ENOTFOUND / EAI_AGAIN）`)
 
   // ⑥ 黑洞（只 accept 不回包）：必须被**自己的硬超时**掐掉（上游默认是 120 秒，不能等它）
   const { createServer: tcpServer } = await import('node:net')
