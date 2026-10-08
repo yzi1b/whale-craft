@@ -42,6 +42,11 @@ export function isProtectedPathArg (raw) {
   return segs.some((x) => /^\.?whale[-_]craft$/i.test(x))
 }
 
+/** 宿主凭据库 / 凭据相关路径（guard 与 `mc_kit_fs` 共用同一份判定，别在两处各写一份） */
+export const CREDENTIAL_PATH_RE = /(\.credentials|credentials\.yaml|[/\\]\.dsh[/\\])/i
+/** 明文凭据备忘目录 `secrets/`（用户自己的私密档） */
+export const SECRETS_DIR_RE = /[/\\]secrets[/\\]/i
+
 /** 会写文件的宿主工具（read|glob|grep|ls|cat|read_image 是只读的，放行） */
 export const WRITE_FILE_TOOLS = /^(write|edit)$/i
 

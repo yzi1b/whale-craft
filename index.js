@@ -29,7 +29,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFi
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
-import { resolve, sep, join, isAbsolute, dirname } from 'node:path'
+import { resolve, sep, join, isAbsolute, dirname, basename } from 'node:path'
 import { homedir } from 'node:os'
 import { McBot, lossless, logLine, libraryInfo } from './src/core.mjs'
 import { defineTool, toolDefKind } from './src/tool-def.mjs'
@@ -42,7 +42,8 @@ import { PluginConfig, DEFAULT_CONFIG, resolveStateDir, pickPresetTarget, pickPr
 import { AccountStore, parseAuthlibCard, normalizeServerUrl, dashUuid } from './src/accounts.mjs'
 import { DEFAULT_AGENTS_MD, agentsMdPath, legacyAgentsMdPath, migrateLegacyAgentsMd, readAgentsMd, writeAgentsMd, resetAgentsMd, syncRulesVersion } from './src/agentsmd.mjs'
 import { wsConfigPath, isWsConfigData, migrate as migrateWorkspaceConfig, values as workspaceConfigValues, patch as patchWorkspaceConfig, readRulesVersion } from './src/wsconfig.mjs'
-import { PROTECTED_FILES, isProtectedPathArg, WRITE_FILE_TOOLS, rejectionText } from './src/protected.mjs'
+import { PROTECTED_FILES, isProtectedPathArg, WRITE_FILE_TOOLS, rejectionText, CREDENTIAL_PATH_RE, SECRETS_DIR_RE } from './src/protected.mjs'
+import { resolveTarget, expand as expandFsPaths, copyEntry, moveEntry, removeEntry, makeDir, forbiddenReason } from './src/fsops.mjs'
 import { encodePng } from './src/png.mjs'
 import { userMessage, messageFactoryKind, pluginLoadNote } from './src/user-message.mjs'
 import { ImageEngine, imageEngineAvailable, imageEngineError } from './src/image.mjs'
@@ -2864,6 +2865,99 @@ export function apply(ctx, rawConfig) {
     },
   }))
 
+  /* ── 文件系统操作（游戏外通用能力）───────────────────────────────────────────
+   * 补上宿主没有的"删文件/删目录、复制/移动（含二进制）、建目录"。
+   * 🔴 语义（用户 2026-10-08 定，见 dev-docs/tools/mc-tools.md）：
+   *    · 都**递归**；末尾 `/*` 只选目录下**直接**子项；**保留符号链接（不跟随）**；
+   *    · 沙箱按模式：**MC 模式**只能碰 `.whale-craft/`（与宿主文件工具同一把锁）；
+   *      **MC+ 模式**放工作区；相对路径一律以**工作区根**为基准；
+   *    · 受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径**不可删改**。
+   *   两个执行点各自拦一道：工具态（src/fsops.mjs 的包含式校验，权威）+ guard（第二道锁）。
+   * ------------------------------------------------------------------------ */
+  ctx.tools.register(asTool({
+    name: 'mc_kit_fs',
+    description: '操作文件系统。\n'
+      + '复制、移动、删除操作皆递归；符号链接一律按链接本身处理（不跟随其目标）。',
+    parameters: {
+      action: { type: 'string', required: true, description: 'copy / move / delete / make_dir' },
+      from: { type: 'string', description: 'copy/move：起始路径（可末尾 /*）' },
+      to: { type: 'string', description: 'copy/move：目标路径（from 带通配时须为目录，不存在则自动创建）' },
+      path: { type: 'string', description: 'delete / make_dir：目标路径（delete 可末尾 /*）' },
+    },
+    output: text(),
+    timeoutMs: 120_000,
+    async execute(args, exec) {
+      const trimPath = (v) => String(v ?? '').trim()
+      const agent = exec?.agent
+      const cwd = workspaceOf(agent)
+      if (!cwd) throw new Error('这个会话没有工作区，无法操作文件系统。')
+      const base = workspaceRootFor(agent)
+      // 沙箱：MC 模式 = 记忆文件夹；MC+ / 其他 = 工作区（其他模式工具本就不可见）
+      const root = isMcModeAgent(agent) ? memoryRootFor(cwd) : base
+      const action = String(args.action ?? '').toLowerCase()
+      const done = []
+      const skipped = []
+
+      const ensureDir = (abs) => { let ok = false; try { ok = statSync(abs).isDirectory() } catch { ok = false } if (!ok) makeDir(abs) }
+
+      if (action === 'copy' || action === 'move') {
+        if (!trimPath(args.from) || !trimPath(args.to)) throw new Error('copy / move 需要 from 和 to')
+        const src = expandFsPaths(root, base, args.from)
+        const toAbs = resolveTarget(root, base, args.to)
+        if (src.wildcard) {
+          if (existsSync(toAbs) && !statSync(toAbs).isDirectory()) throw new Error(`from 带通配符时 to 必须是目录：${args.to}`)
+          ensureDir(toAbs)
+          for (const s of src.entries) {
+            if (action === 'move') {
+              const why = forbiddenReason(root, s)
+              if (why) throw new Error(`不许移动：${s}（${why}）`)
+            }
+            const dst = join(toAbs, basename(s))
+            const dw = forbiddenReason(root, dst)
+            if (dw) { skipped.push({ path: dst, reason: dw }); continue }
+            if (action === 'copy') copyEntry(s, dst); else moveEntry(s, dst)
+            done.push(dst)
+          }
+        } else {
+          const s = src.entries[0]
+          let dst = toAbs
+          try { if (statSync(toAbs).isDirectory()) dst = join(toAbs, basename(s)) } catch { /* to 不存在 → 当作目标名 */ }
+          if (action === 'move') {
+            const why = forbiddenReason(root, s)
+            if (why) throw new Error(`不许移动：${s}（${why}）`)
+          }
+          const dw = forbiddenReason(root, dst)
+          if (dw) throw new Error(`不许写入：${dst}（${dw}）`)
+          if (action === 'copy') copyEntry(s, dst); else moveEntry(s, dst)
+          done.push(dst)
+        }
+      } else if (action === 'delete') {
+        if (!trimPath(args.path)) throw new Error('delete 需要 path')
+        const exp = expandFsPaths(root, base, args.path)
+        for (const t of exp.entries) {
+          const why = forbiddenReason(root, t)
+          if (why) {
+            if (exp.wildcard) { skipped.push({ path: t, reason: why }); continue }
+            throw new Error(`不许删除：${t}（${why}）`)
+          }
+          removeEntry(t)
+          done.push(t)
+        }
+      } else if (action === 'make_dir') {
+        if (!trimPath(args.path)) throw new Error('make_dir 需要 path')
+        const abs = resolveTarget(root, base, args.path)
+        makeDir(abs)
+        done.push(abs)
+      } else {
+        throw new Error(`未知 action："${action}"（可用 copy / move / delete / make_dir）`)
+      }
+
+      const head = `${action}：完成 ${done.length} 项`
+        + (skipped.length ? `，跳过 ${skipped.length} 项（受保护/凭据）` : '')
+      return { action, root, done, skipped, text: head + (done.length ? `\n${done.join('\n')}` : '') }
+    },
+  }))
+
   /* ── 长期记忆：专用工具与索引自动注入**均已移除**，全靠 agent 自行用宿主文件工具 ──
    * 2026-10-07：用户先决定移除 `mc_kit_memory` 工具（与宿主受限文件工具功能重叠），
    * 随后又要求**去掉 README 索引的自动注入**。现在长期记忆完全交给 agent 自己：
@@ -4062,14 +4156,15 @@ export function apply(ctx, rawConfig) {
       const isPlus = pluginConfig.isMcPlusPreset(presetId)
 
       // ① 凭据硬拒：两种 MC 模式都保留（"凭据不进模型上下文"是插件不变式）
-      if ((isMc || isPlus) && /^(read|edit|write|glob|grep|ls|cat|read_image)$/i.test(name)) {
+      //    `mc_kit_fs` 也在这里过（它的 from/to/path 会被 JSON.stringify 扫到；copy 凭据同样是泄露）
+      if ((isMc || isPlus) && /^(read|edit|write|glob|grep|ls|cat|read_image|mc_kit_fs)$/i.test(name)) {
         const text = JSON.stringify(exec?.arguments ?? {})
-        if (/(\.credentials|credentials\.yaml|[/\\]\.dsh[/\\])/i.test(text)) {
+        if (CREDENTIAL_PATH_RE.test(text)) {
           return 'MC 模式不允许触碰宿主凭据文件；账号密码在「MC设置」里维护，AI 不需要也不应该看到。'
         }
         // 明文凭据备忘（`secrets/` 下用户自己的私密档）：同样不许读
         // （2026-09-16：账户体系上线后，密码只该待在「MC设置 → 账户」里）
-        if (/[/\\]secrets[/\\]/i.test(text)) {
+        if (SECRETS_DIR_RE.test(text)) {
           return 'MC 模式不允许读凭据备忘目录（secrets/）；账号密码在「MC设置 → 账户」里维护，AI 不需要也不应该看到。'
         }
       }
@@ -4126,6 +4221,35 @@ export function apply(ctx, rawConfig) {
         const prefix = root.endsWith(sep) ? root : root + sep
         if (abs !== root && !abs.startsWith(prefix)) {
           return `MC 模式只能在记忆文件夹（${root}）里读写文件；这个路径在外面：${rel}`
+        }
+      }
+
+      // ③′ `mc_kit_fs`（文件系统写工具）：MC 模式同样限在记忆文件夹内；受保护文件/凭据不可删改。
+      //     权威防线在工具态（src/fsops.mjs 的包含式校验）；这里是白名单之外的硬锁。
+      if (name.toLowerCase() === 'mc_kit_fs') {
+        const root = memoryRootFor(workspaceOf(exec?.agent))
+        const base = workspaceRootFor(exec?.agent)
+        const prefix = root.endsWith(sep) ? root : root + sep
+        const a = exec?.arguments ?? {}
+        const has = (v) => v !== undefined && v !== null && String(v).trim() !== ''
+        for (const v of [a.from, a.to, a.path]) {
+          if (!has(v)) continue
+          const abs = resolve(base, String(v).trim())
+          if (abs !== root && !abs.startsWith(prefix)) {
+            return `MC 模式的 mc_kit_fs 只能在记忆文件夹（${root}）内操作；这个路径在外面：${v}`
+          }
+        }
+        const act = String(a.action ?? '').toLowerCase()
+        const targets = (act === 'delete' || act === 'make_dir')
+          ? [a.path]
+          : [a.to, ...(act === 'move' ? [a.from] : [])]
+        for (const v of targets) {
+          if (!has(v)) continue
+          const raw = String(v).trim()
+          if (CREDENTIAL_PATH_RE.test(raw) || SECRETS_DIR_RE.test(raw)) {
+            return 'MC 模式不允许删改凭据文件/目录；账号密码在「MC设置」里维护，AI 不需要也不应该看到。'
+          }
+          if (isProtectedPathArg(raw.replace(/[/\\]\*$/, ''))) return rejectionText()
         }
       }
 

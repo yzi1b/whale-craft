@@ -213,7 +213,18 @@
 
 - `PROTECTED_FILES / isProtectedName`（根级、大小写不敏感）；`isProtectedPathArg(raw)`（guard 用：裸名 或 含 `.whale-craft`/`whale_craft` 段的路径；嵌套记忆文件如 `_global/config.json` 不算）。
 - `WRITE_FILE_TOOLS=/^(write|edit)$/`、`MEMORY_WRITE_ACTIONS=append/write/delete/put`（**现无消费方**：guard 侧随 `mc_kit_memory` 于 2026-10-07 移除，保留供将来写类工具复用）；`rejectionText()` / `protectedWriteError(rel)` 统一文案。
+- `CREDENTIAL_PATH_RE`（`\.credentials`/`credentials.yaml`/`.dsh`）与 `SECRETS_DIR_RE`（`secrets/`）：凭据相关路径判定，**guard 与 `mc_kit_fs`（src/fsops.mjs）共用一份**（2026-10-08 从 guard 的两个内联正则提取）。
 - guard（index.js）对文件工具用它 + **解析到记忆根后正好是该文件**的二次判定（memoryDir 重定向时绝对路径不含 `.whale-craft` 段）；写入路径以 memory.mjs 的 `target.protected` 为兜底。
+
+## 15b. `src/fsops.mjs` —— `mc_kit_fs` 的文件系统操作（2026-10-08）
+
+> 补宿主没有的"删文件/删目录、复制/移动（含二进制）、建目录"。**纯函数、只吃路径**（沙箱根 `root` + 基准 `base`），便于自检单测。
+
+- `resolveTarget(root, base, raw)`：绝对路径照用、相对路径按 `base`（工作区根）解析；前缀包含校验 + **父链 realpath 复查**（防 `root/link -> 外界` 这类越界符号链接，风格同发布区 index.js 的 realpath 复查）。
+- `expand(root, base, raw)`：末尾 `/*` → 该目录下**直接**子项（非深层 glob；`*` 只能在末尾，否则报错）；否则单目标。
+- `copyEntry / moveEntry / removeEntry / makeDir`：`cpSync{recursive, dereference:false, verbatimSymlinks:true}`（**保留符号链接、不跟随**）；move 先 `renameSync`、跨盘（EXDEV）退回复制+删除；delete 走 `lstat`（链接只 `unlinkSync` 本身）。
+- `forbiddenReason(root, abs)`：受保护文件（**根级** RULES.md/AGENTS.md/config.json）、凭据路径、沙箱根本身 → 拒；嵌套的 `_global/config.json` 不误伤。
+- **双层防线**：工具态（本模块，权威）+ guard（index.js ③′，MC 模式第二道锁，沙箱=记忆根）。
 
 ## 16. `src/tool-def.mjs` —— 工具定义（宿主优先 + 内置兜底）
 

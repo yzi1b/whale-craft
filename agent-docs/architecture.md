@@ -29,7 +29,7 @@ DSH host 进程
    ├─ McRegistry            agentId → McSession
    │   └─ McSession         McBot + events[]（≤200 条）+ Watchdog + selectedAccount
    │       └─ McBot         src/core.mjs：mineflayer 实例（一个游戏角色）
-   ├─ 工具注册（31 个）      mc_* 26 / mc_kit_* 2 / mc_admin_* 1 / mc_debug_* 2，全部经 asTool()
+   ├─ 工具注册（32 个）      mc_* 26 / mc_kit_* 3 / mc_admin_* 1 / mc_debug_* 2，全部经 asTool()
    ├─ HTTP（webServer）
    │   ├─ /api/mc/*                     状态/停止/设置（账户/配置/提示词/分享/preset 名单）
    │   └─ /api/whale-craft/express/*    发布区文件（**仅 web 模式且分享开启**时服务）

@@ -1,7 +1,7 @@
-# 工具目录（31 个）
+# 工具目录（32 个）
 
 > 快照：**0.2.0**（开发中，未发布）。注册全部在 `index.js` 的 `apply()` 内（`ctx.tools.register(asTool({...}))`），
-> 分四段：`mc_*`（游戏内，26）/ `mc_kit_*`（游戏外辅助，2）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
+> 分四段：`mc_*`（游戏内，26）/ `mc_kit_*`（游戏外辅助，3）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
 > 可见性按模式分档（2026-10-04）：**MC模式** 只见 mc/mckit + 文件工具；**MC+模式** 全量可见（含 admin）；
 > **其他模式** 隐藏 mc_* / mc_kit_*（仅保留 `mc_admin_*`），另有 guard 硬拒兜底。
 > 🔴 **调试工具（`mc_debug_*`）另受「MC设置 → 调试」的 `exposeDebugTools` 开关门控**（2026-10-05）：关时在 MC/MC+ 也不暴露（白名单 / MC+ deny / guard 三处）。
@@ -63,11 +63,12 @@
 | `mc_sequence` | 连串动作 | **最多 64 步**；`stopOnError` 默认 true；`budgetMs ≤570s`、`timeoutMs 600s`；步类型 wait≤30s/move/look/toward/place/break/dig/use/attack/equip/give/toss/say/jump。比让模型写脚本稳 |
 | `mc_command` | 服务器指令 | **最后手段**：要 OP、受白名单（`commandWhitelist` 精确名/`/正则/`/`"*"`；`allowAllCommands` 全放行） |
 
-## 五、游戏外辅助（2，`mc_kit_*`）
+## 五、游戏外辅助（3，`mc_kit_*`）
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
 | `mc_kit_image` | 图像处理 | `info/embed/render/grid/save`：SVG→PNG 光栅化（`sharp`，可选依赖，缺失只影响 `render`）、引图进 SVG、拼网格（≤64 张，返回 SVG）、落盘。输入输出都限制在本会话工作区内（`insideWorkspace`） |
+| `mc_kit_fs` | 文件系统操作 | `copy/move/delete/make_dir`（都递归）。末尾 `/*` 只选目录下**直接**子项；**保留符号链接（不跟随）**。沙箱按模式：**MC** 限 `.whale-craft/`、**MC+** 放工作区；相对路径以工作区根为基准。受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径**不可删改**（`src/fsops.mjs` 权威 + guard 第二道锁） |
 | `mc_kit_express` | 把发布区文件换成"给用户的东西" | 路径解析先记忆根后 cwd；只认 `.express/`（目录即白名单）；**按宿主模式回不同 URL** —— web：`base + /api/whale-craft/express/<uuid>/…`；desktop：`http://localhost:<port>/<uuid>/…`（端口服务没起来回占用文案）；关闭恒回"文件分享已关闭…绝对路径…"；工作区 uuid 查不到即拒。宿主另有 `present`（显式文件交付组，MC 模式白名单里放行）——两者互补 |
 
 ## 六、管理（1，`mc_admin_*`）

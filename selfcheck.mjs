@@ -268,12 +268,13 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   const { readFileSync } = await import('node:fs')
   const idx = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
   console.log(`  ${!tools.has('mc_kit_share') ? '✅' : '❌'} 🔴 mc_kit_share 已移除（它只是在调宿主**另装**的 dsh-file-host，插件本身没有文件服务器）`)
-  console.log(`  ${tools.size === 31 ? '✅' : '❌'} 工具数 31（实际 ${tools.size}）：mc_* 26 + mc_kit_* 2 + mc_admin_* 1 + mc_debug_* 2`)
+  console.log(`  ${tools.size === 32 ? '✅' : '❌'} 工具数 32（实际 ${tools.size}）：mc_* 26 + mc_kit_* 3 + mc_admin_* 1 + mc_debug_* 2`)
   // 只看**代码**，不看注释：注释里留着"为什么删"的说明（那是要留的）
   const codeOnly = idx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
   console.log(`  ${!/uploadToFileHost|dsh-file-host|\/serve\/file-host|mc_kit_share/.test(codeOnly) ? '✅' : '❌'} 源码里没有上传/文件服务器残留（注释里保留"为什么删"的说明）`)
   console.log(`  ${tools.has('mc_kit_image') ? '✅' : '❌'} mc_kit_image 仍在（渲染 PNG）`)
-  console.log(`  ${!tools.has('mc_kit_memory') ? '✅' : '❌'} 🔴 mc_kit_memory 已移除（长期记忆改走宿主文件工具；索引注入仍保留）`)
+  console.log(`  ${tools.has('mc_kit_fs') ? '✅' : '❌'} mc_kit_fs 新增（文件系统：copy/move/delete/make_dir，保留符号链接）`)
+  console.log(`  ${!tools.has('mc_kit_memory') ? '✅' : '❌'} 🔴 mc_kit_memory 已移除（长期记忆改走宿主文件工具；索引自动注入也已移除）`)
   // 2026-10-05：新增观察工具 + 诊断工具改名进 mc_debug_*
   console.log(`  ${tools.has('mc_context') && tools.has('mc_players') ? '✅' : '❌'} 新增观察工具 mc_context / mc_players`)
   console.log(`  ${tools.has('mc_debug_sessions') && tools.has('mc_debug_diag') && !tools.has('mc_sessions') && !tools.has('mc_diag') ? '✅' : '❌'} 🔴 mc_sessions/mc_diag 已改名 mc_debug_sessions / mc_debug_diag`)
@@ -1327,6 +1328,88 @@ console.log('\n--- status：服务器地址 ---')
   console.log(`  ${noProfile.connection === null ? '✅' : '❌'} 从没连过 → connection=null（前端只显示"在游戏中"，不瞎编）`)
 }
 
+// ── 文件系统操作（mc_kit_fs / src/fsops.mjs）用户 2026-10-08 ──
+console.log('\n--- 文件系统操作（mc_kit_fs）---')
+{
+  const fsops = await import('./src/fsops.mjs')
+  const { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, lstatSync, readdirSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const base = mkdtempSync(join(tmpdir(), 'whale-fs-'))
+  const root = join(base, 'sandbox')
+  mkdirSync(root, { recursive: true })
+  const R = (p) => join(root, p)
+
+  fsops.makeDir(R('a/b/c'))
+  console.log(`  ${existsSync(R('a/b/c')) ? '✅' : '❌'} make_dir 递归建目录`)
+
+  writeFileSync(R('x.txt'), 'hello\n')
+  fsops.copyEntry(R('x.txt'), R('y.txt'))
+  console.log(`  ${readFileSync(R('y.txt'), 'utf8') === 'hello\n' ? '✅' : '❌'} copy 单文件`)
+
+  mkdirSync(R('dir/sub'), { recursive: true })
+  writeFileSync(R('dir/sub/deep.txt'), 'deep\n')
+  fsops.copyEntry(R('dir'), R('dir2'))
+  console.log(`  ${readFileSync(R('dir2/sub/deep.txt'), 'utf8') === 'deep\n' ? '✅' : '❌'} copy 目录递归`)
+
+  fsops.moveEntry(R('y.txt'), R('z.txt'))
+  console.log(`  ${!existsSync(R('y.txt')) && existsSync(R('z.txt')) ? '✅' : '❌'} move（源消失、目标出现）`)
+
+  const exp = fsops.expand(root, base, 'sandbox/dir/*')
+  console.log(`  ${exp.wildcard && exp.entries.length === 1 && exp.entries[0].endsWith('sub') ? '✅' : '❌'} expand 末尾 /* 只选直接子项（${exp.entries.length} 项）`)
+  const badWild = (() => { try { fsops.expand(root, base, 'sandbox/dir/su*'); return '' } catch (e) { return e.message } })()
+  console.log(`  ${/通配符只能写成末尾/.test(badWild) ? '✅' : '❌'} 内嵌/末尾之外的 * 被拒`)
+
+  for (const e of fsops.expand(root, base, 'sandbox/dir2/*').entries) fsops.removeEntry(e)
+  console.log(`  ${existsSync(R('dir2')) && readdirSync(R('dir2')).length === 0 ? '✅' : '❌'} delete /* 删光子项、保留目录本身`)
+
+  fsops.removeEntry(R('z.txt'))
+  console.log(`  ${!existsSync(R('z.txt')) ? '✅' : '❌'} delete 单文件`)
+
+  // 符号链接：需要系统创建权限（Windows 非开发者模式会 EPERM）→ 拿不到就跳过该组
+  const outside = mkdtempSync(join(tmpdir(), 'whale-fs-out-'))
+  writeFileSync(join(outside, 'target.txt'), 'target\n')
+  let canLink = true
+  try { symlinkSync(join(outside, 'target.txt'), R('link.txt')) } catch { canLink = false }
+  if (canLink) {
+    fsops.copyEntry(R('link.txt'), R('link2.txt'))
+    console.log(`  ${lstatSync(R('link2.txt')).isSymbolicLink() ? '✅' : '❌'} 🔴 符号链接复制后仍是链接（保留、不跟随）`)
+    fsops.removeEntry(R('link.txt'))
+    console.log(`  ${!existsSync(R('link.txt')) && existsSync(join(outside, 'target.txt')) ? '✅' : '❌'} 🔴 删链接不动其目标`)
+    try { symlinkSync(outside, R('outlink')) } catch { /* 目录链接同样可能需要权限 */ }
+    if (existsSync(R('outlink'))) {
+      const linkEsc = (() => { try { fsops.resolveTarget(root, base, 'sandbox/outlink/f.txt'); return '' } catch (e) { return e.message } })()
+      console.log(`  ${/越界/.test(linkEsc) ? '✅' : '❌'} 🔴 顺着越界符号链接往里走被拒`)
+    }
+  } else {
+    console.log('  ✅ 符号链接用例跳过（本机无创建权限：Windows 需开发者模式/管理员）')
+  }
+
+  const outErr = (() => { try { fsops.resolveTarget(root, base, '../outside.txt'); return '' } catch (e) { return e.message } })()
+  console.log(`  ${/沙箱内/.test(outErr) ? '✅' : '❌'} 越界路径被拒：${String(outErr).slice(0, 30)}…`)
+
+  writeFileSync(R('RULES.md'), 'x')
+  console.log(`  ${fsops.forbiddenReason(root, R('RULES.md')) ? '✅' : '❌'} 受保护文件（根级 RULES.md）不可删改`)
+  mkdirSync(R('_global'), { recursive: true })
+  writeFileSync(R('_global/config.json'), '{}')
+  console.log(`  ${fsops.forbiddenReason(root, R('_global/config.json')) === null ? '✅' : '❌'} 嵌套的 _global/config.json 不误伤`)
+  console.log(`  ${fsops.forbiddenReason(root, R('secrets/x.md')) && fsops.forbiddenReason(root, R('.credentials.yaml')) ? '✅' : '❌'} 凭据 / secrets 路径不可删改`)
+  console.log(`  ${fsops.forbiddenReason(root, root) ? '✅' : '❌'} 不能删沙箱根本身`)
+
+  // 工具层：走真实注册（非 MC → 沙箱=工作区）
+  const tool = tools.get('mc_kit_fs')
+  const ex = { agent: { id: 'sess-FS', session: { header: { cwd: base } } } }
+  await tool.execute({ action: 'make_dir', path: 'ws/notes' }, ex)
+  writeFileSync(join(base, 'ws', 'notes', 'a.md'), 'hi\n')
+  await tool.execute({ action: 'copy', from: 'ws/notes/a.md', to: 'ws/notes/b.md' }, ex)
+  console.log(`  ${readFileSync(join(base, 'ws', 'notes', 'b.md'), 'utf8') === 'hi\n' ? '✅' : '❌'} 工具层 copy（相对工作区根）`)
+  const delOut = await tool.execute({ action: 'delete', path: 'E:\\definitely\\outside' }, ex).then(() => null).catch((e) => e.message)
+  console.log(`  ${/沙箱内/.test(String(delOut)) ? '✅' : '❌'} 工具层：工作区之外拒删`)
+  writeFileSync(join(base, 'RULES.md'), 'x')
+  const delProt = await tool.execute({ action: 'delete', path: 'RULES.md' }, ex).then(() => null).catch((e) => e.message)
+  console.log(`  ${/不可删改/.test(String(delProt)) ? '✅' : '❌'} 工具层：受保护文件拒删`)
+}
+
 // ── 记忆（需求 6 v3）：固定 .whale-craft + AI 维护的 README 索引 + 任意格式 ──
 console.log('\n--- 记忆能力（.whale-craft / README 索引 / 任意格式）---')
 {
@@ -1956,6 +2039,8 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   console.log(`  ${credRead ? '✅' : '❌'} MC 模式读 .credentials.yaml 被 guard 拒绝：${String(credRead).slice(0, 28)}`)
   const secretsRead = callGuard({ name: 'read', arguments: { path: 'E:\\x\\.agent-docs\\secrets\\example.md' }, agent: mcGuardAgent })
   console.log(`  ${secretsRead ? '✅' : '❌'} MC 模式读 secrets/ 明文凭据备忘也被拒：${String(secretsRead).slice(0, 28)}`)
+  const credFsCopy = callGuard({ name: 'mc_kit_fs', arguments: { action: 'copy', from: 'C:\\Users\\x\\.dsh\\.credentials.yaml', to: 'x' }, agent: mcGuardAgent })
+  console.log(`  ${credFsCopy ? '✅' : '❌'} 🔴 mc_kit_fs 碰凭据（copy）也被拒：${String(credFsCopy).slice(0, 24)}`)
   const mdRead = callGuard({ name: 'read', arguments: { path: 'RULES.md' }, agent: mcGuardAgent })
   console.log(`  ${mdRead === undefined ? '✅' : '❌'} 🔴 受保护文件 RULES.md **可读**（guard 放行 —— 可读不可写）`)
   const protectedWrites = [
@@ -1964,6 +2049,8 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     ['edit', { path: 'config.json' }],
     ['edit', { path: join(memRoot, 'config.json') }],
     ['edit', { path: 'AGENTS.md' }],
+    ['mc_kit_fs', { action: 'delete', path: 'RULES.md' }],
+    ['mc_kit_fs', { action: 'make_dir', path: 'config.json' }],
   ]
   const missedWrites = protectedWrites.filter(([name, args]) => callGuard({ name, arguments: args, agent: mcGuardAgent }) === undefined)
   console.log(`  ${missedWrites.length === 0 ? '✅' : '❌'} 🔴 受保护文件的各种写法**写全被拒**（${protectedWrites.length - missedWrites.length}/${protectedWrites.length}）：${missedWrites.map(([n]) => n).join(', ') || '无漏网'}`)
@@ -1978,10 +2065,12 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     ['glob', { pattern: '**/*.mjs' }],                                       // 不给路径 = 扫整个工作区
     ['grep', { pattern: 'password', path: 'E:\\x' }],
     ['write', { file_path: 'E:\\x\\via-file_path.txt' }],                    // 兼容 file_path 参数名
+    ['mc_kit_fs', { action: 'delete', path: 'E:\\x\\secret.txt' }],          // mc_kit_fs 也受同一把沙箱锁
+    ['mc_kit_fs', { action: 'copy', from: 'ok.md', to: 'E:\\x\\out.md' }],  // to 在外 → 越界
   ]
   const escaped = jail.filter(([name, args]) => callGuard({ name, arguments: args, agent: { id: 'sess-MC', ctx: mcCtxObj } }) === undefined)
   console.log(`  ${escaped.length === 0 ? '✅' : '❌'} 🔴 MC 模式的文件工具越界全被拒（${jail.length - escaped.length}/${jail.length}）：${escaped.map(([n]) => n).join(', ') || '无漏网'}`)
-  const insideOk = [['read', { path: join(memRoot, 'notes.md') }], ['glob', { pattern: '*.md', path: memRoot }], ['write', { path: 'notes.md' }]]
+  const insideOk = [['read', { path: join(memRoot, 'notes.md') }], ['glob', { pattern: '*.md', path: memRoot }], ['write', { path: 'notes.md' }], ['mc_kit_fs', { action: 'make_dir', path: join(memRoot, 'newdir') }]]
     .every(([name, args]) => callGuard({ name, arguments: args, agent: { id: 'sess-MC', ctx: mcCtxObj } }) === undefined)
   console.log(`  ${insideOk ? '✅' : '❌'} 记忆文件夹**内**的读写放行（绝对路径 + 相对路径都行）`)
   const plainExec3 = { name: 'pwsh', arguments: { command: 'whoami' }, agent: { id: 'sess-MC', ctx: mcCtxObj } }
@@ -2203,7 +2292,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   const denyList = mcRestrict?.f?.deny ?? []
   console.log(`  ${Array.isArray(allowList) ? '✅' : '❌'} MC 模式走的是**白名单**（restrict({allow})），不是"只藏自家工具"${allowList ? `（${allowList.length} 个）` : ''}`)
   console.log(`  ${allowList && !allowList.includes('pwsh') && !allowList.includes('subagent') && !allowList.includes('workflow') ? '✅' : '❌'} 🔴 白名单里**没有** pwsh / subagent / workflow：${JSON.stringify((allowList ?? []).slice(0, 6))}…`)
-  console.log(`  ${allowList && allowList.includes('mc_status') && allowList.includes('mc_kit_image') && allowList.includes('mc_build') ? '✅' : '❌'} 自己的工具还在（mc_status / mc_kit_image / mc_build）`)
+  console.log(`  ${allowList && allowList.includes('mc_status') && allowList.includes('mc_kit_image') && allowList.includes('mc_kit_fs') && allowList.includes('mc_build') ? '✅' : '❌'} 自己的工具还在（mc_status / mc_kit_image / mc_kit_fs / mc_build）`)
   console.log(`  ${allowList && allowList.every((n) => !n.startsWith('mc_admin_')) ? '✅' : '❌'} 管理工具不在白名单里（hideAdminTools 默认 true）`)
   console.log(`  ${allowList && ['read', 'write', 'edit', 'read_image'].every((n) => allowList.includes(n)) ? '✅' : '❌'} 在场的文件工具在白名单里（路径由 guard 限在 .whale-craft/）`)
   console.log(`  ${allowList && allowList.includes('present') ? '✅' : '❌'} present 也在白名单里（显式文件交付：卡片 + 可预览/打开）`)
@@ -2220,7 +2309,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const stdCalls = restrictCalls.filter((c) => c.preset === 'standard')
     const stdDeny = stdCalls.find((c) => Array.isArray(c.f?.deny))
     console.log(`  ${stdDeny && stdDeny.f.allow === undefined ? '✅' : '❌'} 非 MC 模式的会话套的是 **deny**（不是白名单）：宿主工具面不受影响`)
-    console.log(`  ${stdDeny && stdDeny.f.deny.includes('mc_status') && stdDeny.f.deny.includes('mc_kit_image') ? '✅' : '❌'} deny 里含 mc_* / mc_kit_*（从可见面摘掉）`)
+    console.log(`  ${stdDeny && stdDeny.f.deny.includes('mc_status') && stdDeny.f.deny.includes('mc_kit_image') && stdDeny.f.deny.includes('mc_kit_fs') ? '✅' : '❌'} deny 里含 mc_* / mc_kit_*（从可见面摘掉）`)
     console.log(`  ${stdDeny && !stdDeny.f.deny.includes('mc_admin_config') && stdDeny.f.deny.every((n) => n.startsWith('mc_')) ? '✅' : '❌'} 🔴 deny 里**不含** mc_admin_*、也不含任何非 mc 工具（不误伤普通会话）`)
     // 2026-10-05：MC+ 仍**不套白名单**（标准工具 + mc/mckit 全量）；只在调试开关关时 deny 掉 mc_debug_*
     const plusCalls = restrictCalls.filter((c) => c.preset === 'minecraft-plus')

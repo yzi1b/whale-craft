@@ -213,6 +213,12 @@
 - **参数**：`path:string*`
 - **超时**：默认
 
+### `mc_kit_fs`
+
+- **描述**：操作文件系统。**MC模式**下只能操作 `.whale-craft/` 下，**MC+模式**按宿主设置（一般为工作区）。
+- **参数**：`action:string*`（copy / move / delete / make_dir）、`from:string`（copy/move 必须）、`to:string`（copy/move 必须）、`path:string`（delete/make_dir 必须）
+- **备注**：路径为绝对路径，或**相对于工作区目录**的相对路径。copy、move 的 `from` 与 delete 的 `path` 允许末尾通配符 `/*`（意为选中目录下所有**直接**子项）；此时 copy/move 的 `to` 必须是目录、**不存在会自动创建**。操作均递归；**符号链接一律按链接本身处理（不跟随其目标）**。**受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径不可删改**（通配命中则跳过并报告）。
+
 ## 管理（`mc_admin_*`）
 
 ### `mc_admin_config`
