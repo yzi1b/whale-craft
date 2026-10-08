@@ -1,14 +1,13 @@
 /**
- * whale_craft · 落地"Release 工作流修复"（`npm run release:workflow-fix`）
+ * whale_craft · 落地 release 工作流（`npm run release:workflow-fix`）
  * ============================================================================
- * 为什么需要它（用户 2026-09-17）：
- *   · 旧 `release.yml` 最后一步是 `npm publish`（`if: env.NODE_AUTH_TOKEN != ''`）——
- *     仓库里那个 `NPM_TOKEN` 一失效，每次打 tag 都会**红叉**，而发布其实早就成功了；
- *   · 修好的版本已经放在 `scripts/release.workflow.yml`（**普通文件**，所以能随代码推上去）：
- *     删掉整段 npm、产物改 zip、正文取 CHANGELOG.md，不再 `--generate-notes`；
- *   · 但把文件放进 `.github/workflows/` 并推送，需要 token 有 **`workflow`** scope
- *     （GitHub 硬规则："refusing to allow a Personal Access Token to create or update workflow …"）。
- *     本脚本就是替你把这一步做完：复制 → 提交 → 推送 → 回读校验。
+ * 为什么需要它（2026-09-17 起，2026-10-08 改成通用同步）：
+ *   · `.github/workflows/*` 不总能经普通 `git push` 落地：GitHub 硬规则要求 token 有
+ *     **`workflow`** scope，而且经本机这条代理通道推时**明明有 scope 也被拒**
+ *     （实测结论，见 agent-docs/release.md §4）；而 **Contents API 可以**。
+ *   · 所以 `release.yml` 的内容在 `scripts/release.workflow.yml` 留一份（**普通文件**，能随代码推上去），
+ *     本脚本负责把这份模板同步到 `.github/workflows/release.yml`：复制 → 提交 → 推送 → 回读校验。
+ *   · 改 release.yml 时**记得连模板一起改**，否则下次同步会把改动覆盖掉（本脚本会先报"与模板不同"）。
  *
  * 用法（在你自己的终端里跑，token 用**你自己的**）：
  *   node scripts/land-workflow-fix.mjs --dry                 # 只看会改什么
@@ -66,13 +65,12 @@ function readToken () {
   return ''
 }
 
-console.log('whale_craft · 落地 Release 工作流修复')
+console.log('whale_craft · 落地 release 工作流（模板 → .github/workflows/release.yml，Contents API 优先）')
 if (!existsSync(TEMPLATE)) die(`找不到模板 ${TEMPLATE}`)
 const want = readFileSync(TEMPLATE, 'utf8')
 const now = existsSync(TARGET) ? readFileSync(TARGET, 'utf8') : ''
-if (now === want) { ok('远端那份（本地工作树）已经就是修好的版本，什么都不用做'); process.exit(0) }
-if (/npm publish/.test(now)) warn('当前 .github/workflows/release.yml 里还有 `npm publish`（这正是红叉的来源）')
-else warn('当前 .github/workflows/release.yml 与模板不同（会按模板覆盖）')
+if (now === want) { ok('本地工作树里的 release.yml 已经与模板一致，什么都不用做'); process.exit(0) }
+warn('当前 .github/workflows/release.yml 与 scripts/release.workflow.yml 不同（会按模板覆盖）')
 
 const token = readToken()
 if (token) {
@@ -127,7 +125,7 @@ const landedViaApi = await (async () => {
       method: 'PUT',
       headers: { ...apiHeaders(), 'content-type': 'application/json; charset=utf-8' },
       body: JSON.stringify({
-        message: 'Release 工作流：删掉 npm 步骤（红叉来源）；产物改 zip；正文取 CHANGELOG',
+        message: '同步 release.yml（与 scripts/release.workflow.yml 对齐）',
         content: Buffer.from(want, 'utf8').toString('base64'),
         sha,
         branch: BRANCH,
@@ -149,7 +147,7 @@ if (!landedViaApi) {
   const staged = capture('git', ['diff', '--cached', '--name-only'])
   if (!staged.out) { ok('没有变化（可能刚才已经写过了）'); process.exit(0) }
   const commit = capture('git', ['-c', 'user.name=' + (process.env.GIT_AUTHOR_NAME ?? 'whale-craft'), '-c', 'user.email=' + (process.env.GIT_AUTHOR_EMAIL ?? 'noreply@example.com'), 'commit', '-m',
-    'Release 工作流：删掉 npm 步骤（红叉来源）；产物改 zip；正文取 CHANGELOG（不再 --generate-notes）'])
+    '同步 release.yml（与 scripts/release.workflow.yml 对齐）'])
   if (commit.code !== 0) die(`git commit 失败：${commit.err || commit.out}`)
   ok('已提交')
 
@@ -174,11 +172,8 @@ if (token) {
       const url = `${API}/repos/${co.owner}/${co.name}/contents/.github/workflows/release.yml?ref=${BRANCH}`
       const res = await fetch(url, { headers: apiHeaders() })
       if (res.ok) {
-        // ⚠️ 注释里**故意**提到 npm publish（说明为什么删掉它）→ 先剥注释再判
         const raw = Buffer.from((await res.json()).content, 'base64').toString('utf8')
-        const code = raw.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
-        console.log(`\n远端 ${BRANCH} 上的 release.yml：${/npm publish/.test(code) ? '❌ 还含 npm publish' : '✅ 已无 npm publish（剥注释后判的）'}`)
-        console.log('下一次打 tag 就会：跑检查 → 出 zip → 用 CHANGELOG 当正文，不再碰 npm。')
+        console.log(`\n远端 ${BRANCH} 上的 release.yml：${raw.trim() === want.trim() ? '✅ 与模板一致' : '❌ 与模板不一致'}`)
       } else warn(`回读校验失败（${res.status}）`)
     }
   } catch (e) { warn(`回读校验跳过：${e.message}`) }

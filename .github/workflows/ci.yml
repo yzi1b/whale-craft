@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    # dev 是日常开发分支，直推也要跑检查 —— 别让改动绕过 CI 攒到 merge 时才炸
+    branches: [main, master, dev]
   pull_request:
   workflow_dispatch:
 

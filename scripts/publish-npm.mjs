@@ -13,13 +13,14 @@
  *   ⑤ 该版本**必须还没发过**（`npm view <name>@<version>` 查得到就停）；
  *   ⑥ `npm pack --dry-run` 打出清单（顺带核对没混进 logs/账户/配置）；
  *   ⑦ 提醒 GitHub Release 有没有对应 tag/Release（只是提醒，不拦）；
- *   ⑧ `npm publish --access public`（除非 --dry）。
+ *   ⑧ `npm publish --access public --ignore-scripts`（除非 --dry）—— ③ 已经跑过同一套检查，
+ *      所以发布时跳过 lifecycle，不让 `prepublishOnly` 再跑第二遍。
  *
  * 用法：
  *   node scripts/publish-npm.mjs                 # 真发（会先让你确认）
  *   node scripts/publish-npm.mjs --dry           # 只走到 pack 清单，不发
  *   node scripts/publish-npm.mjs --yes           # 跳过确认（IDE 终端里方便）
- *   node scripts/publish-npm.mjs --skip-checks   # 跳过 ③（不推荐）
+ *   node scripts/publish-npm.mjs --skip-checks   # 跳过 ③（不推荐；发布时也不再触发 prepublishOnly）
  *   node scripts/publish-npm.mjs --otp 123456    # 有 2FA 时带上一次性码
  *   node scripts/publish-npm.mjs --tag next      # 发到某个 dist-tag（默认 latest）
  *   node scripts/publish-npm.mjs --dry --skip-auth   # 没配 token 时也能把前置检查跑完（试跑用）
@@ -147,7 +148,9 @@ step(7, 'GitHub 那边有对应的 tag / Release 吗？（只提醒）')
   else warn(`本地没有 tag ${tag}（npm 与 GitHub 版本会对不上，建议先发 Release）`)
 }
 
-const cmdArgs = ['publish', '--access', 'public', '--tag', DIST_TAG, ...(OTP ? ['--otp', OTP] : [])]
+// --ignore-scripts：③ 已经把 prepublishOnly 那套（check-core + selfcheck）跑过了，不加会被
+// lifecycle 再跑一遍 —— 重复又慢。prepublishOnly 留着拦"裸跑 npm publish"的人。
+const cmdArgs = ['publish', '--access', 'public', '--ignore-scripts', '--tag', DIST_TAG, ...(OTP ? ['--otp', OTP] : [])]
 step(8, DRY ? '（dry-run 到此为止，没有发布）' : `npm ${cmdArgs.join(' ')}`)
 if (DRY) {
   console.log('  想真发就去掉 --dry。')

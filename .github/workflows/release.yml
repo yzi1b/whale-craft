@@ -122,5 +122,8 @@ jobs:
             echo "::notice::npm 上已经有 whale_craft@${VERSION}，跳过（npm 不允许覆盖同版本）"
             exit 0
           fi
-          npm publish --access public
+          # --ignore-scripts：上面「发布前必须全绿」已经跑过 check-core + selfcheck 了，
+          # 不加还会经 prepublishOnly 再跑一遍同一套（重复又慢）。prepublishOnly 留着，
+          # 是给"裸跑 npm publish"兜底的 —— 不走这条流程的人照样拦得住坏树。
+          npm publish --access public --ignore-scripts
           echo "已发布 https://www.npmjs.com/package/whale_craft/v/${VERSION}"

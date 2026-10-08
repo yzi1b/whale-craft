@@ -1,11 +1,14 @@
 name: Release
 
-# 打一个 v* tag（例如 v0.1.2）就自动：跑检查 → 校验 tag 与 package.json 版本一致 →
-# 打 **zip** 产物 → 建 GitHub Release，把 zip 挂上去，正文用 CHANGELOG.md 里本版本那一节。
+# 打一个 v* tag（例如 v0.1.4）就自动：跑检查 → 校验 tag 与 package.json 版本一致 →
+# 打 **zip** 产物 → 建 GitHub Release，把 zip 挂上去，正文用 CHANGELOG.md 里本版本那一节
+# → **发 npm**（配了 `NPM_TOKEN` 才会发；没配就只发 Release，不会失败）。
 #
-# 🔴 本工作流**不碰 npm**（用户 2026-09-17："不要再让它碰 npm 了！"）——
-#    以前最后一步会 `npm publish`，token 一失效就红叉，而发布其实早就成功了。整段已删除。
-#    想发 npm 就在本机跑 `npm run publish:npm`（见 agent-docs/release.md）。
+# 🔴 npm 这步是 2026-09-18 用户要求加回来的，两条硬约束：
+#    · **靠 `NPM_TOKEN` secret 的存在判断发不发** —— 不再像 2026-09-17 那样"token 一失效就整条红叉"
+#      （那次红叉的根因是 NPM_TOKEN 明明存在但已失效，而 step 还照跑）；现在**先探再发**。
+#    · token 走 `NODE_AUTH_TOKEN` 经 setup-node 的 `registry-url` 注入，**不写进任何文件**。
+#      仓库里的 `.npmrc` 只写 registry，凭证一律不进仓库。
 # 🔴 更新日志**不引用 diff/commit 列表**（用户要求）：正文只来自 CHANGELOG.md，
 #    不再用 `gh release create --generate-notes`（那会写出 "Full Changelog: …/compare/…"）。
 on:
@@ -25,6 +28,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+          registry-url: 'https://registry.npmjs.org'   # npm 发布要用它写临时的 .npmrc
       - run: npm ci --no-audit --no-fund
 
       - name: 发布前必须全绿
@@ -90,3 +94,36 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --notes-file notes.md \
             whale_craft-*.zip
+
+      # ── 发 npm（配了 NPM_TOKEN 才发）──────────────────────────────────────────
+      # 先探 secret 是否存在：没有就**明确跳过并说明**，而不是让这一步红叉。
+      - name: 探 NPM_TOKEN（决定发不发 npm）
+        id: npmtoken
+        env:
+          TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${TOKEN:-}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "有 NPM_TOKEN → 稍后发布到 npm"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::没有配置 NPM_TOKEN secret，跳过 npm 发布（只发 GitHub Release）。想自动发就在仓库 Settings → Secrets and variables → Actions 里加 NPM_TOKEN。"
+          fi
+
+      - name: 发布到 npm
+        if: steps.npmtoken.outputs.present == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          # tag 与版本一致上面已经校验过；这里再防一手"npm 上已经有这个版本"
+          if npm view "whale_craft@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::npm 上已经有 whale_craft@${VERSION}，跳过（npm 不允许覆盖同版本）"
+            exit 0
+          fi
+          # --ignore-scripts：上面「发布前必须全绿」已经跑过 check-core + selfcheck 了，
+          # 不加还会经 prepublishOnly 再跑一遍同一套（重复又慢）。prepublishOnly 留着，
+          # 是给"裸跑 npm publish"兜底的 —— 不走这条流程的人照样拦得住坏树。
+          npm publish --access public --ignore-scripts
+          echo "已发布 https://www.npmjs.com/package/whale_craft/v/${VERSION}"

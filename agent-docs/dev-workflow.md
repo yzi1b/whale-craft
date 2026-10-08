@@ -49,7 +49,7 @@ npm run dev:stop              # 按 pidfile 停实例
 ```
 
 - **改 `src/core.mjs` 等大文件后必跑 `check-core`**：它抓"私有方法失联"——少换行会让 V8 提前结束 class，报误导性的 `Private field must be declared…`，整树加载失败；`config.mjs` 两行粘连只有动态 import 才炸。失败 `exit 1`。
-- 提交/发版前 `npm run check` 必须全绿（CI 与 `prepublishOnly` 都跑它）。
+- 提交/发版前 `npm run check` 必须全绿（CI 直接跑；`prepublishOnly` 只在绕过脚本裸跑 `npm publish` 时兜底 —— 官方两条发布路径都带 `--ignore-scripts`，不会再跑第二遍）。
 
 ## 3. `tools/dev.mjs` 细节
 

@@ -43,18 +43,18 @@
 6. **npm "先探再发"**：探测仓库 secret `NPM_TOKEN` —— 有才发（发布前再查 `npm view <pkg>@<版本>` 防重复，已存在则跳过）；
    **没有就打一条 notice 跳过，工作流照样绿**（2026-09-17 的教训：token 失效让"整条红叉、而发布其实早就成功"）。
 
-## 3. `ci.yml` 行为（push main / PR）
+## 3. `ci.yml` 行为（push main / dev / PR）
 
 - **check 矩阵**：ubuntu（Node 22 / 24）+ windows（Node 22）→ `npm ci` → `check-core` → `selfcheck`；
 - **package job**（全绿后）：`npm pack` 核对 tarball —— 必含
   `package.json/index.js/client.js/selfcheck.mjs/cordis.patch.yml/LICENSE/README.md/tools/check-core.mjs`；
   **不得**混进 `node_modules/`、`logs/`、`accounts.json`、`config.json`、`.whale-craft`；上传 artifact。
 
-## 4. 落地 / 修工作流文件（一次性；workflow scope 坑）
+## 4. 落地 / 修工作流文件（workflow scope 坑）
 
 `.github/workflows/*` 的推送可能需要 token 有 **`workflow`** scope，而经代理通道推可能**明明有 scope 也被拒**
 （是通道问题，不是 token 问题）。**实测 Contents API 可以**（PUT `contents/.github/workflows/release.yml` 成功）。
-所以修好的模板放在 `scripts/release.workflow.yml`（**普通文件**，随代码分发）：
+所以 `release.yml` 的内容在 `scripts/release.workflow.yml` 留一份（**普通文件**，随代码分发）：
 
 ```bash
 node scripts/land-workflow-fix.mjs --dry        # 先看会改什么
@@ -62,10 +62,11 @@ GITHUB_TOKEN=<带 workflow scope 的 token> node scripts/land-workflow-fix.mjs
 ```
 
 `land-workflow-fix.mjs`：预检 token scopes → 优先 Contents API（GET 拿 sha → PUT base64）→ 失败回退 git push
-（报 workflow scope 错时提示改用 API）→ 回读校验（剥注释后确认远端没有 `npm publish` 之类预期外内容）。
+（报 workflow scope 错时提示改用 API）→ 回读校验（与模板逐字比对）。
 
-不想折腾 token：把 `scripts/release.workflow.yml` 的内容**粘到网页上**的 `.github/workflows/release.yml`
-（网页编辑不需要 workflow scope）。
+- ⚠️ 改 `.github/workflows/release.yml` 时**连模板 `scripts/release.workflow.yml` 一起改**，
+  否则下次同步会按旧模板把它覆盖回去（脚本会先报"与模板不同"）。
+- `ci.yml` **没有模板** —— 改它只能走 Contents API（`gh api`）或网页编辑（网页编辑不需要 workflow scope）。
 
 ## 5. 本机手动发 npm（不依赖任何 CI secret）
 
@@ -91,6 +92,9 @@ node scripts/publish-npm.mjs --yes --otp 123456 --tag next
 - **token 放哪**：首选 `npm login`（凭据进 `~/.npmrc`）；或环境变量 `NODE_AUTH_TOKEN`；写进本仓库 `.npmrc` 也行——**已在 `.gitignore` 里忽略**。
 - `publishConfig` 钉死 `registry: https://registry.npmjs.org/` + `access: public`（避免本机镜像 registry 把包发错地方）。
 - `prepublishOnly` = `npm run check`（**坏树发不出去**，即使不经脚本直接 `npm publish` 也拦得住）。
+- ⚠️ **别让检查跑两遍**：CI 的「发布前必须全绿」和本机脚本的 ③ 已经跑过 `check-core` + `selfcheck`，
+  所以两处的 `npm publish` 都带 `--ignore-scripts`，免得 lifecycle 再触发一次 `prepublishOnly`（重复又慢）。
+  `prepublishOnly` 本身保留，只为"绕过脚本裸跑 `npm publish`"兜底。
 - Windows 上脚本显式走 `cmd.exe /c`（不用 `shell:true`，防 DEP0190 与参数拆分）。
 
 ## 6. 常见问题（速查）
