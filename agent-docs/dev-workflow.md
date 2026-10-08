@@ -16,6 +16,8 @@
 | 宿主 Node 运行时 | `<安装根>/resources/runtime/` |
 | 老 `tools/isolate.mjs start` | 需要 DSH **源码 checkout**（`DSH_ROOT/apps/cli/src/bin.ts`）——在本机**起不来**，日常用 `npm run dev:web` / `dev:desktop`（`tools/dev.mjs`） |
 
+`tools/dev.mjs` 按目标选**两套运行时**：**web / link 用 PATH 上的 npm 全局 dsh**（`@deepseek-ai/dsh`，见上表——web 不该被那几百 MB 的桌面应用绑架）；**desktop 才用桌面安装自带的那份 CLI**（desktop profile 只有它能管）。桌面安装的定位走**注册表卸载项**（`InstallLocation`），所以装在 `D:\` 这种非 C: 盘也找得到 —— 光看 `%ProgramFiles%` / `%LOCALAPPDATA%\Programs` 会漏（真踩过：装在 D: 上就一路报"没有 exe / app.asar"）。
+
 ## 1. 🔴 隔离铁律（违反过两次）
 
 给这个项目搭任何"跑起来试试"的东西（调试实例、e2e、隔离环境），**必须**与用户日常 DSH 隔离：
@@ -52,10 +54,10 @@ npm run dev:stop              # 按 pidfile 停实例
 ## 3. `tools/dev.mjs` 细节
 
 - 子命令：`web`（默认/主用）、`desktop`、`link`、`status`、`stop`；`--watch` 附加：watch `index.js` + `src/` → 400ms 防抖重启实例（改 `client.js` 只提示——浏览器端是 HMR）。
-- 目录/常量：`DEV_HOME=.dev/home`、pidfile `.dev/web-instance.json`、`LINK_SPEC='link:E:/Works/whale-craft'`、登记端口 39901 起（避开一组 FORBIDDEN 端口）。
+- 目录/常量：`DEV_HOME=.dev/home`、pidfile `.dev/web-instance.json`、`LINK_SPEC='link:'+仓库路径`、登记端口 39901 起（避开一组 FORBIDDEN 端口）。
 - 首次启动会 `seedDevHome`：从生产 `~/.dsh` **只拷缺失的**凭据/账户/配置进隔离 home（拷完生产不动）；`ensureRepoDeps` 会补 `npm install` 缺的 mineflayer。
 - `link` 校验是**双条件**：profile `dependencies.whale_craft === link:E:/Works/whale-craft` **且** `node_modules/whale_craft` realpath 指回仓库；Windows 上重装前要先摘旧软链（EPERM）。
-- 进程 spawn 用 `spawn(exe, ['--expose-internals', hostCli, ...])` 绕开 .cmd 引号问题；`childEnv` 硬性带上 `ELECTRON_RUN_AS_NODE:'1'` + `DSH_HOME=DEV_HOME`（漏了写生产 home，见事故 ②）+ 默认 `WHALE_CRAFT_MEMORY_DIR=.dev/home/memory`。
+- 运行时分两套（`webCliRuntime()` / `requireDesktopInstall()`）：`desktop` 用 `spawn(exe, ['--expose-internals', hostCli, ...])` 绕开 .cmd 引号问题；`npm` 用 `spawn(process.execPath, [<npm 全局 dsh>/lib/bin.js, ...])`。`childEnv` 硬性带上 `ELECTRON_RUN_AS_NODE:'1'` + `DSH_HOME=DEV_HOME`（漏了写生产 home，见事故 ②）+ 默认 `WHALE_CRAFT_MEMORY_DIR=.dev/home/memory`。
 - `desktop` 子命令注意：首次没有 `profiles/desktop/package.json` 时**要先让桌面应用自己建**（脚本会启动 GUI 轮询 90×2s）；`desktopAppRunning()` 用 PowerShell 查进程命令行、判据是"不含 `--expose-internals`"（因为 CLI/web 实例也叫同名 exe）。
 - `status`/`stop` 只认 pidfile 里的 pid，绝不广谱杀进程。
 

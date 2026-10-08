@@ -41,7 +41,7 @@ whale_craft 是 DSH（DeepSeek Harness）原生插件：把无头 Minecraft 机�
 ```bash
 node tools/check-core.mjs     # 全树语法 + 动态 import + 私有字段一致性
 node selfcheck.mjs            # 600+ 条离线断言（不连 MC 服务器、不碰真实实例）
-npm run dev:web               # 起隔离调试实例验证"整树加载"（本机桌面版 DSH）
+npm run dev:web               # 起隔离调试实例验证"整树加载"（web 用 npm 全局 dsh）
 npm run check                 # = check-core + selfcheck
 ```
 

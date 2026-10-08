@@ -20,11 +20,15 @@
  * 🔴 为什么必须走 link 安装：DSH 的运行时解析只认 profile 目录内的包，仓库在 profile 之外，
  *    靠 profile 里一条 cordis.patch.yml 是接不进去的 —— 必须 `dsh plugin add link:<仓库>`。
  *
- * 🔴 desktop 的两个硬约束：
- *   1. `desktop` profile 被 Electron 应用独占（CLI 拒绝启动它），只能用**桌面安装自带的**
- *      dsh 命令去管理插件；所以这里一律用桌面安装里的 CLI，不找 npm 全局的。
- *   2. Electron 单实例锁按 userData 走，与 DSH_HOME 无关：想在调试实例里跑桌面应用，
- *      **必须先完全退出正在用的那个桌面应用**，否则新进程只会把旧窗口切到前台然后自己退出。
+ * 🔴 运行时分两套（见「运行时定位」）：
+ *   · web / link：优先用 npm 全局的 dsh（只要求装过 @deepseek-ai/dsh），没有才退回桌面安装。
+ *     **web 不该被那几百 MB 的桌面应用绑架。**
+ *   · desktop：非桌面安装不可 —— `desktop` profile 被 Electron 应用独占（CLI 拒绝启动它），
+ *     只能用桌面安装自带的 dsh 命令去管理插件。
+ *
+ * 🔴 desktop 的另一个硬约束：Electron 单实例锁按 userData 走，与 DSH_HOME 无关：想在调试
+ *    实例里跑桌面应用，**必须先完全退出正在用的那个桌面应用**，否则新进程只会把旧窗口
+ *    切到前台然后自己退出。
  */
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, unlinkSync, watch, writeFileSync } from 'node:fs'
@@ -50,52 +54,132 @@ const WATCH_FILES = ['index.js']
 const WATCH_DIRS = ['src']
 
 // ---------------------------------------------------------------------------
-// 桌面安装定位
+// 运行时定位
 // ---------------------------------------------------------------------------
 
-/** 找到桌面安装自带的 dsh（`resources/runtime/cli/bin/dsh.cmd`），并推出 exe 与 host CLI。 */
-function findInstall () {
-  const candidates = []
-  if (process.env.DSH_CLI) candidates.push(process.env.DSH_CLI)
-  for (const dir of String(process.env.PATH ?? '').split(';')) {
-    if (dir.trim()) candidates.push(join(dir.trim(), 'dsh.cmd'))
-  }
-  candidates.push(join(process.env['ProgramFiles'] ?? 'C:/Program Files', 'DeepSeek Harness', 'resources', 'runtime', 'cli', 'bin', 'dsh.cmd'))
-  candidates.push(join(process.env.LOCALAPPDATA ?? '', 'Programs', 'DeepSeek Harness', 'resources', 'runtime', 'cli', 'bin', 'dsh.cmd'))
-  const cli = candidates.find((p) => p && existsSync(p))
-  if (!cli) {
-    console.error('找不到 DSH 的 dsh.cmd。装了桌面版 DeepSeek Harness 的话，用 DSH_CLI=<dsh.cmd 路径> 指一下。')
-    process.exit(2)
-  }
-  const root = resolve(dirname(cli), '..', '..', '..', '..')
+const pathDirs = () => String(process.env.PATH ?? '').split(';').map((d) => d.trim()).filter(Boolean)
+
+/** 桌面安装自带的 CLI 形如 `<root>/resources/runtime/cli/bin/dsh.cmd`，据此反推安装根。 */
+const installRootFromCli = (cli) => resolve(dirname(cli), '..', '..', '..', '..')
+
+/** 校验一个「安装根」是不是可用的桌面安装；不是就返回 null。 */
+function desktopInstallAt (root) {
+  if (!root) return null
+  root = resolve(root)
   const exe = join(root, 'DeepSeek Harness.exe')
   const archive = join(root, 'resources', 'app.asar')
   // host CLI 在 app.asar 里：普通 Node 的 existsSync 看不见它（只有 Electron 能读），
   // 所以这里只校验得到 exe 与归档本体，路径本身照 dsh.cmd 的写法拼。
+  if (!existsSync(exe) || !existsSync(archive)) return null
   const hostCli = join(archive, 'dsh', 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'cli.js')
-  if (!existsSync(exe) || !existsSync(archive)) {
-    console.error(`dsh.cmd 找到了（${cli}），但推不出桌面安装根目录（${root} 下没有 exe / app.asar）。`)
-    console.error('用 DSH_CLI=<桌面安装里的 dsh.cmd 路径> 手动指一下。')
-    process.exit(2)
-  }
-  return { root, cli, exe, archive, hostCli }
+  return { root, exe, hostCli }
 }
 
-const INSTALL = findInstall()
+/**
+ * 从注册表卸载项里捞安装根目录 —— 装在非 C: 盘（如 `D:\Program Files\DeepSeek Harness`）时
+ * 唯一靠谱的线索。只看 ProgramFiles / LOCALAPPDATA 两个环境变量是找不到的（真实坑：
+ * 装在 D: 上就一路报"没有 exe / app.asar"）。
+ */
+function registryInstallRoots () {
+  const keys = [
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+    'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+    'HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+  ]
+  const roots = []
+  for (const key of keys) {
+    let out
+    try { out = execFileSync('reg', ['query', key, '/s'], { encoding: 'latin1', timeout: 20000 }) } catch { continue }
+    // /s 按空行分块（子键一块一表）；只在提到 DeepSeek Harness 的块里取 InstallLocation，
+    // 免得把别的软件的位置也捞进来。用 latin1 只为让 ASCII 行不被中文代码页弄乱。
+    for (const block of out.split(/\r?\n\s*\r?\n/)) {
+      if (!/DeepSeek\s+Harness/i.test(block)) continue
+      const m = block.match(/InstallLocation\s+REG_SZ\s+(.+)/i)
+      if (m) roots.push(m[1].trim())
+    }
+  }
+  return roots
+}
+
+/**
+ * 找桌面安装（Electron）。顺序：DSH_CLI 显式指定 → 注册表（能认非 C: 盘）→ PATH 上的
+ * dsh.cmd（只认确实落在桌面安装布局里的）→ 两个常规安装位。找不到返回 null。
+ */
+function findDesktopInstall () {
+  const roots = []
+  if (process.env.DSH_CLI) roots.push(installRootFromCli(process.env.DSH_CLI))
+  roots.push(...registryInstallRoots())
+  for (const dir of pathDirs()) {
+    const shim = join(dir, 'dsh.cmd')
+    if (existsSync(shim)) roots.push(installRootFromCli(shim))
+  }
+  roots.push(join(process.env['ProgramFiles'] ?? 'C:/Program Files', 'DeepSeek Harness'))
+  roots.push(join(process.env.LOCALAPPDATA ?? '', 'Programs', 'DeepSeek Harness'))
+  for (const root of roots) {
+    const install = desktopInstallAt(root)
+    if (install) return install
+  }
+  return null
+}
+
+/** 找 npm 全局装的 dsh（PATH 上的 shim + 同级的 @deepseek-ai/dsh/lib/bin.js）。 */
+function findNpmCli () {
+  for (const dir of pathDirs()) {
+    if (!existsSync(join(dir, 'dsh.cmd'))) continue
+    const bin = join(dir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+    if (existsSync(bin)) return { dir, bin }
+  }
+  return null
+}
+
+/**
+ * 一个「能跑 dsh 命令」的运行时。web 与 desktop 各用各的：
+ * · desktop：Electron exe + app.asar 里的 host CLI（desktop profile 只有这个管得了）。
+ * · npm：普通 node 跑 npm 包里的 bin.js；web 够用，且不必装那几百 MB 的桌面应用。
+ */
+const desktopRuntime = (install) => ({
+  label: `桌面安装（${install.root}）`,
+  spawn: (args) => ({ cmd: install.exe, args: ['--expose-internals', install.hostCli, ...args] }),
+})
+const npmRuntime = (npm) => ({
+  label: `npm 全局 dsh（${npm.dir}）`,
+  spawn: (args) => ({ cmd: process.execPath, args: [npm.bin, ...args] }),
+})
+
+/**
+ * web / link 用哪个运行时：优先 npm 全局 dsh，没有才退回桌面安装。DSH_CLI 显式指了的话
+ * 就听它的（跳过 npm）—— 那是个明确的手动覆盖。
+ */
+function webCliRuntime () {
+  if (!process.env.DSH_CLI) {
+    const npm = findNpmCli()
+    if (npm) return npmRuntime(npm)
+  }
+  const install = findDesktopInstall()
+  if (install) return desktopRuntime(install)
+  console.error('找不到任何可用的 dsh —— npm 没全局装 @deepseek-ai/dsh，桌面版 DeepSeek Harness 也没装。')
+  console.error('装一个（npm i -g @deepseek-ai/dsh）或用 DSH_CLI=<桌面安装里的 dsh.cmd> 指一下。')
+  process.exit(2)
+}
+
+/** desktop 目标非桌面安装不可，找不到直接退出。 */
+function requireDesktopInstall () {
+  const install = findDesktopInstall()
+  if (install) return install
+  console.error('找不到桌面版 DeepSeek Harness 的安装 —— desktop profile 只有桌面应用管得了，非它不可。')
+  console.error('装了的话用 DSH_CLI=<桌面安装里的 dsh.cmd> 指一下（装在 D: 等非 C: 盘也认）。')
+  process.exit(2)
+}
 
 /**
  * 跑一条 dsh 命令（Node 模式直接起 exe，绕开 .cmd 的引号问题）。
  * 🔴 DSH_HOME 必须显式给成 DEV_HOME：漏了就会去操作生产 home（真实事故：第一版漏了，
  *    一条 `plugin add link:` 把生产 web profile 的 whale_craft 换成了本地 link）。
  */
-function runDsh (args) {
+function runDsh (runtime, args) {
   return new Promise((res, rej) => {
-    const child = spawn(INSTALL.exe, ['--expose-internals', INSTALL.hostCli, ...args], {
-      cwd: PKG,
-      env: childEnv(),
-      stdio: 'inherit',
-      windowsHide: true,
-    })
+    const { cmd, args: argv } = runtime.spawn(args)
+    const child = spawn(cmd, argv, { cwd: PKG, env: childEnv(), stdio: 'inherit', windowsHide: true })
     child.on('error', rej)
     child.on('exit', (code) => code === 0 ? res() : rej(new Error(`dsh ${args.join(' ')} 退出码 ${code}`)))
   })
@@ -147,7 +231,7 @@ function isLinked (profile) {
 }
 
 /** 把本仓库 link 进调试 home 的 profile（web 会自动从随附模板初始化；desktop 得先让应用建）。 */
-async function linkProfile (profile) {
+async function linkProfile (profile, runtime) {
   if (isLinked(profile)) {
     console.log(`profile ${profile}：已 link 到 ${PKG}`)
     return
@@ -159,7 +243,7 @@ async function linkProfile (profile) {
   try {
     if (lstatSync(landed).isSymbolicLink()) { unlinkSync(landed); console.log(`   （先摘掉旧的软链 ${landed}）`) }
   } catch {}
-  await runDsh(['plugin', '--profile', profile, 'add', LINK_SPEC])
+  await runDsh(runtime, ['plugin', '--profile', profile, 'add', LINK_SPEC])
   if (!isLinked(profile)) {
     console.error(`装完了，但 ${profile} profile 没对上（清单或软链不符），去看 ${join(DEV_HOME, 'profiles', profile)}`)
     process.exit(1)
@@ -213,20 +297,22 @@ async function startWeb (opts) {
     console.error('先 `npm run dev:stop` 停掉它，或者 `npm run dev:status` 看看情况。')
     process.exit(1)
   }
+  const runtime = webCliRuntime()
   ensureRepoDeps()
   seedDevHome()
-  await linkProfile('web')
+  await linkProfile('web', runtime)
   const port = await pickPort(opts.port)
   say([
     'whale_craft 调试实例（web）',
     `  地址   下面那行「dsh web: http://…」就是（带 token，直接点开）`,
     `  home   ${DEV_HOME}`,
     `  插件   ${PKG}（link）`,
+    `  运行时 ${runtime.label}`,
     `  热更   改 ${WATCH_FILES.join('/')}、${WATCH_DIRS.join('/')}/ 要重启${opts.watch ? ' —— --watch 已开，自动重启' : '，加 --watch 让它自己重启'}；改 client.js 只需刷新浏览器`,
     opts.sharedMemory ? '  记忆   按会话工作区（真实行为）' : `  记忆   ${join(DEV_HOME, 'memory')}（隔离，不写真实工作区）`,
     '  停止   Ctrl+C',
   ])
-  bootWeb(port, opts, opts.open)
+  bootWeb(port, opts, opts.open, runtime)
 }
 
 let webWatchers = []
@@ -238,10 +324,11 @@ function closeWatchers () {
   webWatchers = []
 }
 
-function bootWeb (port, opts, open) {
+function bootWeb (port, opts, open, runtime) {
   const args = ['web', '--port', String(port)]
   if (!open) args.push('--no-open')
-  const child = spawn(INSTALL.exe, ['--expose-internals', INSTALL.hostCli, ...args], {
+  const { cmd, args: argv } = runtime.spawn(args)
+  const child = spawn(cmd, argv, {
     cwd: PKG,
     env: childEnv(opts),
     stdio: 'inherit',
@@ -254,11 +341,11 @@ function bootWeb (port, opts, open) {
     closeWatchers()
     process.exit(signal ? 0 : (code ?? 0))
   })
-  if (opts.watch) attachWatcher(child, port, opts)
+  if (opts.watch) attachWatcher(child, port, opts, runtime)
 }
 
 /** 看门狗：服务端代码一动就重启；client.js 只提示（浏览器半端是客户端 HMR 管的）。 */
-function attachWatcher (child, port, opts) {
+function attachWatcher (child, port, opts, runtime) {
   const onChange = (relPath) => {
     if (/(^|\/)client\.js$/i.test(relPath)) {
       console.log(`\n[dev] 改了 ${relPath}：浏览器半端热重载，刷新页面即可`)
@@ -277,7 +364,7 @@ function attachWatcher (child, port, opts) {
       for (let i = 0; i < 40 && !(await freePort(port)); i++) await sleep(100)
       restarting = false
       closeWatchers()
-      bootWeb(port, opts, false)
+      bootWeb(port, opts, false, runtime)
     }, 400)
   }
   for (const rel of WATCH_FILES) {
@@ -322,16 +409,17 @@ function desktopAppRunning () {
   }
 }
 
-function launchDesktop () {
+function launchDesktop (install) {
   const env = childEnv()
   delete env.ELECTRON_RUN_AS_NODE
-  const child = spawn(INSTALL.exe, [], { env, detached: true, stdio: 'ignore', windowsHide: false })
+  const child = spawn(install.exe, [], { env, detached: true, stdio: 'ignore', windowsHide: false })
   child.unref()
 }
 
 const desktopManifest = () => join(DEV_HOME, 'profiles', 'desktop', 'package.json')
 
 async function startDesktop () {
+  const install = requireDesktopInstall()
   ensureRepoDeps()
   seedDevHome()
   if (!existsSync(desktopManifest())) {
@@ -347,7 +435,7 @@ async function startDesktop () {
       '  等它完全起来后 —— 不用在里面做任何事 —— 退出应用即可',
       '  我会盯着 profile 出现，出现后提示你下一步',
     ])
-    launchDesktop()
+    launchDesktop(install)
     process.stdout.write('  等待 desktop profile 出现')
     for (let i = 0; i < 90; i++) {
       await sleep(2000)
@@ -371,15 +459,16 @@ async function startDesktop () {
     console.error('先完全退出桌面应用，再跑 npm run dev:desktop。')
     process.exit(1)
   }
-  await linkProfile('desktop')
+  await linkProfile('desktop', desktopRuntime(install))
   say([
     'whale_craft 调试实例（desktop）',
     `  home   ${DEV_HOME}`,
     `  插件   ${PKG}（link）`,
+    `  运行时 桌面安装（${install.root}）`,
     '  热更   改服务端代码要退出应用重开（桌面端没有自动重启）',
     `  日志   ${join(DEV_HOME, 'whale_craft', 'logs', 'whale-craft.log')}`,
   ])
-  launchDesktop()
+  launchDesktop(install)
 }
 
 // ---------------------------------------------------------------------------
@@ -413,8 +502,12 @@ function profileState (profile) {
 
 function status () {
   const running = readPidfile()
+  const install = findDesktopInstall()
+  const npm = findNpmCli()
   console.log('whale_craft 调试环境')
-  console.log(`  DSH        ${INSTALL.root}`)
+  console.log(`  桌面安装  ${install ? install.root : '没找到（dev:desktop 用不了）'}`)
+  console.log(`  npm dsh   ${npm ? npm.dir : '没找到'}`)
+  console.log(`  web 运行时 ${npm ? 'npm 全局 dsh' : install ? '桌面安装（没装 npm 全局 dsh）' : '无 —— dev:web 用不了'}`)
   console.log(`  调试 home  ${DEV_HOME}${existsSync(DEV_HOME) ? '' : '（还没有，首次启动时建）'}`)
   console.log(`  生产 home  ${PROD_HOME}（只在首次拷一份底子，之后互不影响）`)
   console.log(`  web        ${profileState('web')}`)
@@ -457,8 +550,8 @@ else if (cmd === 'desktop') await startDesktop()
 else if (cmd === 'link') {
   ensureRepoDeps()
   seedDevHome()
-  await linkProfile('web')
-  if (existsSync(desktopManifest())) await linkProfile('desktop')
+  await linkProfile('web', webCliRuntime())
+  if (existsSync(desktopManifest())) await linkProfile('desktop', desktopRuntime(requireDesktopInstall()))
   else console.log('profile desktop：未初始化 —— 先跑 npm run dev:desktop，按提示让桌面应用把它建出来')
   console.log('接好了。web 跑 npm run dev:web；desktop 跑 npm run dev:desktop（记得先退出正在用的桌面应用）。')
 } else if (cmd === 'status') status()
