@@ -216,8 +216,8 @@
 ### `mc_kit_fs`
 
 - **描述**：操作文件系统。**MC模式**下只能操作 `.whale-craft/` 下，**MC+模式**按宿主设置（一般为工作区）。
-- **参数**：`action:string*`（copy / move / delete / make_dir）、`from:string`（copy/move 必须）、`to:string`（copy/move 必须）、`path:string`（delete/make_dir 必须）
-- **备注**：路径为绝对路径，或**相对于工作区目录**的相对路径。copy、move 的 `from` 与 delete 的 `path` 允许末尾通配符 `/*`（意为选中目录下所有**直接**子项）；此时 copy/move 的 `to` 必须是目录、**不存在会自动创建**。操作均递归；**符号链接一律按链接本身处理（不跟随其目标）**。**受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径不可删改**（通配命中则跳过并报告）。
+- **参数**：`action:string*`（copy / move / delete / make_dir）、`from:string`（copy/move 必须）、`to:string`（copy/move 必须，末尾不带/则是作为目标文件或目录，或是合并目录，带/则是放到目录下）、`path:string`（delete/make_dir 必须）、`overwrite:bool=false`（控制copy、move是否覆盖）
+- **备注**：路径为绝对路径，或**相对于工作区目录**的相对路径。copy、move 的 `from` 与 delete 的 `path` 允许末尾通配符 `/*`（意为选中目录下所有子项）；此时 copy/move 的 `to` 必须是目录、**不存在会自动创建**。操作均递归；**符号链接一律按链接本身处理（不跟随其目标）**。**受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径不可删改**（通配命中则跳过并报告）。守卫不区分大小写。不允许末尾是“/.”或“\.”的情况。工作区目录、记忆目录及选中其子文件的通配符不能被移动的from、删除选中，否则返回错误消息。不显式覆盖时，出现重叠则返回错误消息。任何失败的操作都应在动手前停止并返回错误信息，不可有副作用。
 
 ## 管理（`mc_admin_*`）
 

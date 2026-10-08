@@ -43,7 +43,7 @@ import { AccountStore, parseAuthlibCard, normalizeServerUrl, dashUuid } from './
 import { DEFAULT_AGENTS_MD, agentsMdPath, legacyAgentsMdPath, migrateLegacyAgentsMd, readAgentsMd, writeAgentsMd, resetAgentsMd, syncRulesVersion } from './src/agentsmd.mjs'
 import { wsConfigPath, isWsConfigData, migrate as migrateWorkspaceConfig, values as workspaceConfigValues, patch as patchWorkspaceConfig, readRulesVersion } from './src/wsconfig.mjs'
 import { PROTECTED_FILES, isProtectedPathArg, WRITE_FILE_TOOLS, rejectionText, CREDENTIAL_PATH_RE, SECRETS_DIR_RE } from './src/protected.mjs'
-import { resolveTarget, expand as expandFsPaths, copyEntry, moveEntry, removeEntry, makeDir, forbiddenReason } from './src/fsops.mjs'
+import { resolveTarget, expand as expandFsPaths, copyEntry, moveEntry, removeEntry, makeDir, forbiddenReason, rootReason, pathExists, isDir, hasStar, hasTrailingSep, samePath, isInside, ensureParentDir } from './src/fsops.mjs'
 import { encodePng } from './src/png.mjs'
 import { userMessage, messageFactoryKind, pluginLoadNote } from './src/user-message.mjs'
 import { ImageEngine, imageEngineAvailable, imageEngineError } from './src/image.mjs'
@@ -2879,92 +2879,132 @@ export function apply(ctx, rawConfig) {
    * 补上宿主没有的"删文件/删目录、复制/移动（含二进制）、建目录"。
    * 🔴 语义（用户 2026-10-08 定，见 dev-docs/tools/mc-tools.md）：
    *    · 都**递归**；末尾 `/*` 只选目录下**直接**子项；**保留符号链接（不跟随）**；
+   *    · `to` 以分隔符结尾 = 放进该目录（不存在自动建）；否则作为目标名（已是目录则合并进去）；
+   *      `from` 用了通配符时 `to` 必须以分隔符结尾；目标父目录自动创建；
+   *    · `overwrite=false` 默认：目标已存在 → 报错；`true` 才覆盖；
    *    · 沙箱按模式：**MC 模式**只能碰 `.whale-craft/`（与宿主文件工具同一把锁）；
-   *      **MC+ 模式**放工作区；相对路径一律以**工作区根**为基准；
+   *      **MC+ 模式**放工作区；相对路径一律以**工作区根**为基准；根目录本身不能被移动/删除选中；
    *    · 受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径**不可删改**。
-   *   两个执行点各自拦一道：工具态（src/fsops.mjs 的包含式校验，权威）+ guard（第二道锁）。
+   * 🔴 **失败在动手前停止**：先把每件事算成 plan 做完全部预检，全过才执行（零副作用）；
+   *    错误一律中文（src/fsops.mjs 把系统错误码译成人话，不透出 Node/Windows 本地化原文）。
+   * 两个执行点各自拦一道：工具态（src/fsops.mjs，权威）+ guard（第二道锁）。
    * ------------------------------------------------------------------------ */
   ctx.tools.register(asTool({
     name: 'mc_kit_fs',
     description: '操作文件系统。\n'
-      + '复制、移动、删除操作皆递归；符号链接一律按链接本身处理（不跟随其目标）。',
+      + '复制、移动、删除皆递归，符号链接按链接本身处理（不跟随其目标）；目标父目录不存在会自动创建。\n'
+      + '`to` 以路径分隔符结尾表示"放进这个目录"；`from` 用了末尾 `/*` 时 `to` 必须以分隔符结尾。未传 `overwrite:true` 时不覆盖已存在的目标。',
     parameters: {
       action: { type: 'string', required: true, description: 'copy / move / delete / make_dir' },
-      from: { type: 'string', description: 'copy/move：起始路径（可末尾 /*）' },
-      to: { type: 'string', description: 'copy/move：目标路径（from 带通配时须为目录，不存在则自动创建）' },
+      from: { type: 'string', description: 'copy/move：起始路径（可末尾 /*，选中该目录下的直接子项）' },
+      to: { type: 'string', description: 'copy/move：目标路径。以 / 或 \\ 结尾 = 放进该目录（不存在会自动创建）；否则作为目标名（若已是目录则合并进去）' },
       path: { type: 'string', description: 'delete / make_dir：目标路径（delete 可末尾 /*）' },
+      overwrite: { type: 'boolean', description: 'copy/move 是否覆盖已存在的目标（默认 false）' },
     },
     output: text(),
     timeoutMs: 120_000,
     async execute(args, exec) {
-      const trimPath = (v) => String(v ?? '').trim()
       const agent = exec?.agent
       const cwd = workspaceOf(agent)
       if (!cwd) throw new Error('这个会话没有工作区，无法操作文件系统。')
       const base = workspaceRootFor(agent)
       // 沙箱：MC 模式 = 记忆文件夹；MC+ / 其他 = 工作区（其他模式工具本就不可见）
       const root = isMcModeAgent(agent) ? memoryRootFor(cwd) : base
+      if (!root) throw new Error('这个会话没有工作区，无法操作文件系统。')
+      const roots = [root, base]
+      const pkey = (p) => (process.platform === 'win32' ? String(p).toLowerCase() : String(p))
       const action = String(args.action ?? '').toLowerCase()
+      const overwrite = args.overwrite === true
       const done = []
       const skipped = []
+      const overwritten = []
+      const plan = []
+      const seenDst = new Set()
 
-      const ensureDir = (abs) => { let ok = false; try { ok = statSync(abs).isDirectory() } catch { ok = false } if (!ok) makeDir(abs) }
-
+      /* ① 预检：把每件事算成 plan；任一不合法 → **在动手前**抛错（零副作用）。 */
       if (action === 'copy' || action === 'move') {
-        if (!trimPath(args.from) || !trimPath(args.to)) throw new Error('copy / move 需要 from 和 to')
-        const src = expandFsPaths(root, base, args.from)
-        const toAbs = resolveTarget(root, base, args.to)
-        if (src.wildcard) {
-          if (existsSync(toAbs) && !statSync(toAbs).isDirectory()) throw new Error(`from 带通配符时 to 必须是目录：${args.to}`)
-          ensureDir(toAbs)
-          for (const s of src.entries) {
-            if (action === 'move') {
-              const why = forbiddenReason(root, s)
-              if (why) throw new Error(`不许移动：${s}（${why}）`)
-            }
-            const dst = join(toAbs, basename(s))
-            const dw = forbiddenReason(root, dst)
-            if (dw) { skipped.push({ path: dst, reason: dw }); continue }
-            if (action === 'copy') copyEntry(s, dst); else moveEntry(s, dst)
-            done.push(dst)
-          }
-        } else {
-          const s = src.entries[0]
-          let dst = toAbs
-          try { if (statSync(toAbs).isDirectory()) dst = join(toAbs, basename(s)) } catch { /* to 不存在 → 当作目标名 */ }
+        const verb = action === 'move' ? '移动' : '复制'
+        const fromRaw = String(args.from ?? '').trim()
+        const toRaw = String(args.to ?? '').trim()
+        if (!fromRaw || !toRaw) throw new Error('copy / move 需要 from 和 to')
+        if (hasStar(toRaw)) throw new Error(`to 不支持通配符：${toRaw}`)
+        const srcExp = expandFsPaths(root, base, fromRaw)
+        if (srcExp.wildcard && !hasTrailingSep(toRaw)) {
+          throw new Error(`from 用了通配符时，to 必须以路径分隔符结尾（表示放进该目录）：${toRaw}`)
+        }
+        if (srcExp.wildcard) {
+          const rr = rootReason(srcExp.dir, roots)
+          if (rr) throw new Error(`不许${verb}：${rr}`)
+        }
+        const toAbs = resolveTarget(root, base, toRaw)
+        const toIsDir = srcExp.wildcard || hasTrailingSep(toRaw) || isDir(toAbs)
+        for (const s of srcExp.entries) {
+          if (!pathExists(s)) throw new Error(`源不存在：${s}`)
+          const rrS = rootReason(s, roots)
+          if (rrS) throw new Error(`不许${verb}：${rrS}`)
           if (action === 'move') {
-            const why = forbiddenReason(root, s)
-            if (why) throw new Error(`不许移动：${s}（${why}）`)
+            const w = forbiddenReason(root, s)
+            if (w) throw new Error(`不许移动：${s}（${w}）`)
           }
-          const dw = forbiddenReason(root, dst)
-          if (dw) throw new Error(`不许写入：${dst}（${dw}）`)
-          if (action === 'copy') copyEntry(s, dst); else moveEntry(s, dst)
-          done.push(dst)
+          const dst = toIsDir ? join(toAbs, basename(s)) : toAbs
+          const rrD = rootReason(dst, roots)
+          if (rrD) throw new Error(`不许写入：${rrD}`)
+          const wD = forbiddenReason(root, dst)
+          if (wD) throw new Error(`不许写入：${dst}（${wD}）`)
+          if (samePath(dst, s)) throw new Error(`源与目标相同：${s}`)
+          if (isInside(dst, s)) throw new Error(`不能把目录放进它自己里面：${dst}`)
+          if (pathExists(dst)) {
+            if (!overwrite) throw new Error(`目标已存在（要覆盖请传 overwrite:true）：${dst}`)
+            overwritten.push(dst)
+          }
+          if (seenDst.has(pkey(dst))) throw new Error(`多个源写向同一目标：${dst}`)
+          seenDst.add(pkey(dst))
+          plan.push({ kind: action, src: s, dst })
         }
       } else if (action === 'delete') {
-        if (!trimPath(args.path)) throw new Error('delete 需要 path')
-        const exp = expandFsPaths(root, base, args.path)
+        const pathRaw = String(args.path ?? '').trim()
+        if (!pathRaw) throw new Error('delete 需要 path')
+        const exp = expandFsPaths(root, base, pathRaw)
+        if (exp.wildcard) {
+          const rr = rootReason(exp.dir, roots)
+          if (rr) throw new Error(`不许删除：通配符选中的是根目录的子项（${rr}）`)
+        }
         for (const t of exp.entries) {
-          const why = forbiddenReason(root, t)
-          if (why) {
-            if (exp.wildcard) { skipped.push({ path: t, reason: why }); continue }
-            throw new Error(`不许删除：${t}（${why}）`)
+          const rr = rootReason(t, roots)
+          if (rr) throw new Error(`不许删除：${rr}`)
+          if (!pathExists(t)) {
+            if (exp.wildcard) continue
+            throw new Error(`要删除的路径不存在：${t}`)
           }
-          removeEntry(t)
-          done.push(t)
+          const w = forbiddenReason(root, t)
+          if (w) {
+            if (exp.wildcard) { skipped.push({ path: t, reason: w }); continue }
+            throw new Error(`不许删除：${t}（${w}）`)
+          }
+          plan.push({ kind: 'delete', abs: t })
         }
       } else if (action === 'make_dir') {
-        if (!trimPath(args.path)) throw new Error('make_dir 需要 path')
-        const abs = resolveTarget(root, base, args.path)
-        makeDir(abs)
-        done.push(abs)
+        const pathRaw = String(args.path ?? '').trim()
+        if (!pathRaw) throw new Error('make_dir 需要 path')
+        if (hasStar(pathRaw)) throw new Error(`make_dir 不支持通配符：${pathRaw}`)
+        const abs = resolveTarget(root, base, pathRaw)
+        plan.push({ kind: 'mkdir', abs })
       } else {
         throw new Error(`未知 action："${action}"（可用 copy / move / delete / make_dir）`)
       }
 
-      const head = `${action}：完成 ${done.length} 项`
-        + (skipped.length ? `，跳过 ${skipped.length} 项（受保护/凭据）` : '')
-      return { action, root, done, skipped, text: head + (done.length ? `\n${done.join('\n')}` : '') }
+      /* ② 执行：预检全过，这里才真动手。 */
+      for (const p of plan) {
+        if (p.kind === 'copy') { ensureParentDir(p.dst); copyEntry(p.src, p.dst); done.push(p.dst) }
+        else if (p.kind === 'move') { ensureParentDir(p.dst); moveEntry(p.src, p.dst); done.push(p.dst) }
+        else if (p.kind === 'delete') { removeEntry(p.abs); done.push(p.abs) }
+        else if (p.kind === 'mkdir') { makeDir(p.abs); done.push(p.abs) }
+      }
+
+      const head = `${action}：完成 ${done.length} 个目标（每项 = 一个被**直接选中**的文件/目录；目录内部的条目不计入）`
+        + (overwritten.length ? `；覆盖 ${overwritten.length} 项` : '')
+        + (skipped.length ? `；跳过 ${skipped.length} 项（受保护/凭据）：${skipped.map((s) => s.path).join('、')}` : '')
+      return { action, root, done, skipped, overwritten, text: head + (done.length ? `\n${done.join('\n')}` : '') }
     },
   }))
 
@@ -4164,6 +4204,8 @@ export function apply(ctx, rawConfig) {
     ctx.tools.guard((exec) => {
       const name = String(exec?.name ?? '')
       const agent = exec?.agent
+      /** 路径比较键：Windows 大小写不敏感（用户 2026-10-08："守卫不区分大小写"） */
+      const pk = (s) => (process.platform === 'win32' ? String(s).toLowerCase() : String(s))
       // 每次调用都现场判（与 restrict/提示词同一个判据）；preset id 只取一次，省一次服务查询
       const presetId = agent ? mcPresetIdOf(agent) : null
       const isMc = pluginConfig.isMcModePreset(presetId)
@@ -4239,8 +4281,8 @@ export function apply(ctx, rawConfig) {
           return `MC 模式的文件工具只能在记忆文件夹（${root}）里用——请显式给 .whale-craft/ 内的路径。`
         }
         const abs = resolve(root, rel)
-        const prefix = root.endsWith(sep) ? root : root + sep
-        if (abs !== root && !abs.startsWith(prefix)) {
+        const rk = pk(root); const ak = pk(abs); const prefix = rk.endsWith(sep) ? rk : rk + sep
+        if (ak !== rk && !ak.startsWith(prefix)) {
           return `MC 模式只能在记忆文件夹（${root}）里读写文件；这个路径在外面：${rel}`
         }
       }
@@ -4251,13 +4293,14 @@ export function apply(ctx, rawConfig) {
         const root = memoryRootFor(workspaceOf(exec?.agent))
         if (!root) return '这个会话没有工作区——MC 模式的 mc_kit_fs 没有可用的记忆文件夹，已拒绝。'
         const base = workspaceRootFor(exec?.agent)
-        const prefix = root.endsWith(sep) ? root : root + sep
+        const rk = pk(root); const prefix = rk.endsWith(sep) ? rk : rk + sep
         const a = exec?.arguments ?? {}
         const has = (v) => v !== undefined && v !== null && String(v).trim() !== ''
         for (const v of [a.from, a.to, a.path]) {
           if (!has(v)) continue
           const abs = resolve(base, String(v).trim())
-          if (abs !== root && !abs.startsWith(prefix)) {
+          const ak = pk(abs)
+          if (ak !== rk && !ak.startsWith(prefix)) {
             return `MC 模式的 mc_kit_fs 只能在记忆文件夹（${root}）内操作；这个路径在外面：${v}`
           }
         }

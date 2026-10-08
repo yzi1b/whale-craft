@@ -1395,7 +1395,9 @@ console.log('\n--- 文件系统操作（mc_kit_fs）---')
   }
 
   const outErr = (() => { try { fsops.resolveTarget(root, base, '../outside.txt'); return '' } catch (e) { return e.message } })()
-  console.log(`  ${/沙箱内/.test(outErr) ? '✅' : '❌'} 越界路径被拒：${String(outErr).slice(0, 30)}…`)
+  console.log(`  ${/工作区\/记忆文件夹内|路径必须/.test(outErr) ? '✅' : '❌'} 越界路径被拒：${String(outErr).slice(0, 30)}…`)
+  const dotErr = (() => { try { fsops.resolveTarget(root, base, 'a/.'); return '' } catch (e) { return e.message } })()
+  console.log(`  ${/\/\./.test(dotErr) ? '✅' : '❌'} 末尾 "/." 被拒`)
 
   writeFileSync(R('RULES.md'), 'x')
   console.log(`  ${fsops.forbiddenReason(root, R('RULES.md')) ? '✅' : '❌'} 受保护文件（根级 RULES.md）不可删改`)
@@ -1403,7 +1405,8 @@ console.log('\n--- 文件系统操作（mc_kit_fs）---')
   writeFileSync(R('_global/config.json'), '{}')
   console.log(`  ${fsops.forbiddenReason(root, R('_global/config.json')) === null ? '✅' : '❌'} 嵌套的 _global/config.json 不误伤`)
   console.log(`  ${fsops.forbiddenReason(root, R('secrets/x.md')) && fsops.forbiddenReason(root, R('.credentials.yaml')) ? '✅' : '❌'} 凭据 / secrets 路径不可删改`)
-  console.log(`  ${fsops.forbiddenReason(root, root) ? '✅' : '❌'} 不能删沙箱根本身`)
+  console.log(`  ${fsops.forbiddenReason(root, root) ? '✅' : '❌'} 不能删根目录本身`)
+  console.log(`  ${fsops.rootReason(root, [root, base]) ? '✅' : '❌'} rootReason 认出沙箱根/工作区根`)
 
   // 工具层：走真实注册（非 MC → 沙箱=工作区）
   const tool = tools.get('mc_kit_fs')
@@ -1413,10 +1416,68 @@ console.log('\n--- 文件系统操作（mc_kit_fs）---')
   await tool.execute({ action: 'copy', from: 'ws/notes/a.md', to: 'ws/notes/b.md' }, ex)
   console.log(`  ${readFileSync(join(base, 'ws', 'notes', 'b.md'), 'utf8') === 'hi\n' ? '✅' : '❌'} 工具层 copy（相对工作区根）`)
   const delOut = await tool.execute({ action: 'delete', path: 'E:\\definitely\\outside' }, ex).then(() => null).catch((e) => e.message)
-  console.log(`  ${/沙箱内/.test(String(delOut)) ? '✅' : '❌'} 工具层：工作区之外拒删`)
+  console.log(`  ${/工作区|路径必须/.test(String(delOut)) ? '✅' : '❌'} 工具层：工作区之外拒删`)
   writeFileSync(join(base, 'RULES.md'), 'x')
   const delProt = await tool.execute({ action: 'delete', path: 'RULES.md' }, ex).then(() => null).catch((e) => e.message)
   console.log(`  ${/不可删改/.test(String(delProt)) ? '✅' : '❌'} 工具层：受保护文件拒删`)
+
+  // to 以分隔符结尾 → 放进目录（修复 "copy x.md → dir/ 得到文件 dir"）
+  await tool.execute({ action: 'make_dir', path: 'into' }, ex)
+  await tool.execute({ action: 'copy', from: 'ws/notes/a.md', to: 'into/' }, ex)
+  console.log(`  ${existsSync(join(base, 'into', 'a.md')) ? '✅' : '❌'} 🔴 to 以 "/" 结尾 → 放进该目录（into/a.md），不是造个叫 into 的文件`)
+
+  // from 目录 / to 目录：不带分隔符 → 结果就是 to 本身；带分隔符 → to/from
+  await tool.execute({ action: 'make_dir', path: 'srcDir' }, ex)
+  writeFileSync(join(base, 'srcDir', 'f.txt'), 'f\n')
+  await tool.execute({ action: 'copy', from: 'srcDir', to: 'dstDir' }, ex)          // dstDir 不存在
+  console.log(`  ${existsSync(join(base, 'dstDir', 'f.txt')) && !existsSync(join(base, 'dstDir', 'srcDir')) ? '✅' : '❌'} 🔴 from 目录 / to 目录（不带分隔符）→ 结果**就是 to 本身**（dstDir/f.txt）`)
+  await tool.execute({ action: 'copy', from: 'srcDir', to: 'dstDir2/' }, ex)         // 带分隔符 → to/from
+  console.log(`  ${existsSync(join(base, 'dstDir2', 'srcDir', 'f.txt')) ? '✅' : '❌'} 🔴 from 目录 / to 目录/（带分隔符）→ to/from（dstDir2/srcDir/f.txt）`)
+
+  // 「完成 N 个目标」口径写明：N = 直接选中目标数，不含目录内部条目
+  const r1 = await tool.execute({ action: 'copy', from: 'srcDir', to: 'dstDir3' }, ex)
+  console.log(`  ${/完成 1 个目标/.test(String(r1?.text)) && /内部/.test(String(r1?.text)) ? '✅' : '❌'} 🔴 「完成 N 个目标」口径写明（N=直接选中目标数，目录内部条目不计入）：${JSON.stringify(String(r1?.text).split('\n')[0])}`)
+
+  // move 自动建目标父目录（修复"move 没有自动建目录"）
+  await tool.execute({ action: 'move', from: 'into/a.md', to: 'deep/nest/a.md' }, ex)
+  console.log(`  ${existsSync(join(base, 'deep', 'nest', 'a.md')) && !existsSync(join(base, 'into', 'a.md')) ? '✅' : '❌'} 🔴 move 自动创建目标父目录`)
+
+  // overwrite：默认不覆盖；true 才覆盖
+  writeFileSync(join(base, 'ws', 'notes', 'b.md'), 'CHANGED\n')
+  const noOv = await tool.execute({ action: 'copy', from: 'ws/notes/a.md', to: 'ws/notes/b.md' }, ex).then(() => null).catch((e) => e.message)
+  console.log(`  ${/目标已存在|overwrite/.test(String(noOv)) && readFileSync(join(base, 'ws', 'notes', 'b.md'), 'utf8') === 'CHANGED\n' ? '✅' : '❌'} 🔴 overwrite 默认 false：目标已存在 → 报错且**不改动**`)
+  await tool.execute({ action: 'copy', from: 'ws/notes/a.md', to: 'ws/notes/b.md', overwrite: true }, ex)
+  console.log(`  ${readFileSync(join(base, 'ws', 'notes', 'b.md'), 'utf8') === 'hi\n' ? '✅' : '❌'} overwrite:true 才覆盖`)
+
+  // 失败零副作用：from 通配 + 其中一个目标已存在（未开 overwrite）→ 一个都不复制
+  await tool.execute({ action: 'make_dir', path: 'many' }, ex)
+  await tool.execute({ action: 'make_dir', path: 'manyOut' }, ex)
+  writeFileSync(join(base, 'many', 'p.txt'), 'p\n'); writeFileSync(join(base, 'many', 'q.txt'), 'q\n')
+  writeFileSync(join(base, 'manyOut', 'p.txt'), 'old\n')          // 与源 p.txt 同名 → 冲突
+  const noSide = await tool.execute({ action: 'copy', from: 'many/*', to: 'manyOut/' }, ex).then(() => null).catch((e) => e.message)
+  console.log(`  ${noSide && readFileSync(join(base, 'manyOut', 'p.txt'), 'utf8') === 'old\n' && !existsSync(join(base, 'manyOut', 'q.txt')) ? '✅' : '❌'} 🔴 预检失败 → 零副作用（q.txt 没被拷进去）`)
+
+  // delete 不存在路径 → 友好中文（不是原始 ENOENT）
+  const delNo = await tool.execute({ action: 'delete', path: 'nope/nothing.txt' }, ex).then(() => null).catch((e) => e.message)
+  console.log(`  ${/不存在/.test(String(delNo)) && !/ENOENT/.test(String(delNo)) ? '✅' : '❌'} delete 不存在 → 友好中文、不透 ENOENT：${String(delNo).slice(0, 24)}…`)
+
+  // make_dir 含 * → 明确报错（不是字面量建目录）
+  const mkStar = await tool.execute({ action: 'make_dir', path: 'a/b*' }, ex).then(() => null).catch((e) => e.message)
+  console.log(`  ${/不支持通配符/.test(String(mkStar)) && !existsSync(join(base, 'a', 'b*')) ? '✅' : '❌'} make_dir 含 * → 明确报错、不按字面量建`)
+
+  // to 含 * → 明确报错
+  const toStar = await tool.execute({ action: 'copy', from: 'ws/notes/a.md', to: 'out/*' }, ex).then(() => null).catch((e) => e.message)
+  console.log(`  ${/to 不支持通配符/.test(String(toStar)) ? '✅' : '❌'} to 含 * → 明确报错（不是难懂的报错）`)
+
+  // from 通配但没有末尾分隔符的 to → 明确报错
+  const wildBadTo = await tool.execute({ action: 'copy', from: 'many/*', to: 'manyOutX' }, ex).then(() => null).catch((e) => e.message)
+  console.log(`  ${/必须以路径分隔符结尾/.test(String(wildBadTo)) ? '✅' : '❌'} from 通配 + to 不以分隔符结尾 → 明确报错`)
+
+  // 大小写不敏感（Windows）
+  if (process.platform === 'win32') {
+    const ci = await tool.execute({ action: 'delete', path: 'RULES.MD' }, ex).then(() => null).catch((e) => e.message)
+    console.log(`  ${/不可删改/.test(String(ci)) ? '✅' : '❌'} 🔴 守卫/保护大小写不敏感（RULES.MD 也挡住）`)
+  }
 }
 
 // ── 记忆（需求 6 v3）：固定 .whale-craft + AI 维护的 README 索引 + 任意格式 ──

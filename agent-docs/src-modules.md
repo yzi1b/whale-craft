@@ -220,11 +220,14 @@
 
 > 补宿主没有的"删文件/删目录、复制/移动（含二进制）、建目录"。**纯函数、只吃路径**（沙箱根 `root` + 基准 `base`），便于自检单测。
 
-- `resolveTarget(root, base, raw)`：绝对路径照用、相对路径按 `base`（工作区根）解析；前缀包含校验 + **父链 realpath 复查**（防 `root/link -> 外界` 这类越界符号链接，风格同发布区 index.js 的 realpath 复查）。
+- `resolveTarget(root, base, raw)`：绝对路径照用、相对路径按 `base`（工作区根）解析；前缀包含校验（**Windows 大小写不敏感**）+ **父链 realpath 复查**（防 `root/link -> 外界` 这类越界符号链接）；末尾 `/.` 拒绝。
 - `expand(root, base, raw)`：末尾 `/*` → 该目录下**直接**子项（非深层 glob；`*` 只能在末尾，否则报错）；否则单目标。
-- `copyEntry / moveEntry / removeEntry / makeDir`：`cpSync{recursive, dereference:false, verbatimSymlinks:true}`（**保留符号链接、不跟随**）；move 先 `renameSync`、跨盘（EXDEV）退回复制+删除；delete 走 `lstat`（链接只 `unlinkSync` 本身）。
-- `forbiddenReason(root, abs)`：受保护文件（**根级** RULES.md/AGENTS.md/config.json）、凭据路径、沙箱根本身 → 拒；嵌套的 `_global/config.json` 不误伤。
-- **双层防线**：工具态（本模块，权威）+ guard（index.js ③′，MC 模式第二道锁，沙箱=记忆根）。
+- `hasTrailingSep / hasStar / pathExists / isDir / samePath / isInside / ensureParentDir`：给工具态做"预检"用的小判定（`to` 是否以分隔符结尾、含 `*`、目标是否已存在/是目录、源目标是否相同/嵌套）。
+- `copyEntry / moveEntry / removeEntry / makeDir`：`cpSync{recursive, dereference:false, verbatimSymlinks:true}`（**保留符号链接、不跟随**）；move 先 `renameSync`、跨盘（EXDEV）退回复制+删除 + **自动建目标父目录**；delete 走 `lstat`（链接只 `unlinkSync` 本身）。
+- `forbiddenReason(root, abs)` / `rootReason(abs, roots)`：受保护文件（**根级** RULES.md/AGENTS.md/config.json）、凭据路径、沙箱根/工作区根**本身** → 拒；嵌套的 `_global/config.json` 不误伤。
+- **失败在动手前停止**：所有预检由 index.js 的 `mc_kit_fs.execute` 做完全部 plan 校验才执行（用户 2026-10-08："任何失败的操作都应在动手前停止，不可有副作用"）。
+- **错误一律中文**：本模块把系统错误码译成人话（`ENOENT:不存在`…），**不透出 Node/Windows 本地化原文**。
+- **双层防线**：工具态（本模块，权威）+ guard（index.js ③′，MC 模式第二道锁，沙箱=记忆根，路径比较同样大小写不敏感）。
 
 ## 16. `src/tool-def.mjs` —— 工具定义（宿主优先 + 内置兜底）
 

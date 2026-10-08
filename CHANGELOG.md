@@ -18,6 +18,7 @@
 - 【新增】文件系统工具 `mc_kit_fs`：复制 / 移动 / 删除 / 建目录（**均递归**）。补上此前缺失的"删文件/目录、复制二进制、建目录"能力。范围：**MC 模式**只能在 `.whale-craft/` 内、**MC+ 模式**在工作区内；**保留符号链接（不跟随）**；受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径**不可删改**。
 - 【变更】MC 模式放开一批宿主工具：文件检索 `glob`/`grep`、后台任务 `job_list`/`job_output`/`job_kill`、目标 `get_goal`/`create_goal`/`update_goal`、待办 `todo_write`（此前 MC 模式只有文件工具 + present）。同时 **MC 模式不再暴露 `present`**（文件交付走 `mc_kit_express` 给 URL），shell / 子代理 / 联网 / 技能 / 计划模式等**仍不开放**。文件工具路径依旧被限在 `.whale-craft/` 内。
 - 【变更】记忆根不再有任何重定向：**固定为 `<会话工作区>/.whale-craft`**（删掉了 `WHALE_CRAFT_MEMORY_DIR` 环境变量与 `memoryDir` 配置项）。此前调试实例默认把记忆写到 `.dev/home/memory`，与生产行为不一致；现在调试也用**专门的调试工作区**，两者完全一致。
+- 【变更】`mc_kit_fs` 按修订规格整理行为：`to` 以路径分隔符结尾表示"放进该目录"（修复 `copy x.md → dir/` 会造出名为 `dir` 的文件）；目标父目录一律自动创建（含 move）；新增 `overwrite`（默认 false，目标已存在则报错不覆盖，`true` 才覆盖）；`from` 通配时 `to` 必须以分隔符结尾；**所有预检在动手前做完，失败零副作用**；错误一律中文（不再透出 Node/Windows 本地化原文）；路径比较在 Windows 上大小写不敏感；`make_dir` / `to` 含 `*` 给出明确报错。
 
 ## [0.2.0-beta.2] - 2026-10-06
 
