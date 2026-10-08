@@ -1567,7 +1567,6 @@ export function apply(ctx, rawConfig) {
             segments: {
               'agents-md': sent.includes('.whale-craft/RULES.md') ? cur.text.length : 0,
               'workspace-agents-md': sent.includes('AGENTS.md') ? 1 : 0,
-              'memory-index': sent.includes('.whale-craft/README.md') && root ? memoryIndexText(memoryFor(cwd)).length : 0,
             },
           }
         } catch (e) { diag = { reason, error: String(e.message) } }
@@ -2865,32 +2864,14 @@ export function apply(ctx, rawConfig) {
     },
   }))
 
-  /* ── 长期记忆：专用工具已移除，模型改用宿主文件工具 ──────────────────────────
-   * 2026-10-07：用户决定移除 `mc_kit_memory` —— agent 改用宿主文件工具
-   * （read/write/edit/glob/grep/read_image）直接读写工作区 `.whale-craft/` 内的文件。
-   * 记忆模型本身保留：固定 `<工作区>/.whale-craft/`、AI 维护 README.md 索引、
-   * 每轮自动注入索引（见 memoryIndexText）都不变，只是不再有专属工具。
+  /* ── 长期记忆：专用工具与索引自动注入**均已移除**，全靠 agent 自行用宿主文件工具 ──
+   * 2026-10-07：用户先决定移除 `mc_kit_memory` 工具（与宿主受限文件工具功能重叠），
+   * 随后又要求**去掉 README 索引的自动注入**。现在长期记忆完全交给 agent 自己：
+   * 用宿主文件工具（read/write/edit/glob/grep/read_image）直接读写工作区 `.whale-craft/`。
+   * 只保留**目录约定本身**：固定 `<工作区>/.whale-craft/`、`README.md` 作为人工维护的索引
+   * （agent 按 RULES.md 的指示自行阅读/维护）——插件**不再**往上下文里注入它。
    * ⚠️ 已知缺口：宿主暂无删文件工具、也无二进制 `put`（等宿主补，插件不另造）。
    * ------------------------------------------------------------------------ */
-
-  /* ── 总索引自动注入系统提示（用户要求：自动注入 + 提醒及时读）── */
-
-  /** 记忆索引的正文（按工作区渲染；`store` 的根不存在且要求静默时返回空串） */
-  const memoryIndexText = (store, { silentWhenMissing = false } = {}) => {
-    if (silentWhenMissing && !existsSync(store.root)) return ''
-    // 没记忆时不占位（第一次 append 后自动出现）
-    const files = store.list()
-    if (!files.length) {
-      return '【麦块长期记忆】现在是空的（`.whale-craft/`）。学到值得记住的事（用户是谁、地标坐标、约定）就用 '
-        + '写文件工具（write / edit）记到 `.whale-craft/` 下的文件里，'
-        + '并在 `.whale-craft/README.md` 里补一行索引。'
-    }
-    return '【麦块长期记忆】根目录 `.whale-craft/`（其中 `README.md` 是**你维护的索引**）\n\n'
-      + store.indexText()
-      + '\n\n**要动手前先读相关文件**（用 read 读 `.whale-craft/` 下的文件）——'
-      + '别凭印象做事；不确定就先用 grep 搜。新学到的事实随手写进对应文件（write / edit），'
-      + '并且**改了记忆就顺手更新 `.whale-craft/README.md`**。'
-  }
 
   /**
    * 🔴 2026-09-16 用户定的：**本插件不再往系统提示词里塞任何东西**。
@@ -2904,13 +2885,12 @@ export function apply(ctx, rawConfig) {
    * 所以注入**只剩一条通道**：学宿主注入工作区 `AGENTS.md` 的做法，把内容当**插件提示行**
    * 投进 `agent.inbox.nextStep`（见 `reconcileNotices`，在 `agent/pre-step` 里对账投递）——
    * 必达、在对话里看得见、而且完全不过 systemPrompt 组装，任何 persona 都压不掉它。
-   * 记忆索引（`.whale-craft/README.md`）也走同一条路。
    */
 
   /* 🔴 这里原来有一段"给每个 agent 注册两个 systemPrompt 段（记忆索引 + 模式指导）"的代码，
    * 2026-09-16 用户要求**整段删掉**："系统提示词不用显式注入，设置好了会自动注入" ——
    * 插件自己往系统提示里塞东西既冗余，又会被 persona 的 complete/includeRuntimeContext 压掉
-   * （见上一段）。记忆索引与模式相关的话现在都走 `reconcileNotices()` 的插件提示行。 */
+   * （见上一段）。行事准则 / 版本提示等现在都走 `reconcileNotices()` 的插件提示行。 */
 
   /**
    * 行事准则文件缺了就补一份默认。
@@ -2935,10 +2915,10 @@ export function apply(ctx, rawConfig) {
   /**
    * **把提示词当"插件提示"投递**（学宿主的做法，**绝不冒充用户发言**）。
    *
-   * 投三条（各一条插件提示行）：
+   * 投两到三条（各一条插件提示行）：
    *    ① `<工作区>/AGENTS.md`（开关 `injectWorkspaceAgentsMd`）—— 用户要求先投它
    *    ② `<工作区>/.whale-craft/RULES.md`（开关 `injectWhaleCraftAgentsMd`）
-   *    ③ `<工作区>/.whale-craft/README.md` = **记忆总索引**（无开关：记忆是这个模式的本职）
+   *    ③ 版本硬提示词（无开关；见 src/version-prompt.mjs）
    *
    * 🔴 为什么走这条路：宿主注入工作区 `AGENTS.md` **不用 systemPrompt** ——
    *    `packages/context/agent-instructions` 把一条消息放进 `agent.inbox.nextStep`
@@ -3151,12 +3131,6 @@ export function apply(ctx, rawConfig) {
       title: versionPromptTitle(PLUGIN_VERSION),
       text: versionPromptText(),
     })
-    // ④ 记忆总索引（`.whale-craft/README.md`）：**每个 MC 会话都给一次**——这正是"长期记忆"的入口。
-    //    内容空（还没记过东西）也照样给：里面写着"怎么记"，第一轮就知道该往哪写。
-    {
-      const idx = memoryIndexText(memoryFor(cwd)).trim()
-      if (idx) items.push({ rel: '.whale-craft/README.md', title: '提示词注入：.whale-craft/README.md', text: idx })
-    }
     if (!items.length) return { delivered: false, todo: [], queued: 0, reason: 'no-items' }
 
     const ledger = ledgerOf(agent)
@@ -3302,7 +3276,6 @@ export function apply(ctx, rawConfig) {
   const noticeRelCandidates = () => [
     'AGENTS.md',
     '.whale-craft/RULES.md',
-    '.whale-craft/README.md',
     versionPromptSource(PLUGIN_VERSION),
   ]
 
@@ -3344,7 +3317,6 @@ export function apply(ctx, rawConfig) {
           ? { path: agentsFile, exists: existsSync(agentsFile), source: cur?.source ?? null, bytes: cur ? Buffer.byteLength(cur.text) : 0 }
           : null,
         workspaceAgentsMd: wsAgents ? { path: wsAgents, exists: wsExists } : null,
-        memoryIndex: root ? { path: join(root, 'README.md'), exists: existsSync(join(root, 'README.md')) } : null,
       },
       preset: mcPresetDiag ?? null,
       // **实际投出去的文件名**（投递是唯一通道，这就是判据本身）
@@ -3361,13 +3333,11 @@ export function apply(ctx, rawConfig) {
         'agents-md': sent.includes('.whale-craft/RULES.md'),
         'workspace-agents-md': sent.includes('AGENTS.md'),
         'version-prompt': sent.some((r) => String(r).startsWith('whale_craft@')),
-        'memory-index': sent.includes('.whale-craft/README.md'),
       },
       segments: {
         'agents-md': sent.includes('.whale-craft/RULES.md'),
         'workspace-agents-md': sent.includes('AGENTS.md'),
         'version-prompt': sent.some((r) => String(r).startsWith('whale_craft@')),
-        'memory-index': sent.includes('.whale-craft/README.md'),
       },
       // ⚠️ 这里只留**用户看不出来、又真的影响投递**的原因。
       //    "还没到投递时机 / 开关是关的" 这种**不用提示**（用户 2026-09-18：多余）——

@@ -98,14 +98,13 @@ DSH host 进程
 
 ## 6. 提示词注入体系（唯一通道 = 插件提示行）
 
-**本插件不往系统提示词里塞任何东西**。注入 = 往会话投"插件提示行"，常规 4 条：
+**本插件不往系统提示词里塞任何东西**。注入 = 往会话投"插件提示行"，常规 2~3 条：
 
 | 顺序 | 内容 | 开关（默认；前两个**按工作区**，存 `<工作区>/.whale-craft/config.json`） |
 | --- | --- | --- |
 | 1 | 工作区根 `AGENTS.md`（宿主原生文件，插件再补一份） | `injectWorkspaceAgentsMd`（关） |
 | 2 | `.whale-craft/RULES.md`：行事准则（称呼/记忆/看门狗/登服/聊天/建筑/硬规矩） | `injectWhaleCraftAgentsMd`（开） |
-| 3 | **版本硬提示词**（硬编码随版本发布：哪些工具不成熟、怎么把文件给用户看） | 无开关 |
-| 4 | 记忆总索引：`.whale-craft/README.md` + 自动目录树 | 无开关 |
+| 3 | **版本硬提示词**（硬编码随版本发布：哪些工具不成熟、本版本能力短板） | 无开关 |
 
 - **挂载点**：`agent/pre-step` waterfall（放行前**必须 `next()`**），把提示行改写进 `decision.messages` 的**本步最前**（不能塞 `inbox.nextStep` —— 宿主 `preStep()` 先 `inbox.claim()` 再跑瀑布，塞队列会晚一步）。
 - **去重三层**：① 台账 `noticeLedger`（指纹 `preset|PLUGIN_VERSION`）；② 会话日志回读 `deliveredRelsFor`（找 `source.plugin==='whale_craft' && form==='notice'` 的历史消息）；③ `inbox` 队列同名检查。

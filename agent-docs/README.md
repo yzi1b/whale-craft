@@ -17,7 +17,7 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 - **事件唤醒只有一条通道**：`mc_watch` 看门狗（绑定宿主 job → 结算/注入）；**不存在**跨会话唤醒。
 - **提示词只走"插件提示行"**：`source:{kind:'plugin:whale_craft',form:'notice'}`（v4 规范值），绝不冒充用户发言。
 - **凭据不进模型上下文**：密码/token 只写宿主凭据服务（`$DSH_HOME/.credentials.yaml`），工具返回/HTTP 永不携带。
-- **长期记忆** `<工作区>/.whale-craft/`：AI 维护的文档树，会话开始时以提示行注入索引。
+- **长期记忆** `<工作区>/.whale-craft/`：AI 维护的文档树。专用工具与索引自动注入均已移除（2026-10-07）——agent 用宿主文件工具自行读写，并按 RULES.md 的指示自行阅读/维护 `README.md` 索引。
 - **按工作区配置** `<工作区>/.whale-craft/config.json`：提示词三个开关 + 版本标记；对 MC 模式 AI 只读（与 RULES.md 同一套保护）。
 
 ## 代码地图（顶层）

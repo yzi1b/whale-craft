@@ -78,7 +78,7 @@
 - **`safePath(rel)` 是路径安全关口**：拒空/绝对路径/盘符/`.`/`..`/深层/超长/非法段，`resolve` 后必须仍在 root 内。**不再做文件名封锁** —— 根级的受保护文件（RULES.md/AGENTS.md/config.json，见 src/protected.mjs）在这里**放行（读允许）**，结果带 `protected:true`，由写类方法显式拒绝（用户 2026-10-03：可读不可写）。
 - 方法：`ensureRoot/ensureReadme`（骨架只建一次）· `pathFor({topic,server})`（server 缺省 `_global/`；无扩展名补 `.md`）· `list()`（根级 README 与受保护文件不算记忆；解析标题/条目数/摘要）· `renderTree()`/`indexText()`（5s 缓存；注入用 = README 正文 + 目录树）· `read()`（文本→content；**图片→附件**（工具层 `attachments.saveImage`）；二进制→元信息）· `put()`（**把工作区任意文件复制进记忆**，16MB，name 清洗）· `append({text,key})`（单条 ≤4000 字；同 key 正则替换旧 bullet）· `write()`（整文件覆盖，拒图片）· `delete()` · `search()`（跨文本文件逐行，limit ≤100）· `overview()`。
 - `append/write/delete/put` 对 `protected` 目标一律抛"只读"（`protectedWriteError`）。写后清 `_textCache`（投递的索引恒新）。⚠️ `list()` 只跳过**根级**的 README 与受保护文件，`.out/`/`.express/` 会被遍历进去（未专门跳过）。
-- 🔴 **工具 `mc_kit_memory` 已于 2026-10-07 移除**：agent 改用宿主受限文件工具（read/write/edit/glob/grep/read_image）直接读写 `.whale-craft/`。本模块**保留为库**——`put/append/write/delete/search/overview/read` 不再有生产消费方，仍由自检单元测试直接覆盖；`read()` 的图片附件化接线随工具移除（看图改由宿主 `read_image` 承担）。
+- 🔴 **工具 `mc_kit_memory` 已于 2026-10-07 移除**（同日又去掉 README 索引的**自动注入**）：agent 改用宿主受限文件工具（read/write/edit/glob/grep/read_image）直接读写 `.whale-craft/`。本模块**保留为库**——`put/append/write/delete/search/overview/read` 与读侧的 `indexText/renderTree/list` 均不再有生产消费方，仍由自检单元测试直接覆盖；`read()` 的图片附件化接线随工具移除（看图改由宿主 `read_image` 承担）。
 
 ## 5. `src/agentsmd.mjs` —— RULES.md 行事准则
 

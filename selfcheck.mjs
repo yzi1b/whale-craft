@@ -208,7 +208,7 @@ const fakeCtx = {
   webServer: { register: (route) => { registeredRoutes.push(route); return () => {} } },
   // 必须在 apply 之前就在，否则归档保护的包装装不上
   workspaceRegistry: { archiveSession: async (sid) => { archivedSessions.push(String(sid)) } },
-  // 系统提示：收集插件注册的动态 context（"总索引自动注入"就靠它）
+  // 系统提示：收集插件注册的动态 context（本插件已不注册任何 systemPrompt 段）
   systemPrompt: {
     context: (c) => { injectedContexts.push(c); return () => {} },
     section: () => () => {},
@@ -1534,14 +1534,13 @@ console.log('\n--- 提示词注入通道（插件提示行，不再碰 systemPro
   console.log(`  ${injectedContexts.length === 0 ? '✅' : '❌'} 一个 systemPrompt.context() 段都没注册（${injectedContexts.length} 段）`)
   console.log(`  ${!/systemPrompt\.(context|section)\(/.test(idx) ? '✅' : '❌'} 源码里也搜不到任何 systemPrompt 段注册`)
   console.log(`  ${!/installAgentPrompts|whale_craft:memory-index|whale_craft:mode-guidance|MC_MODE_GUIDANCE/.test(idx) ? '✅' : '❌'} 旧的 installAgentPrompts / 记忆索引段 / 模式指导段 已整段删除`)
-  // ② 记忆索引改走提示行（和两个 AGENTS.md 同一条路）
-  console.log(`  ${/rel: '\.whale-craft\/README\.md'/.test(idx) && /提示词注入：\.whale-craft\/README\.md/.test(idx) ? '✅' : '❌'} 记忆索引（.whale-craft/README.md）也当**插件提示行**投递`)
+  // ② 🔴 2026-10-07：记忆索引的自动注入**也删了**（连 mc_kit_memory 一起移除后，用户要求去掉索引注入）
+  console.log(`  ${!/memoryIndexText/.test(idx) && !/rel: '\.whale-craft\/README\.md'/.test(idx) ? '✅' : '❌'} 🔴 记忆索引（.whale-craft/README.md）**不再自动注入**（memoryIndexText 已删）`)
   console.log(`  ${/const noticeLedger = new WeakMap\(\)/.test(idx) && /const reconcileNotices = \(agent\)/.test(idx) ? '✅' : '❌'} 记下**实际投出去**的文件（投递台账 noticeLedger + reconcileNotices；状态页据此报真实投递，不是"打算投"）`)
   // ③ persona：MC 模式人设（与 presets/minecraft.patch.yml 的 persona.prefix 逐字一致）
   const persona = '你是一个 Minecraft Java 版游戏助理，由模型 {{model}} 驱动。你可以通过工具调用，使用无头机器人进入 MC 服务器中与世界和玩家互动。你应当专注于 MC 游戏，不过问交互原理和插件代码，除非收到明确调试指令。'
   const m = idx.match(/const MC_PERSONA_TEXT = '([^']*)'/)
   console.log(`  ${m?.[1] === persona ? '✅' : '❌'} 🔴 MC_PERSONA_TEXT 与 MC 模式 preset 的 persona 逐字一致${m?.[1] === persona ? '' : `（实际：${JSON.stringify(m?.[1] ?? null)}）`}`)
-  // ④ 每个 MC 会话都会拿到"记忆索引"提示行：这条在下面 ⑦ 用真 agent 验（body 里带记忆工具名）
 }
 
 // ── 全局配置 + 管理工具 + MC 模式权限隔离（用户 2026-09-16 要求）──
@@ -2163,10 +2162,9 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const queuedAfterStep1 = mcAgent.inbox.nextStep.filter((m) => String(m?.source?.kind ?? '') === 'plugin:whale_craft').length
     const first = msgs[0]
     const second = msgs[1]
-    const third = msgs[2]
-    console.log(`  ${msgs.length === 3 ? '✅' : '❌'} 🔴 首次请求组装前投递 3 条（${msgs.length} 条：行事准则 + 版本提示 + 记忆索引）`)
-    console.log(`  ${msgs.length === 3 && first === step1[0] ? '✅' : '❌'} 提示行排在本 step 消息的**最前面**（模型先看到规矩，再看用户那句）`)
-    console.log(`  ${msgs.length === 3 && queuedAfterStep1 === 0 ? '✅' : '❌'} 🔴 提示行是**本步改写**送出去的（没有走"塞队列、下一步才领"那条晚一步的老路；队列残留 ${queuedAfterStep1} 条）`)
+    console.log(`  ${msgs.length === 2 ? '✅' : '❌'} 🔴 首次请求组装前投递 2 条（${msgs.length} 条：行事准则 + 版本提示）`)
+    console.log(`  ${msgs.length === 2 && first === step1[0] ? '✅' : '❌'} 提示行排在本 step 消息的**最前面**（模型先看到规矩，再看用户那句）`)
+    console.log(`  ${msgs.length === 2 && queuedAfterStep1 === 0 ? '✅' : '❌'} 🔴 提示行是**本步改写**送出去的（没有走"塞队列、下一步才领"那条晚一步的老路；队列残留 ${queuedAfterStep1} 条）`)
     console.log(`  ${first?.source?.kind === 'plugin:whale_craft' && first?.source?.plugin === undefined && first?.source?.form === 'notice' ? '✅' : '❌'} 🔴 来源是 plugin:whale_craft/notice（**不是**用户发言；v4 规范形态不带旧 plugin 字段）：${JSON.stringify(first?.source ?? null)}`)
     const body = (first?.content ?? []).map((c) => c.text ?? '').join('')
     console.log(`  ${/Whale Craft 行事准则/.test(body) && /Master/.test(body) ? '✅' : '❌'} 第 1 条 = 行事准则（${body.length} 字），首行写明文件：${JSON.stringify(body.split('\n')[0])}`)
@@ -2184,9 +2182,6 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     console.log(`  ${/^Instructions from: whale_craft@\d+\.\d+\.\d+/.test(bodyV) ? '✅' : '❌'} 版本由来源行携带：${JSON.stringify((bodyV.split('\n')[0] ?? '').slice(0, 44))}`)
     const vTitle = String(second?.source?.summary ?? '')
     console.log(`  ${/v\d+\.\d+\.\d+/.test(vTitle) && /（[0-9a-f]{8}）$/.test(vTitle) ? '✅' : '❌'} 折叠标题带版本号 + 短哈希：${vTitle}`)
-    const body2 = (third?.content ?? []).map((c) => c.text ?? '').join('')
-    console.log(`  ${third?.source?.form === 'notice' && /^Instructions from: \.whale-craft\/README\.md$/.test(body2.split('\n')[0] ?? '') ? '✅' : '❌'} 第 3 条 = 记忆索引（.whale-craft/README.md），同样是插件提示行`)
-    console.log(`  ${/长期记忆/.test(body2) && !/mc_kit_memory/.test(body2) ? '✅' : '❌'} 记忆索引正文含"怎么记/怎么读"（${body2.length} 字）—— 已改指宿主文件工具`)
     console.log(`  ${plainAgent.inbox.nextStep.length === 0 ? '✅' : '❌'} 普通会话**不投递**（只有 MC 模式才投）`)
     const plainStep = await preStepMessages(plainAgent)
     console.log(`  ${plainStep.filter((m) => m?.source?.kind === 'plugin:whale_craft').length === 0 ? '✅' : '❌'} 🔴 普通会话**走到请求组装前**也一条都不投（现场判 preset，不靠"当时是 MC 就永久算数"）`)
@@ -2194,12 +2189,12 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     fire('agent/session-start', mcAgent)
     console.log(`  ${mcAgent.inbox.nextStep.length === inboxBefore ? '✅' : '❌'} agent/session-start 不再重复入队（投递已不在这个时机）`)
     // 🔴 2026-10-06：删掉「MC+ 模式说明」——模式差异改由 persona 承载（声明式 preset），
-    //    不再靠一条自造 notice。MC+ 会话与 MC 会话一样只投 3 条。
+    //    不再靠一条自造 notice。MC+ 会话与 MC 会话一样只投 2 条（行事准则 + 版本提示）。
     const plusStep = await preStepMessages(plusAgent)
     const plusMsgs = plusStep.filter((m) => m?.source?.kind === 'plugin:whale_craft')
-    console.log(`  ${plusMsgs.length === 3 ? '✅' : '❌'} 🔴 MC+ 会话也只投 3 条（不再有「MC+ 模式说明」；实际 ${plusMsgs.length} 条）`)
+    console.log(`  ${plusMsgs.length === 2 ? '✅' : '❌'} 🔴 MC+ 会话也只投 2 条（不再有「MC+ 模式说明」；实际 ${plusMsgs.length} 条）`)
     console.log(`  ${!plusMsgs.some((m) => /（MC\+ 模式说明）/.test(String(m?.source?.summary ?? ''))) ? '✅' : '❌'} 投递里不再出现「MC+ 模式说明」`)
-    console.log(`  ${msgs.length === 3 ? '✅' : '❌'} MC 会话仍是 3 条`)
+    console.log(`  ${msgs.length === 2 ? '✅' : '❌'} MC 会话仍是 2 条`)
   }
   // 🔴🔴 用户 2026-09-16 真机投诉："这个 agent 怎么还能用 pwsh！不是只暴露我们指定的工具吗！"
   //    旧实现：allowOtherTools 默认为空 ⇒ 只 deny 了我们的管理工具，宿主那堆工具（pwsh/subagent/…）
@@ -2268,7 +2263,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   const lateMsgs = lateStep.filter((m) => m?.source?.kind === 'plugin:whale_craft')
   const lateBody = (lateMsgs[0]?.content ?? []).map((c) => c.text ?? '').join('')
   console.log(`  ${/Whale Craft 行事准则/.test(lateBody) ? '✅' : '❌'} 🔴 模式晚选上后，**首次请求组装前**照样投得到（${lateMsgs.length} 条 / ${lateBody.length} 字）—— 就是那个 bug`)
-  console.log(`  ${lateMsgs.length === 3 ? '✅' : '❌'} 补投递没有重复（行事准则 + 版本提示 + 记忆索引，各一条）`)
+  console.log(`  ${lateMsgs.length === 2 ? '✅' : '❌'} 补投递没有重复（行事准则 + 版本提示，各一条）`)
   // ⚠️ 2026-10-04：晚选之前它是"非 MC"档（先 deny 摘 mc/mckit），选上后换白名单 ——
   //    同一个 ctx 会有**两条** restrict 记录，这里挑带 allow 的那条。
   const lateCalls = restrictCalls.filter((c) => c.preset === undefined)
@@ -2302,7 +2297,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     console.log(`  ${restrictCalls.length === callsBefore + 1 ? '✅' : '❌'} 再切回 MC模式 重新套上白名单（撤销 ≠ 以后不再管）：allow ${reapplied?.f?.allow?.length ?? 0} 个`)
     console.log(`  ${Array.isArray(reapplied?.f?.allow) && !reapplied.f.allow.includes('pwsh') ? '✅' : '❌'} 重新套上的仍然是白名单（没有 pwsh）`)
     const backToMc = (await preStepMessages(lateAgent, 4, 1)).filter((m) => m?.source?.kind === 'plugin:whale_craft')
-    console.log(`  ${backToMc.length === 3 ? '✅' : '❌'} 再切回 MC模式 后**请求前重新投递**提示词（实际 ${backToMc.length} 条；队列里那批已被切出时清掉，所以必须重投）`)
+    console.log(`  ${backToMc.length === 2 ? '✅' : '❌'} 再切回 MC模式 后**请求前重新投递**提示词（实际 ${backToMc.length} 条；队列里那批已被切出时清掉，所以必须重投）`)
     await preStepMessages(lateAgent, 5, 1)                                    // 宿主领走
     const backToMcAgain = (await preStepMessages(lateAgent, 6, 1)).filter((m) => m?.source?.kind === 'plugin:whale_craft')
     console.log(`  ${backToMcAgain.length === 0 ? '✅' : '❌'} 重投之后又是幂等的（第 6 轮 ${backToMcAgain.length} 条，没刷屏）`)
@@ -2316,8 +2311,8 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     fakeCtx.agents = { get: (id) => (id === 'sess-DELIVERED' ? deliverAgent : id === 'sess-LATE' ? lateAgent : undefined) }
     fire('agent/created', deliverAgent)
     const firstRound = (await preStepMessages(deliverAgent, 1, 1)).filter((m) => m?.source?.kind === 'plugin:whale_craft')
-    console.log(`  ${firstRound.length === 3 ? '✅' : '❌'} （前置）首次请求投了 3 条（实际 ${firstRound.length}）`)
-    // 宿主把队列领走 → 这 3 条进了**会话日志**（之后台账丢掉也不该重投）
+    console.log(`  ${firstRound.length === 2 ? '✅' : '❌'} （前置）首次请求投了 2 条（实际 ${firstRound.length}）`)
+    // 宿主把队列领走 → 这 2 条进了**会话日志**（之后台账丢掉也不该重投）
     await preStepMessages(deliverAgent, 2, 1)
     // 模拟"宿主重启 / 插件重载"：台账随进程消失，只剩会话日志
     const reborn = {
@@ -2375,39 +2370,6 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     console.log('  ✅ 🔴 走到这里就说明**进程没被 Unhandled \'error\' 带走**（否则自检当场崩，后面的断言一条都不会跑）')
   }
 
-  /* ⑦b 记忆索引**是活的**：往记忆根写一条 → 新会话的提示行必须带上它；盘上没了就不再出现。
-   *    （工具 mc_kit_memory 已于 2026-10-07 移除；改用 MemoryStore 直接写盘 + 真实注入路径验证。
-   *      每次换**全新**记忆根：插件侧 indexText 有 5s 缓存，复用旧根会读到陈旧索引。） */
-  {
-    const { MemoryStore } = await import('./src/memory.mjs')
-    const { mkdtempSync } = await import('node:fs')
-    const { tmpdir } = await import('node:os')
-    const { join } = await import('node:path')
-    const savedLiveRoot = process.env.WHALE_CRAFT_MEMORY_DIR
-    let liveSeq = 0
-    /** 在全新记忆根上跑一次真实注入，返回投递正文（prep 里可预置盘上内容） */
-    const injectWithRoot = async (freshRoot, prep) => {
-      process.env.WHALE_CRAFT_MEMORY_DIR = freshRoot
-      const store = new MemoryStore(freshRoot)
-      if (prep) prep(store)
-      const tag = ++liveSeq
-      const ag = { id: `sess-LIVE-${tag}`, session: mkSession(`whale-live-${tag}-`), ctx: makeAgentCtx('minecraft'), inbox: mkInbox() }
-      fire('agent/created', ag)
-      return (await preStepMessages(ag)).filter((m) => m?.source?.kind === 'plugin:whale_craft')
-        .map((m) => (m.content ?? []).map((c) => c.text ?? '').join('')).join('\n')
-    }
-    try {
-      const rootA = join(mkdtempSync(join(tmpdir(), 'whale-liveA-')), 'memory')
-      const bodyA = await injectWithRoot(rootA, (s) => s.append({ topic: 'selftest-tmp', server: '_global', text: '这是一条自检临时记忆' }))
-      console.log(`  ${bodyA.includes('selftest-tmp') && /先读/.test(bodyA) ? '✅' : '❌'} 写进记忆后，新会话的提示行立刻带上该文件 + "先读"提醒`)
-      const rootB = join(mkdtempSync(join(tmpdir(), 'whale-liveB-')), 'memory')
-      const bodyB = await injectWithRoot(rootB, (s) => { const r = s.append({ topic: 'selftest-tmp', server: '_global', text: 'x' }); s.delete({ path: String(r.path) }) })
-      console.log(`  ${!bodyB.includes('selftest-tmp') ? '✅' : '❌'} 盘上删掉后不再出现（索引是投递那一刻现读的，不是缓存）`)
-    } finally {
-      if (savedLiveRoot === undefined) delete process.env.WHALE_CRAFT_MEMORY_DIR
-      else process.env.WHALE_CRAFT_MEMORY_DIR = savedLiveRoot
-    }
-  }
 
   /* ⑧ 🔴 用户："插件初始化就要检查 `.whale-craft` 是否存在，不存在则建立；README.md 是否存在，
    *    不存在则写入默认值。"（AGENTS.md 同理：提示词页编辑的就是这个文件，文件必须先在） */

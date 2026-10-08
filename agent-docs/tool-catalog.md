@@ -101,7 +101,7 @@
 
 ## 历史变更（防混淆）
 
-- **`mc_kit_memory` 已删除**（2026-10-07）：长期记忆改由**宿主受限文件工具**（`read/write/edit/glob/grep/read_image`，MC 模式 guard 已限在 `.whale-craft/` 内）直接读写。**记忆模型本身保留**：固定 `<工作区>/.whale-craft/`、AI 维护 `README.md` 索引、每轮自动注入索引（`memoryIndexText`）都不变；`MemoryStore`（`src/memory.mjs`）保留为库。自检里有"mc_kit_memory 已移除"的断言——老名字不要再出现。已知缺口（等宿主补）：宿主暂无删文件工具、也无二进制 `put`。
+- **`mc_kit_memory` 已删除**（2026-10-07）：长期记忆改由**宿主受限文件工具**（`read/write/edit/glob/grep/read_image`，MC 模式 guard 已限在 `.whale-craft/` 内）直接读写。**同日又去掉 README 索引的自动注入**（`memoryIndexText` 已删）：`README.md` 作为目录约定仍在，由 agent 按 RULES.md 自行阅读/维护，插件不再往上下文里注入它；`MemoryStore`（`src/memory.mjs`）保留为库。自检里有"mc_kit_memory 已移除 / 记忆索引不再自动注入"的断言——老名字不要再出现。已知缺口（等宿主补）：宿主暂无删文件工具、也无二进制 `put`。
 - **`mc_kit_share`（及 `mc_map` 的 `share` 参数）已删除**（2026-09-16）：它只是在调宿主**另装**的 `dsh-file-host`，插件本身没有文件服务器。"让用户看到文件"改走：宿主 `present`（显式文件交付）+ 本插件的 `mc_kit_express`。自检里有"mc_kit_share 已移除 / 源码无文件服务器残留"的断言——老名字不要再出现。
 - 文件分享 2026-10-04 起是**开关**（`expressEnabled`），不再有"模式"；老配置里的 `expressMode`（含 `local`）由 `PluginConfig.migrate` 搬成布尔（`online`→`true`，其余→`false`）。
 - **2026-10-07 文件分享按宿主模式拆键**：`expressEnabled`/`expressBase` → **web 那套** `expressWebEnabled`/`expressWebBase`；新增 **desktop 那套** `expressDesktopEnabled`/`expressDesktopPort`（默认 16049，独立端口只监听 localhost）。从哪种模式（宿主 profile）进来只认哪套；`expressMode` 与两个旧键都由 `migrate` 逐档搬（见 architecture §10）。
