@@ -15,6 +15,7 @@
 - 【变更】移除长期记忆工具 `mc_kit_memory`：长期记忆改由宿主文件工具（read/write/edit/glob/grep/read_image）直接在 `.whale-craft/` 下读写。
 - 【变更】不再自动注入 `.whale-craft/README.md` 记忆索引（改由 AI 按行事准则自行阅读/维护）。记忆文件夹与既有记忆不受影响。
 - 【新增】文件系统工具 `mc_kit_fs`：复制 / 移动 / 删除 / 建目录（**均递归**）。补上此前缺失的"删文件/目录、复制二进制、建目录"能力。范围：**MC 模式**只能在 `.whale-craft/` 内、**MC+ 模式**在工作区内；**保留符号链接（不跟随）**；受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径**不可删改**。
+- 【变更】MC 模式放开一批宿主工具：文件检索 `glob`/`grep`、后台任务 `job_list`/`job_output`/`job_kill`、目标 `get_goal`/`create_goal`/`update_goal`、待办 `todo_write`（此前 MC 模式只有文件工具 + present）。同时 **MC 模式不再暴露 `present`**（文件交付走 `mc_kit_express` 给 URL），shell / 子代理 / 联网 / 技能 / 计划模式等**仍不开放**。文件工具路径依旧被限在 `.whale-craft/` 内。
 
 ## [0.2.0-beta.2] - 2026-10-06
 

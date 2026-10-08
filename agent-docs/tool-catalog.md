@@ -2,7 +2,7 @@
 
 > 快照：**0.2.0**（开发中，未发布）。注册全部在 `index.js` 的 `apply()` 内（`ctx.tools.register(asTool({...}))`），
 > 分四段：`mc_*`（游戏内，26）/ `mc_kit_*`（游戏外辅助，3）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
-> 可见性按模式分档（2026-10-04）：**MC模式** 只见 mc/mckit + 文件工具；**MC+模式** 全量可见（含 admin）；
+> 可见性按模式分档（2026-10-04）：**MC模式** 只见 mc/mckit + 文件工具 + `job_*`/`goal_*`/`todo_write`（**不含** present：交付走 `mc_kit_express`）；**MC+模式** 全量可见（含 admin）；
 > **其他模式** 隐藏 mc_* / mc_kit_*（仅保留 `mc_admin_*`），另有 guard 硬拒兜底。
 > 🔴 **调试工具（`mc_debug_*`）另受「MC设置 → 调试」的 `exposeDebugTools` 开关门控**（2026-10-05）：关时在 MC/MC+ 也不暴露（白名单 / MC+ deny / guard 三处）。
 
@@ -11,7 +11,7 @@
 - **必须经 `asTool()` 注册**：它做两件事 —— ① 对返回值做 `lossless()` 无损化（类实例只留自有可枚举属性、Vec3→`{x,y,z}`、Date→ISO、NaN/±Inf→null、`-0`→0；宿主校验要求纯 JSON，Vec3 实例曾让 5 个工具全挂）；② 把 `exec.signal` 注入 `bot.setAbortSignal`（宿主取消能中断走路/挖掘循环）。
 - **超时纪律**：调 `src/core.mjs` 的方法已自带超时/中断；扩展自己写 mineflayer 调用时**必须**套 `withTimeout` / `raceAbort`（宿主无法硬杀同进程代码）。
 - **错误形态**：工具失败直接抛错（`mcTimeout:true` / `mcAborted:true` 标记可辨）；HTTP 设置 API 相反——统一 200+`{ok:false,...}`。
-- 工具名列表由 `ourToolNames` 收集（注册时自动登记）：MC 模式白名单用它 + `MC_FILE_TOOLS`；其他模式的 deny 名单也用它（`mc_kit_*` + 非 admin 的 `mc_*`）。
+- 工具名列表由 `ourToolNames` 收集（注册时自动登记）：MC 模式白名单用它 + `MC_FILE_TOOLS` + `MC_EXTRA_HOST_TOOLS`（宿主 `job_*` / `goal_*` / `todo_write`）+ `present`；其他模式的 deny 名单也用它（`mc_kit_*` + 非 admin 的 `mc_*`）。
 
 ---
 

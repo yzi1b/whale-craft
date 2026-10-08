@@ -122,7 +122,7 @@ kind 变化先 release 再套新）：
 
 | 档 | preset | 可见性（`applyMcModePolicy`） | guard（每次调用现场判，切模式自愈） |
 | --- | --- | --- | --- |
-| `mc` | minecraft | `restrict({allow})` 白名单：mc_*（按 `hideAdminTools` 去 / 留 `mc_admin_*`）+ mc_kit_* + 文件工具 + present + `mcMode.allowOtherTools`；`mc_debug_*` 仅当 `exposeDebugTools` 开时才进 | ① admin 硬拒 ② `exposeDebugTools` 关时拒 `mc_debug_*` ③ 凭据/secrets 硬拒 ④ 受保护文件只读 ⑤ 文件 jailed `.whale-craft/`（空路径也算越界）⑥ present 限会话工作区 |
+| `mc` | minecraft | `restrict({allow})` 白名单：mc_*（按 `hideAdminTools` 去 / 留 `mc_admin_*`）+ mc_kit_* + 文件工具（`MC_FILE_TOOLS`）+ **后台任务/目标/待办**（`job_*` / `get_goal` / `create_goal` / `update_goal` / `todo_write`，`MC_EXTRA_HOST_TOOLS`）+ `mcMode.allowOtherTools`；`mc_debug_*` 仅当 `exposeDebugTools` 开时才进（**不含** `present`：MC 模式不暴露文件交付，走 `mc_kit_express`） | ① admin 硬拒 ② `exposeDebugTools` 关时拒 `mc_debug_*` ③ 凭据/secrets 硬拒 ④ 受保护文件只读 ⑤ 文件 jailed `.whale-craft/`（空路径也算越界）⑥ present 限会话工作区（若经 allowOtherTools 放行） |
 | `mc-plus` | minecraft-plus | **不套白名单**（组成=标准全表，mc/mckit 走全局注册直接可见；`mc_admin_*` 也可见）；仅当 `exposeDebugTools` 关时 `restrict({deny})` 掉 `mc_debug_*` | 仅③凭据/secrets 硬拒（文件全工作区；受保护文件按宿主默认） |
 | `other` | 其余 | `restrict({deny})`：`mc_*`（mc_admin_* 除外）+ `mc_kit_*` 从可见面摘掉 | **拒调** mc_* / mc_kit_*（mc_admin_* 除外）—— "不再给其他模式暴露"的第二道锁 |
 

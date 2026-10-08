@@ -1766,15 +1766,20 @@ export function apply(ctx, rawConfig) {
   const MC_FILE_TOOLS = ['read', 'write', 'edit', 'glob', 'grep', 'read_image']
 
   /**
-   * MC 模式白名单里的**交付工具**：`present`（宿主 `@deepseek-ai/dsh-tool-present`）。
+   * MC 模式白名单里额外放行的**宿主工具**（按 `dev-docs/tools/dsh-tools.md` 标 `+` 的，2026-10-08）。
+   * 文件工具见 `MC_FILE_TOOLS`（它们会被 guard 限在 `.whale-craft/` 内）；这里是不走文件 jail 的那些：
+   * 后台任务（job_*）、目标（goal）、待办（todo_write）。子代理/联网/技能本版仍不开放。
+   */
+  const MC_EXTRA_HOST_TOOLS = ['job_list', 'job_output', 'job_kill', 'get_goal', 'create_goal', 'update_goal', 'todo_write']
+
+  /**
+   * `present`（宿主 `@deepseek-ai/dsh-tool-present`）—— **MC 模式不再暴露它**（用户 2026-10-08：
+   * "免得误导 agent"；文件交付在 MC 模式走 `mc_kit_express` 给 URL）。
    *
-   * 🔴 用户 2026-09-16 定的：删掉 `mc_kit_share`（它其实是在调宿主另装的 dsh-file-host，插件本身
-   *    没有文件服务器），改用 DSH 自带的交付机制 —— `present` 会往会话里写 `deliverables/presented`，
-   *    Web 端 `ui-deliverables` 在该轮末尾渲染**产出文件卡片**（可预览、可打开），正文里写成行内代码的
-   *    文件名也会变成可点链接。也就是说："让本地用户看到文件"这件事，宿主本来就提供。
-   *    它按 preset 挂载（随附 Web 的 standard/ptc/cordis 有，minimal 没有）—— 我们负责
-   *    ①把 `tool-present` 组补进 MC 模式的 preset ②把它放进白名单。
-   * 交付路径由 guard 限在**本会话工作区**内（`.whale-craft/` 与 `out/` 都在里面）。
+   * 历史：2026-09-16 删掉 `mc_kit_share`（那是在调宿主另装的 dsh-file-host，插件本身没有文件服务器），
+   *    一度改用 `present`（往会话写 `deliverables/presented`，Web 端渲染产出文件卡片）。现在**不放进
+   *    MC 白名单**，但保留判定：① guard 仍限制它的交付路径在会话工作区内；② 用户若用
+   *    `mcMode.allowOtherTools` 重新放行，边界照旧生效。
    */
   const MC_PRESENT_TOOL = 'present'
 
@@ -2669,9 +2674,8 @@ export function apply(ctx, rawConfig) {
    * 🔴 2026-09-16：**删掉了 mc_kit_share**（以及 mc_map 的 share 参数）。原因：它不是"我们实现的
    *    上传"，而是去调宿主实例里另装的 `dsh-file-host`（`/serve/file-host/api/upload`）——
    *    插件本身没有文件服务器，开源出去别人也没有那个条目，等于提供一个"看着能用、实际 404"的工具。
-   *    要"让本地用户看到文件"，DSH 自带的正路是 **`present`**（`deliverables/presented` → Web 的
-   *    产出文件卡片：可预览、可打开；正文里写行内代码的文件名也会变成可点链接）。
-   *    所以现在只负责**把图落到工作区**，交付交给 `present`。
+   *    要"让本地用户看到文件"，MC 模式现在走 **`mc_kit_express`**（把发布区文件换成一行 URL）。
+   *    所以这里只负责**把图落到工作区**，交付交给 `mc_kit_express`。
    * ------------------------------------------------------------------------ */
 
   /** 把用户给的路径解析到**这个会话的工作区**内（不许越界） */
@@ -3542,7 +3546,7 @@ export function apply(ctx, rawConfig) {
    * 复制完官方 preset 之后，把**我们自己的几处**覆盖上去：
    *   ① persona（官方那句 "You are a helpful software engineer assistant." + `complete: true` 都不要）
    *   ② 关掉那个持久 shell（MC 模式的指导写着"本模式没有 shell"，两边必须一致）
-   *   ③ 补齐 MC 模式需要的工具组（tool-fs / tool-jobs / present）—— 官方 `minimal` 里一个都没有
+   *   ③ 补齐 MC 模式需要的工具组（tool-fs / tool-fs-search / tool-jobs / tool-goal / tool-todo / compaction）—— 官方 `minimal` 里一个都没有
    * @param {string} id 目标 preset
    * @param {{key?: 'prefix'|'text'|null}} [opts] `key` = **本版本源 preset 用的那个键**（新版 prefix / 老版 text）
    * @returns {boolean} 是否改动过（false = 结构不认识 / 无需改动，日志里说明）
@@ -3778,8 +3782,8 @@ export function apply(ctx, rawConfig) {
         })
         if (plan.action === 'leave') {
           logLine(`MC 模式 preset「${existingId}」检查通过，不动它（${plan.reason}）`)
-          // 只有一件例外：**补 present 组**（显式文件交付）—— 删掉 mc_kit_share 之后，这是
-          // "让本地用户看到产出文件"的唯一正路；只做"没有才加"，不动别的行。
+          // 只有一件例外：**按 MC_PRESET_TOOL_GROUPS 补缺的工具组**（文件/检索/任务/目标/待办/压缩）——
+          // 官方 minimal 里一个都没有；只做"没有才加"，不动别的行。
           ensureToolGroupsInPreset(svc, existingId)
           /* 🔴 启动自检之二（用户 2026-09-17）：**persona 的键名必须跟本版本的源 preset 一致** ——
            * 新版 DSH 要 `prefix`、老版要 `text`（我们曾写死 prefix，把老环境的 preset 建坏了：
@@ -3969,7 +3973,7 @@ export function apply(ctx, rawConfig) {
 
   /**
    * 按**现场判据**给这个 agent 套工具曝光策略（三种去向）：
-   *   · `mc`（MC模式）—— 白名单：mc 工具 + 文件工具 + present + allowOtherTools；
+   *   · `mc`（MC模式）—— 白名单：mc 工具 + 文件工具 + 后台任务/目标/待办（`MC_EXTRA_HOST_TOOLS`）+ allowOtherTools；
    *   · `mc-plus`（MC+模式）—— **不限制工具面**（组成里挂了标准工具全量，mc/mckit 走全局注册直接可见）；
    *   · `other`（其它模式）—— `deny` 掉 mc_*（mc_admin_* 除外）与 mc_kit_* —— 用户 2026-10-04：
    *     "除了 MC模式和 MC+模式，不再给其他模式暴露 mc 和 mckit 工具"。
@@ -4051,7 +4055,7 @@ export function apply(ctx, rawConfig) {
     //    宿主那一堆工具（pwsh / subagent / workflow / serve_* / web_* …）**全都还在**。
     //    那不是"隔离"，只是"藏了自家两个工具"。现在**无条件白名单**：
     //      我们自己的非管理工具（mc_* / mc_kit_*）+ **文件工具**（会被 guard 限在 .whale-craft/ 内）
-    //      + 配置里额外允许的其它工具。
+    //      + **后台任务 / 目标 / 待办**（MC_EXTRA_HOST_TOOLS）+ 配置里额外允许的其它工具。
     try {
       const t = scopedTools(agent.ctx)
       if (!t) { logLine('MC 模式：拿不到 scoped tools，跳过可见性限制（guard 仍会硬拒）'); return }
@@ -4064,7 +4068,7 @@ export function apply(ctx, rawConfig) {
         ...ourToolNames.filter((n) => !hidden(n)),
         ...(hideAdminTools ? [] : adminNames),
         ...MC_FILE_TOOLS,
-        MC_PRESENT_TOOL,
+        ...MC_EXTRA_HOST_TOOLS,
         ...allowOtherTools,
       ]
       // 🔴 `tools.restrict()` 对**不认识的工具名是抛错**的（宿主 index.ts:1078 拿 restrictableNames 校验）。

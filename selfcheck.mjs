@@ -89,8 +89,21 @@ const presetPaths = new Map()
         '- id: tool-fs',
         "  name: '@deepseek-ai/dsh-tool-fs'",
         '',
+        '- id: tool-fs-search',
+        "  name: '@deepseek-ai/dsh-tool-fs-search'",
+        '  config:',
+        '    sampleOverCapGlobResults: false',
+        '',
         '- id: tool-jobs',
         "  name: '@deepseek-ai/dsh-tool-jobs'",
+        '',
+        '- id: tool-goal',
+        "  name: '@deepseek-ai/dsh-tool-goal'",
+        '',
+        '- id: tool-todo',
+        "  name: '@deepseek-ai/dsh-tool-todo'",
+        '  config:',
+        '    allowParallelInProgress: true',
         '',
         '- id: present',
         "  name: '@deepseek-ai/dsh-tool-present'",
@@ -279,8 +292,8 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   console.log(`  ${tools.has('mc_context') && tools.has('mc_players') ? '✅' : '❌'} 新增观察工具 mc_context / mc_players`)
   console.log(`  ${tools.has('mc_debug_sessions') && tools.has('mc_debug_diag') && !tools.has('mc_sessions') && !tools.has('mc_diag') ? '✅' : '❌'} 🔴 mc_sessions/mc_diag 已改名 mc_debug_sessions / mc_debug_diag`)
   console.log(`  ${/startsWith\('mc_debug_'\)/.test(codeOnly) && /exposeDebugTools/.test(codeOnly) ? '✅' : '❌'} 🔴 调试工具受 exposeDebugTools 门控（白名单 / MC+ deny / guard 三处）`)
-  console.log(`  ${/MC_PRESENT_TOOL = 'present'/.test(idx) && /^\s+MC_PRESENT_TOOL,$/m.test(idx) ? '✅' : '❌'} present 已进 MC 模式白名单`)
-  console.log(`  ${/MC_PRESET_TOOL_GROUPS/.test(idx) && /availableToolGroups\(\)/.test(idx) ? '✅' : '❌'} 复制/重建 preset 时会补齐 MC 模式需要的工具组（tool-fs / tool-jobs / present）`)
+  console.log(`  ${/MC_PRESENT_TOOL = 'present'/.test(idx) && !/^\s+MC_PRESENT_TOOL,$/m.test(idx) ? '✅' : '❌'} 🔴 present **不再**进 MC 模式白名单（交付走 mc_kit_express；判定保留供 guard 兜底）`)
+  console.log(`  ${/MC_PRESET_TOOL_GROUPS/.test(idx) && /availableToolGroups\(\)/.test(idx) ? '✅' : '❌'} 复制/重建 preset 时会补齐 MC 模式需要的工具组（tool-fs / tool-fs-search / tool-jobs / tool-goal / tool-todo / compaction）`)
   console.log(`  ${/const ensureToolGroupsInPreset/.test(idx) && /ensureToolGroupsInPreset\(svc, existingId\)/.test(idx) ? '✅' : '❌'} 🔴 **已存在的** preset（含本机手写那份）也会被补齐那几组（不动别的行）`)
   console.log(`  ${/这些工具包在本部署的 preset 里没人引用/.test(idx) ? '✅' : '❌'} 加组之前先探"这个部署里有没有那个包"（免得把 preset 弄挂）`)
   // 🔴 2026-09-24（GitHub issue #1，用户 huohai2）：探针必须是**同步**的 —— 宿主
@@ -1752,7 +1765,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     // 🔴 2026-09-24（GitHub issue #1）**端到端**：自动建出来的 preset 必须**真的**带上那几组。
     //    这条在旧代码上必挂 —— 探针同步迭代 `async list()` → TypeError 被 catch 吞掉
     //    → 每一组都被判成"本部署没人引用" → 这里一个包都找不到。
-    console.log(`  ${/dsh-tool-fs/.test(comp) && /dsh-tool-jobs/.test(comp) && /dsh-tool-present/.test(comp) ? '✅' : '❌'} 🔴 端到端：自动建的 preset 里**真的**补上了 tool-fs / tool-jobs / present`)
+    console.log(`  ${/dsh-tool-fs/.test(comp) && /dsh-tool-jobs/.test(comp) && /dsh-tool-fs-search/.test(comp) && !/dsh-tool-present/.test(comp) ? '✅' : '❌'} 🔴 端到端：自动建的 preset 里补上了 tool-fs / tool-fs-search / tool-jobs，且**不含** present`)
     console.log(`  ${/dsh-compaction-basic/.test(comp) && /dsh-command-compact/.test(comp) && /dsh-compaction-tool-result-pruner/.test(comp) ? '✅' : '❌'} 🔴 端到端：压缩组也真的补上了（缺它 = 没有 /compact、也没有自动压缩）`)
     console.log(`  ${/^- id: compaction\n  name: cordis:group\n  group: true\n  isolate:\n    compaction: true\n    toolResultPruner: true\n/m.test(comp) ? '✅' : '❌'} 压缩组是整组（不是只加一个 command-compact）`)
   }
@@ -1780,7 +1793,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     console.log(`  ${C.disableShellInComposition('# 没有 shell 组\n') === null ? '✅' : '❌'} 没有 shell 组 → 返回 null`)
     const twice = C.disableShellInComposition(C.disableShellInComposition('- id: persistent-shell\n  group: true\n', '') ?? '')
     console.log(`  ${(twice.match(/disabled: true/g) ?? []).length === 1 ? '✅' : '❌'} 关 shell 是幂等的（不会写两遍 disabled）`)
-    // 工具组补丁（2026-09-16：MC 模式必须有 tool-fs / tool-jobs / present —— 官方 minimal 里一个都没有）
+    // 工具组补丁（2026-09-16：MC 模式必须有 tool-fs / tool-jobs / … —— 官方 minimal 里一个都没有）
     const mini = "- id: persona\n  name: '@deepseek-ai/dsh-persona'\n"
     const added = C.patchToolGroupsIntoComposition(mini)
     console.log(`  ${added && C.MC_PRESET_TOOL_GROUPS.every((g) => added.includes(g.pkg)) ? '✅' : '❌'} 空壳 preset（像官方 minimal）→ 各组全补齐：${C.MC_PRESET_TOOL_GROUPS.map((g) => g.pkg.replace('@deepseek-ai/dsh-', '')).join(' / ')}`)
@@ -1794,10 +1807,12 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     console.log(`  ${cg && /thresholdChars: 8192/.test(added) && /headChars: 4096/.test(added) && /tailChars: 1024/.test(added) ? '✅' : '❌'} 裁剪参数与官方 standard 一致（8192 / 4096 / 1024）`)
     console.log(`  ${added && C.patchToolGroupsIntoComposition(added) === null ? '✅' : '❌'} 幂等：再跑一次返回 null（不会加两遍）`)
     const partial = C.patchToolGroupsIntoComposition("- id: tool-fs\n  name: '@deepseek-ai/dsh-tool-fs'\n")
-    console.log(`  ${partial && (partial.match(/dsh-tool-fs/g) ?? []).length === 1 && partial.includes('dsh-tool-jobs') ? '✅' : '❌'} 已经有的那组不会被重复加（只补缺的）`)
+    // 只数**带闭合引号**的精确名 —— `dsh-tool-fs` 是 `dsh-tool-fs-search` 的子串，不能直接 match(/dsh-tool-fs/g)
+    const fsExact = (partial?.match(/@deepseek-ai\/dsh-tool-fs'/g) ?? []).length
+    console.log(`  ${partial && fsExact === 1 && partial.includes('dsh-tool-fs-search') && partial.includes('dsh-tool-jobs') ? '✅' : '❌'} 已经有的那组不会被重复加（只补缺的；tool-fs 不因 tool-fs-search 而误判）`)
     const oneOnly = C.patchToolGroupsIntoComposition(mini, [C.MC_PRESET_TOOL_GROUPS[0]])
     console.log(`  ${oneOnly && oneOnly.includes('dsh-tool-fs') && !oneOnly.includes('dsh-tool-jobs') ? '✅' : '❌'} 只把"部署里真的有的"那几组传进来时，只补那几组`)
-    console.log(`  ${C.MC_PRESET_SPEC === 7 ? '✅' : '❌'} 🔴 MC_PRESET_SPEC=7（升到这一版会把 6 建的 preset 重建一遍 → 顺手补上压缩组）`)
+    console.log(`  ${C.MC_PRESET_SPEC === 8 ? '✅' : '❌'} 🔴 MC_PRESET_SPEC=8（升到这一版会把 7 建的 preset 重建一遍 → 补上 tool-fs-search / tool-goal / tool-todo）`)
   }
   // 🔴 **已经建好的**那份也要能修（用户那台测试机上就是旧版建出来的）：
   //    只在"简介恰好等于某个官方 preset 的简介"（明显是复制残留）时才动，用户自己写的不碰。
@@ -1885,8 +1900,8 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const PLUS_PREFIX = '你是一个由 {{model}} 模型驱动的编程 agent。同时 whale_craft 插件赋予你使用无头机器人进入 Minecraft Java 版服务器的能力。你可以调用工具与世界和玩家互动。编程与系统操作相关的工具仍然暴露，用于扩展自身 MC 能力或进行调试研究。'
     const personaOk = mcSrc.includes(MC_PREFIX) && plusSrc.includes(PLUS_PREFIX)
     console.log(`  ${personaOk ? '✅' : '❌'} 🔴 两个 preset 的 persona 各自是我们的（MC 游戏助理 / 编程 agent；不复制官方那句）`)
-    const mcNeeds = ['@deepseek-ai/dsh-persona', '@deepseek-ai/dsh-tool-fs', '@deepseek-ai/dsh-tool-jobs', '@deepseek-ai/dsh-tool-present', '@deepseek-ai/dsh-compaction-basic']
-    console.log(`  ${mcNeeds.every((n) => mcSrc.includes(n)) ? '✅' : '❌'} MC模式组成含 persona/tool-fs/tool-jobs/present/compaction`)
+    const mcNeeds = ['@deepseek-ai/dsh-persona', '@deepseek-ai/dsh-tool-fs', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-tool-jobs', '@deepseek-ai/dsh-tool-goal', '@deepseek-ai/dsh-tool-todo', '@deepseek-ai/dsh-compaction-basic']
+    console.log(`  ${mcNeeds.every((n) => mcSrc.includes(n)) && !mcSrc.includes('@deepseek-ai/dsh-tool-present') ? '✅' : '❌'} MC模式组成含 persona/tool-fs/tool-fs-search/tool-jobs/tool-goal/tool-todo/compaction，且**不含** present`)
     const plusNeeds = ['@deepseek-ai/dsh-persona', '@deepseek-ai/dsh-agent-instructions', '@deepseek-ai/dsh-tool-pwsh', '@deepseek-ai/dsh-tool-bash', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-skill-filesystem', '@deepseek-ai/dsh-plan-mode', '@deepseek-ai/dsh-tool-subagent', '@deepseek-ai/dsh-tool-web', '@deepseek-ai/dsh-plugin-manager/tools']
     console.log(`  ${plusNeeds.every((n) => plusSrc.includes(n)) ? '✅' : '❌'} MC+模式组成 = 标准模式全表（persona 除外）：${plusNeeds.filter((n) => !plusSrc.includes(n)).join(', ') || '无缺'}`)
     const mountsSelf = /\bname:\s*whale_craft\b/.test(mcSrc) || /\bname:\s*whale_craft\b/.test(plusSrc)
@@ -2128,6 +2143,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     ...tools.keys(),
     'read', 'write', 'edit', 'read_image',
     'present',
+    'job_list', 'job_output', 'job_kill', 'get_goal', 'create_goal', 'update_goal',
     'pwsh', 'subagent', 'workflow', 'web_search', 'todo_write', 'ask_user_question',
     'serve_deploy', 'serve_list', 'goal_write',
   ])
@@ -2295,7 +2311,8 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   console.log(`  ${allowList && allowList.includes('mc_status') && allowList.includes('mc_kit_image') && allowList.includes('mc_kit_fs') && allowList.includes('mc_build') ? '✅' : '❌'} 自己的工具还在（mc_status / mc_kit_image / mc_kit_fs / mc_build）`)
   console.log(`  ${allowList && allowList.every((n) => !n.startsWith('mc_admin_')) ? '✅' : '❌'} 管理工具不在白名单里（hideAdminTools 默认 true）`)
   console.log(`  ${allowList && ['read', 'write', 'edit', 'read_image'].every((n) => allowList.includes(n)) ? '✅' : '❌'} 在场的文件工具在白名单里（路径由 guard 限在 .whale-craft/）`)
-  console.log(`  ${allowList && allowList.includes('present') ? '✅' : '❌'} present 也在白名单里（显式文件交付：卡片 + 可预览/打开）`)
+  console.log(`  ${allowList && !allowList.includes('present') ? '✅' : '❌'} 🔴 present **不在**白名单里（MC 模式不暴露文件交付；走 mc_kit_express）`)
+  console.log(`  ${allowList && ['job_list', 'job_output', 'job_kill', 'get_goal', 'create_goal', 'update_goal', 'todo_write'].every((n) => allowList.includes(n)) ? '✅' : '❌'} 🔴 后台任务/目标/待办（job_* / goal_* / todo_write）按 dsh-tools.md 进入了白名单`)
   // 🔴 宿主对不认识的名字**抛错**；要是直接放弃，隔离就等于没做（pwsh 又回来了）
   console.log(`  ${allowList && !allowList.includes('glob') && !allowList.includes('grep') ? '✅' : '❌'} 🔴 不在场的工具（这台 preset 没挂 tool-fs-search ⇒ glob/grep）被过滤掉，**不是**整次白名单作废`)
   console.log(`  ${allowList && allowList.length > 5 ? '✅' : '❌'} 过滤后白名单仍然生效（${allowList?.length ?? 0} 个）`)
@@ -2366,7 +2383,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
    *    而老代码只"套用"、从不撤销（返回的 disposer 直接丢了）⇒ 切回标准模式的会话永久留在 MC 白名单里
    *    （没有 pwsh/bash，连 shell 都没有）。
    *    真机复现 `session-55d48701`：建会话 standard → 04:51:47 切 minecraft（白名单生效）
-   *    → 06:34:20 切回 standard → 之后那个"标准模式"会话还是 mc_* + read/write/edit/read_image/present，
+   *    → 06:34:20 切回 standard → 之后那个"标准模式"会话还是 mc_* + read/write/edit/read_image，
    *    它在记录里写"My list definitely has no bash. So how do I run commands?"，只能让子代理替它跑命令。 */
   {
     const switchTo = (preset, agent = lateAgent) => {

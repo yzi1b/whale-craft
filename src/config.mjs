@@ -71,7 +71,8 @@ export const DEFAULT_CONFIG = {
     /**
      * **额外**允许 MC 模式会话使用的其它工具（whale_craft 自己的工具与文件工具永远在白名单里）。
      *
-     * MC 模式是**无条件白名单**：默认只给 `mc_*` / `mc_kit_*` + 文件工具（`read/write/edit/glob/grep/read_image`），
+     * MC 模式是**无条件白名单**：默认给 `mc_*` / `mc_kit_*` + 文件工具（`read/write/edit/glob/grep/read_image`）
+     * + 后台任务/目标/待办（`job_*` / `goal_*` / `todo_write`，见 index.js 的 `MC_EXTRA_HOST_TOOLS`），
      * 宿主的 `pwsh` / `subagent` / `workflow` / `serve_*` 之类一律看不见。想额外开哪个就写在这里。
      * ⚠️ 只能"收窄"，不能凭空添加 preset 没挂的工具。
      *
@@ -192,8 +193,10 @@ export function isCopiedPresetDescription (desc, shippedDescriptions) {
  *      **7 = 补上压缩组（compaction）** —— 官方 `minimal` 同样没有它，于是照 minimal 建的 MC 模式
  *      **既没有 `/compact` 指令、也没有自动压缩**（用户真机投诉："mc 模式 /compact 压缩上下文没了"，
  *      更麻烦的是自动压缩也没了 ⇒ 上下文一直涨到爆）。见 `MC_PRESET_TOOL_GROUPS` 里那条 `block`。
+ *      **8 = 按 dev-docs/tools/dsh-tools.md 扩工具面**（2026-10-08）：补 tool-fs-search（glob/grep）、
+ *      tool-goal（get_goal/create_goal/update_goal）、tool-todo（todo_write）三组。
  */
-export const MC_PRESET_SPEC = 7
+export const MC_PRESET_SPEC = 8
 
 /**
  * persona 段里"人设正文"用的键名。**跨 DSH 版本有两种**：
@@ -323,16 +326,28 @@ export function disableShellInComposition (text) {
  * 🔴 为什么必须由我们补：官方 `minimal` 只有 persona + 一个持久 shell（别的什么都没有），
  *    而我们自动建的「MC模式」正是复制它 —— 于是那份 preset 里的 agent：
  *      · 没有 `read`/`write`/`edit`（我们的记忆-jail 与白名单就落空）；
- *      · 没有 `present`（发不了产出文件）；
- *      · **没有 `tool-jobs`** ⇒ 宿主没有 job controller ⇒ 看门狗只能降级成"无 job 模式"
- *        （实验体 2026-09-16 的日志：`no job controller … load @deepseek-ai/dsh-tool-jobs`，
- *         `jobId: null`。降级后仍能唤醒，但 UI 看不到这个任务、强制停止也管不到它）；
+ *      · 没有 `glob`/`grep`、没有目标/待办、没有 `tool-jobs` ⇒ 宿主没有 job controller ⇒
+ *        看门狗只能降级成"无 job 模式"（实验体 2026-09-16 的日志：`no job controller … load
+ *        @deepseek-ai/dsh-tool-jobs`，`jobId: null`。降级后仍能唤醒，但 UI 看不到这个任务、
+ *        强制停止也管不到它）；
  *      · **没有压缩组** ⇒ 没有 `/compact`、也没有自动压缩（2026-09-24 补，见下面那条 `block`）。
  */
 export const MC_PRESET_TOOL_GROUPS = [
   { id: 'tool-fs', pkg: '@deepseek-ai/dsh-tool-fs', note: '文件工具（read/write/edit/read_image）' },
+  {
+    id: 'tool-fs-search', pkg: '@deepseek-ai/dsh-tool-fs-search', note: '文件检索（glob/grep）',
+    // `sampleOverCapGlobResults` 无默认（必填）；照随附 standard 那份给 false。
+    block: ['- id: tool-fs-search', "  name: '@deepseek-ai/dsh-tool-fs-search'", '  config:', '    sampleOverCapGlobResults: false'].join('\n'),
+  },
   { id: 'tool-jobs', pkg: '@deepseek-ai/dsh-tool-jobs', note: '后台任务 controller（看门狗要挂 job）' },
-  { id: 'present', pkg: '@deepseek-ai/dsh-tool-present', note: '显式文件交付（轮末文件卡片）' },
+  { id: 'tool-goal', pkg: '@deepseek-ai/dsh-tool-goal', note: '目标（get_goal/create_goal/update_goal）' },
+  {
+    id: 'tool-todo', pkg: '@deepseek-ai/dsh-tool-todo', note: '待办（todo_write）',
+    // `allowParallelInProgress` 无默认（必填）；给 true（同随附 standard）。
+    block: ['- id: tool-todo', "  name: '@deepseek-ai/dsh-tool-todo'", '  config:', '    allowParallelInProgress: true'].join('\n'),
+  },
+  // ⚠️ 2026-10-08：`present`（`@deepseek-ai/dsh-tool-present`）**不再列入** —— MC 模式不暴露文件交付
+  //    （用户："免得误导 agent"；交付走 `mc_kit_express`）。
   {
     // 🔴 2026-09-24（PR #2 用户报的）：官方 `minimal` 也没有这一组 ⇒ 照 minimal 建的 MC 模式
     //    **既没有 `/compact` 指令、也没有自动压缩**（用户原话："mc 模式 /compact 压缩上下文没了，

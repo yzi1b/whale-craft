@@ -5,9 +5,10 @@
 # 用户想自定义组成，用 Web 编辑器（或 profile 的 cordis.patch.yml）按行 id
 # （`preset-minecraft`）覆盖 `config.plugins`，不要直接改这个文件（包更新会覆盖）。
 #
-# 组成刻意保持"窄"：persona + 文件工具 + job controller（看门狗要挂 job）+
-# present（文件交付）+ 压缩组。宿主的标准工具（shell/子代理/网络…）一律不挂，
+# 组成刻意保持"窄"：persona + 文件工具 + 文件检索 + job controller（看门狗要挂 job）+
+# 目标 + 待办 + 压缩组。宿主的标准工具（shell/子代理/网络/技能/present…）一律不挂，
 # 工具面由插件在运行时再收一道白名单（index.js applyMcModePolicy）。
+# 暴露清单与 +/−/? 标记见 dev-docs/tools/dsh-tools.md（2026-10-08：开 glob/grep + job_* + goal_* + todo_write；present 不开，交付走 mc_kit_express）。
 - insert:
     - id: preset-minecraft
       name: '@deepseek-ai/dsh-agent-preset'
@@ -24,10 +25,18 @@
               suffix: '当前会话工作目录为 {{cwd}}，但你只能操作其 `.whale-craft` 子目录下的文件。工具调用的相对路径一般相对于工作区目录，因此不要忘记加上 `.whale-craft` 子目录，或使用绝对路径。'
           - id: tool-fs
             name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
           - id: tool-jobs
             name: '@deepseek-ai/dsh-tool-jobs'
-          - id: present
-            name: '@deepseek-ai/dsh-tool-present'
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
           - id: compaction
             name: cordis:group
             group: true
