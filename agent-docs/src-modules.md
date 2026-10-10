@@ -122,6 +122,10 @@
 | `expressDesktopPort` | `16049` | **desktop 模式**的独立托管端口（只监听 localhost） |
 | `exposeDebugTools` | `false` | 「MC设置 → 调试」页的「开放助手调试工具」开关（工作区无关）：是否向助手暴露调试用途的工具 |
 | `allowWebSearch` | `true` | 「MC设置 → 联网搜索」页的「允许联网搜索」开关（工作区无关）：MC 模式下是否暴露宿主 `web_search`；**MC+ 不受影响** |
+| `webFetchEnabled` | `false` | 「MC设置 → 联网搜索 → 网页抓取」的「允许网页抓取」开关（工作区无关）：是否暴露 `mc_kit_web_fetch`（**MC 与 MC+ 都受此门控**） |
+| `webFetchDomains` | `['minecraft.wiki','*.minecraft.wiki']` | 允许抓取的域名表：精确名 / `*.example.com` 通配 / `/正则/` / `*`；空表 = 一个都不允许（匹配函数 `hostAllowed`） |
+| `allowAllFetchDomains` | `false` | 抓取的「允许所有域名」开关（打开后不看域名表） |
+| `webFetchAllowHtml` / `webFetchAllowText` / `webFetchAllowImage` | 都 `true` | 「允许的内容类型」三开关（工作区无关）：HTML / 文本由宿主区分（只到这两档，响应里只有 `body.kind`）；**图片走插件自己的公网下载器**，格式是**内置名单**（`WEB_IMAGE_FORMATS` = png/jpeg/gif/webp，即宿主附件服务认的那四种），**不可配置** |
 
 - `PluginConfig`：`load`（坏配置不崩、记 `lastError` 按默认跑；**顺带跑 `migrate()`**）、`set` 只认 `TOP_KEYS`（= DEFAULT_CONFIG 键）且过 `validate`、`values()` 深合并（数组整体覆盖）；语义 getter（`mcModePresets/mcPlusPresets/expressWebEnabled/expressWebBase/expressDesktopEnabled/expressDesktopPort/commandAllowed/isMcModePreset/isMcPlusPreset`…）每次现读 ⇒ **改完热生效**。
 - `migrate()`：文件分享键逐档搬（都**删旧键**、只在真改动时落盘）——① 老 `expressMode: 'off'|'online'`（曾含 `'local'`）→ `expressWebEnabled`（`online`→`true`，其余→`false`）；② 2026-10-07 拆键：`expressEnabled`→`expressWebEnabled`、`expressBase`→`expressWebBase`。
@@ -229,6 +233,30 @@
 - **错误一律中文**：本模块把系统错误码译成人话（`ENOENT:不存在`…），**不透出 Node/Windows 本地化原文**。
 - **双层防线**：工具态（本模块，权威）+ guard（index.js ③′，MC 模式第二道锁，沙箱=记忆根，路径比较同样大小写不敏感）。
 
+## 15c. `src/webfetch.mjs` —— `mc_kit_web_fetch` 的渲染（2026-10-08）
+
+> 补宿主 `web_fetch`（MC 模式被关掉）。**本模块不碰网络**：网络全在 `src/webget.mjs`（见 §15d），本模块只做"结果 → 模型可见文本"。
+
+- `EXTERNAL_WEB_CONTENT_NOTICE` / `TRUNCATION_FOOTER` / `WEB_FETCH_MAX_OUTPUT_CHARS=200000`：**逐字照抄**宿主 `@deepseek-ai/dsh-tool-web`（尾注含 `\n\n` 共 78 字符，宿主按 78 硬编码，这里按长度算）。
+- `renderFetchText(result, maxChars)`：输出形态与宿主一致 —— `Fetched <url> (HTTP <status>)` + 空行 + 反注入声明 + 空行 + 正文（+ 截断尾注）。截断语义也照抄：正文先按上限切一刀（`sourceTruncated`），整串仍超上限则**优先保住尾部那句"换个更具体的 URL"**（上限 < 尾注长度时退化成直接切）。
+- `htmlToMarkdown(html)`：**轻量、无依赖、单遍正则**（不用 turndown）——标题 `#`、列表 `- `、链接 `[t](u)`、图片 `![a](u)`、块级标签/`<br>`→换行；`script/style/noscript/svg/iframe/textarea/head/title` 连内容整段丢（不把脚本喂给模型）；`decodeEntities` 解命名/十进制/十六进制实体；最后收敛空白。⚠️ **有意与宿主不同的一处**：复杂嵌套/表格不如 turndown 保真（用户 2026-10-08 定的取舍：不为此引 turndown —— CJS 依赖树在宿主编译器上踩过 `failed to import`）。
+- 自检：`hostAllowed`（在 `config.mjs`）与渲染的纯函数单测在 selfcheck「网页抓取」段（16 例域名匹配 + HTML 转换 + 首行/声明/截断/上限 + 错误翻译）。
+
+## 15d. `src/webget.mjs` —— `mc_kit_web_fetch` 的**唯一出网口**（2026-10-08）
+
+> 2026-10-08 用户定："**全改成自己的可控逻辑，宿主的强关联就不要了**" —— 文本与图片都走这里，**不再经宿主 `ctx.web`**。
+> 换来：一次请求（按真实 Content-Type 判型）、不依赖宿主 `web` 服务、类型判定精确；代价：charset / 解压 / 分类 / 上限都自己扛，且**没有代理支持**（宿主 provider 有 `proxyRouteFor`）。
+> 安全：防 SSRF 全在这里。**不依赖** `ipaddr.js`（宿主包），IP 判定自己实现。
+
+- `isPublicIp(addr)`：IPv4 全段（0/8、10/8、100.64/10、127/8、169.254/16、172.16/12、192.168/16、192.0.0/24、192.0.2/24、192.88.99/24、198.18/15、198.51.100/24、203.0.113/24、≥224 全拒）+ IPv6（**只放行 `2000::/3`**；IPv4-mapped / NAT64 `64:ff9b::/96` / 6to4 `2002::/16` 三种按**内嵌 IPv4 复核**；Teredo `2001:0::/32`、`2001:db8::/32`、`3fff::/20`、`64:ff9b:1::/48` 一律拒）。**比宿主更严**。
+- `classifyContentType(ct)` → `{kind:'html'|'text'|'image', format?, mediaType}` / `null`：`html` = `text/html` / `application/xhtml+xml`；`text` = 其余 `text/*` + JSON/XML/`*+json`/`*+xml`（含 `image/svg+xml`）；`image` = **只有内置四种**（`WEB_IMAGE_FORMATS` = png/jpeg/gif/webp = 宿主附件服务认的 `mediaTypes`）；**其余一律 null ⇒ 不支持**（用户 2026-10-08：「只有内置的格式和未知的格式」，不区分"是图片但没内置"与"根本不是图片"）。判定在**读 body 之前**做。
+- `contentTypeAllowed(kind, {html,text,image})`：三个开关的**精确**判定（不再像走宿主时只能粗到两档）。
+- `charsetOf(ct)` / `decodeBodyText(bytes, charset)`：按声明 charset 解码（`TextDecoder`，默认 utf-8），压到 `WEB_GET_MAX_BODY_CHARS`(100000) 并标记 truncate；**不认识的 charset 直接报错**（宁可说清，不吐乱码）。
+- `fetchUrl(url, opts)`：自己解析 DNS → **每个地址都必须公网** → 地址**钉死**（`lookup` 只回这份名单，防 DNS rebinding）→ `http(s).request`（不带 cookie / 凭据；不声明 `accept-encoding`）→ 只跟**同源**跳转 ≤5 → 限大小与 30s 超时（接 `AbortSignal`）→ 判型 → 读 body（`gzip`/`deflate`/`br` 自动解压，别的 `content-encoding` 明确报错）→ 返回 `{url, statusCode, contentType, charset, kind, format, mediaType, body, truncatedByBytes}`。
+  - 上限：文本 5MB（`WEB_GET_MAX_BYTES`）/ 正文 10 万字符；图片 20MB。**声明了 `Content-Length` 且超上限 → 报错**（同宿主 provider）；**边下边超 → 文本截断、图片报错**（截一半的图是坏图）。
+  - 🔴 **踩过的坑（真机卡死，自检的本地服务用例抓到）**：`requestOnce` 里"响应到达"只能有**一个**处理点（回调里判完 `Content-Length` 再 `resolve`）。曾经把 `resolve` 当请求回调、**另**挂 `req.on('response')` 判长度 —— 超限时 `destroy()` 掉的正是**已经 resolve 出去的那个响应**，随后读 body 的 await **永不 settle**。`readBody` 另有 `close` 兜底（流被提前关掉也必须 settle）。
+- 测试缝（照宿主同款）：`lookup` / `assertPublic` 可注入 —— selfcheck 用它对着**本机 http 服务**跑通链路（本机是私网地址，正常路径会拒，注入后才走得到）。
+
 ## 16. `src/tool-def.mjs` —— 工具定义（宿主优先 + 内置兜底）
 
 > 2026-10-04（GitHub issue #5）：`index.js` 顶层曾**静态** import 两个 optional peer（`@deepseek-ai/dsh-tools` / `schemastery`）⇒ 干净安装 / 官方 dsh-desktop 上模块**链接期**失败，宿主只报一句 `failed to import`。本模块沿用 `user-message.mjs` 的同款模式（宿主优先、内置兜底、`kind()` 诊断）。
@@ -236,7 +264,7 @@
 - `defineTool(options)`：`toolDefKind()==='host'` 时用宿主的 defineTool（本机 CLI/源码安装行为完全不变）；解析不到用 `builtinDefineTool`。
 - 内置 compiler：`parameters`（属性表 DSL）→ JSON Schema，**key 顺序与宿主逐字一致**（标量 `{type,注解,enum,const}`；object `{type,注解,additionalProperties,properties(声明了才有),required(非空才有)}`；`type:'json'` → 仅注解无 type；属性 `required:true` 收进**父级** required）；`timeoutMs` 透传；oneOf / 未声明 additionalProperties 的 object / presenter 类选项 → **明确抛错**（防静默走样，自检会当场红）。
 - 内置 validator：宿主 `validateJsonSchemaValue` 的子集，违规文案/路径逐字对齐（`"arguments" must be an object` 等）；违规抛 `BuiltinToolArgsError`（name=`ToolArgsError`、code=`INVALID_ARGS`）。⚠️ 它不是宿主 `HarnessError` 子类（拿不到宿主类）——宿主显示层会退化成通用错误，文案保持一致（任务书认可的退化）。
-- 自检：段 A 直接与宿主编译器对拍；段 B 用 `tools/no-host-init.mjs`（module.register 解析钩子）屏蔽两个包，子进程**整树自检** + 29 个工具注册形状**逐字比对**。CI 另有 `tools/check-standalone-import.mjs`（干净安装 import 回归；改回静态 import 必红）。
+- 自检：段 A 直接与宿主编译器对拍；段 B 用 `tools/no-host-init.mjs`（module.register 解析钩子）屏蔽两个包，子进程**整树自检** + 33 个工具注册形状**逐字比对**。CI 另有 `tools/check-standalone-import.mjs`（干净安装 import 回归；改回静态 import 必红）。
 
 ## 16b. `src/resolver-shim.mjs` —— 宿主解析器兜底（绕过 DSH rc.2 的 bug；2026-10-06）
 
@@ -249,6 +277,6 @@
 
 ## 17. 模块依赖与不变式
 
-- 模块间 import：`config.mjs → express.mjs`（`EXPRESS_MODES/normalizeExpressBase/resolveExpressMode`）；`agentsmd.mjs → wsconfig.mjs`（版本读写）；`memory.mjs → protected.mjs`（保护判定）；`tool-def.mjs` 自解析宿主包（可缺省）；index.js 组装其余；`resolver-shim.mjs` 无导出、纯副作用（index.js 首条 import，必须早于其余全部）。
+- 模块间 import：`config.mjs → express.mjs`（`EXPRESS_MODES/normalizeExpressBase/resolveExpressMode`）；`agentsmd.mjs → wsconfig.mjs`（版本读写）；`memory.mjs → protected.mjs`（保护判定）；`webfetch.mjs` / `webget.mjs` **不依赖任何模块**（纯文本转换 / 自带公网抓取，index.js 组装）；`tool-def.mjs` 自解析宿主包（可缺省）；index.js 组装其余；`resolver-shim.mjs` 无导出、纯副作用（index.js 首条 import，必须早于其余全部）。
 - 记忆根定位（index.js `memoryRootFor`）：**就是** `<会话 cwd>/.whale-craft`；没有会话工作区 → `null`（无兜底目录、无 env/config 重定向 —— 2026-10-08 删掉旧的 `WHALE_CRAFT_MEMORY_DIR` 与 `config.memoryDir`）。
 - 跨模块不变式：① 记忆路径全过 `safePath`，受保护文件（RULES/AGENTS/config.json）**可读不可写**（写类方法拒绝）；② 凭据只进宿主凭据服务，`view()`/工具返回/HTTP 永不见；③ 发布区只服务 `.express/`，`.out/` 永不对外；④ LAN 只被动听；⑤ ping 永不 reject；⑥ 一切写给模型的注入都是"提示行"。

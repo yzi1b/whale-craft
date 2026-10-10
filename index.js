@@ -39,6 +39,8 @@ import { ExpressShareServer, portAvailable } from './src/express-server.mjs'
 import { Watchdog, WATCH_DEFAULTS } from './src/watchdog.mjs'
 import { MemoryStore } from './src/memory.mjs'
 import { PluginConfig, DEFAULT_CONFIG, resolveStateDir, pickPresetTarget, pickPresetSource, isCopiedPresetDescription, PREFERRED_PRESET_SOURCES, MC_PRESET_SPEC, planPresetAction, patchPersonaInComposition, personaTextKeyOf, disableShellInComposition, patchToolGroupsIntoComposition, MC_PRESET_TOOL_GROUPS } from './src/config.mjs'
+import { renderFetchText, WEB_FETCH_MAX_OUTPUT_CHARS } from './src/webfetch.mjs'
+import { fetchUrl, decodeBodyText, contentTypeAllowed, WEB_IMAGE_FORMATS } from './src/webget.mjs'
 import { AccountStore, parseAuthlibCard, normalizeServerUrl, dashUuid } from './src/accounts.mjs'
 import { DEFAULT_AGENTS_MD, agentsMdPath, legacyAgentsMdPath, migrateLegacyAgentsMd, readAgentsMd, writeAgentsMd, resetAgentsMd, syncRulesVersion } from './src/agentsmd.mjs'
 import { wsConfigPath, isWsConfigData, migrate as migrateWorkspaceConfig, values as workspaceConfigValues, patch as patchWorkspaceConfig, readRulesVersion } from './src/wsconfig.mjs'
@@ -931,6 +933,15 @@ export function apply(ctx, rawConfig) {
       exposeDebugTools: pluginConfig.exposeDebugTools,
       // 「MC设置 → 联网搜索」页的「允许联网搜索」开关（工作区无关；默认开）
       allowWebSearch: pluginConfig.allowWebSearch,
+      // 「MC设置 → 联网搜索」页的「网页抓取」：开关（默认关）+ 域名表 + 允许所有域名
+      webFetchEnabled: pluginConfig.webFetchEnabled,
+      webFetchDomains: pluginConfig.webFetchDomains,
+      allowAllFetchDomains: pluginConfig.allowAllFetchDomains,
+      // 「网页抓取 → 允许的内容类型」（三个开关，默认都开；图片格式是内置名单，不可配）
+      webFetchAllowHtml: pluginConfig.webFetchAllowHtml,
+      webFetchAllowText: pluginConfig.webFetchAllowText,
+      webFetchAllowImage: pluginConfig.webFetchAllowImage,
+      webImageFormats: WEB_IMAGE_FORMATS,
       // 「MC设置」入口的模式门控：前端拿这份名单 + 会话记录的 preset 就能**本地**判定
       // （不必为按钮问一次服务端；2026-09-16 事故：一次性请求失败后按钮永久消失）
       mcModePresets: pluginConfig.mcModePresets,
@@ -1139,11 +1150,12 @@ export function apply(ctx, rawConfig) {
       const cwd = await cwdOf(body)
       if (cwd) ensureMemoryRootForCwd(cwd)
       // 全局键 → PluginConfig（**无条件**）；三个提示词开关 → **本工作区**的 config.json（有工作区才写）
-      for (const k of ['commandWhitelist', 'allowAllCommands', 'expressWebEnabled', 'expressWebBase', 'expressDesktopEnabled', 'expressDesktopPort', 'exposeDebugTools', 'allowWebSearch']) {
+      for (const k of ['commandWhitelist', 'allowAllCommands', 'expressWebEnabled', 'expressWebBase', 'expressDesktopEnabled', 'expressDesktopPort', 'exposeDebugTools', 'allowWebSearch', 'webFetchEnabled', 'webFetchDomains', 'allowAllFetchDomains', 'webFetchAllowHtml', 'webFetchAllowText', 'webFetchAllowImage']) {
         if (body[k] !== undefined) pluginConfig.set(k, body[k])
       }
-      // 调试 / 联网搜索开关变更 → 立即重算各 MC/MC+ 会话的工具可见性（用户 2026-10-05 / 2026-10-08）
-      if (body.exposeDebugTools !== undefined || body.allowWebSearch !== undefined) {
+      // 调试 / 联网搜索 / 网页抓取开关变更 → 立即重算各 MC/MC+ 会话的工具可见性
+      //（用户 2026-10-05 / 2026-10-08；域名表与内容类型开关由 guard/工具**现场读**，不用重算）
+      if (body.exposeDebugTools !== undefined || body.allowWebSearch !== undefined || body.webFetchEnabled !== undefined) {
         try { refreshMcPolicy() } catch (e) { logLine(`可见性开关变更后重算工具策略失败：${e?.message ?? e}`) }
       }
       // desktop 分享开关/端口变更 → 立即对齐独立端口服务（用户 2026-10-07）。
@@ -1777,6 +1789,31 @@ export function apply(ctx, rawConfig) {
   const MC_WEB_SEARCH_TOOL = 'web_search'
 
   /**
+   * 「网页抓取」工具名（`mc_kit_*`，游戏外辅助）—— 我们**自己实现**的网页抓取：
+   * 宿主 `web_fetch` 在 MC 模式被我们关掉了（preset 里 tool-web 只挂 search），本工具补上这一块。
+   *
+   * 抓取走宿主 `ctx.web`（`@deepseek-ai/dsh-web` seam；provider = `dsh-web-fetch-http`，含公网地址校验/防 SSRF），
+   * **不需要**宿主 `web_fetch` 工具启用（用户 2026-10-08 定）。
+   * 可见性由「MC设置 → 联网搜索 → 网页抓取」的 `webFetchEnabled`（默认**关**）+ 域名表（`webFetchDomains`
+   * / `allowAllFetchDomains`）控制：白名单（MC）/ guard（MC 与 MC+ 都过）。
+   */
+  const MC_WEB_FETCH_TOOL = 'mc_kit_web_fetch'
+
+  /**
+   * 从 URL 串里取**主机名**（小写、去端口）。解析不了 / 非 http(s) → `null`。
+   * 与宿主 provider（`dsh-web-fetch-http`）同一套 scheme 限制；guard 与工具自己都用它。
+   */
+  const hostOfUrl = (raw) => {
+    const s = String(raw ?? '').trim()
+    if (!s) return null
+    try {
+      const u = new URL(s)
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+      return u.hostname.toLowerCase()
+    } catch { return null }
+  }
+
+  /**
    * `present`（宿主 `@deepseek-ai/dsh-tool-present`）—— **MC 模式不再暴露它**（用户 2026-10-08：
    * "免得误导 agent"；文件交付在 MC 模式走 `mc_kit_express` 给 URL）。
    *
@@ -2145,7 +2182,7 @@ export function apply(ctx, rawConfig) {
         tools: {
           namespaces: {
             mc_: '游戏内',
-            mc_kit_: '游戏外辅助（画图/交付）',
+            mc_kit_: '游戏外辅助（画图/交付/文件系统/抓网页）',
             mc_admin_: '管理（MC 模式看不见也调不动；普通模式与 MC+ 模式可见）',
             mc_debug_: '调试（需在「MC设置 → 调试」开启「开放助手调试工具」才在 MC/MC+ 暴露）',
             note: 'mc_* / mc_kit_* 只在 MC模式 / MC+模式 会话里暴露（其他模式隐藏 + guard 硬拒）。',
@@ -2283,11 +2320,14 @@ export function apply(ctx, rawConfig) {
     writeFileSync(abs, data)
     return Buffer.byteLength(data)
   }
-  /** 把 PNG 交宿主做图片附件；拿不到服务/失败 → 返回 {attachmentError}（不抛，别打断循环） */
-  const attachImage = async (png, name) => {
+  /**
+   * 把图片字节交宿主做图片附件；拿不到服务/失败 → 返回 `{attachmentError}`（不抛，别打断循环）。
+   * `mediaType` 默认 png（mc_map / mc_height 出的是 png）；`mc_kit_web_fetch` 抓到的图按真实类型传。
+   */
+  const attachImage = async (bytes, name, mediaType = 'image/png') => {
     const att = ctx.get('attachments')
     if (!att || typeof att.saveImage !== 'function') return { attachmentError: '宿主没有 attachments 服务' }
-    try { return { attachment: await att.saveImage({ data: new Uint8Array(png), mediaType: 'image/png', name }) } }
+    try { return { attachment: await att.saveImage({ data: new Uint8Array(bytes), mediaType, name }) } }
     catch (e) { return { attachmentError: e.message } }
   }
 
@@ -2338,8 +2378,8 @@ export function apply(ctx, rawConfig) {
     },
   }))
 
-  /** `mc_map` / `mc_height` 共用的输出渲染：有 text 出 text，有 image.attachment 出图片块，都没有 → note。 */
-  const mapLikeOutput = {
+  /** `mc_map` / `mc_height` / `mc_kit_web_fetch` 共用的输出渲染：有 text 出 text，有 image.attachment 出图片块，都没有 → note。 */
+  const richOutput = {
     schema: { type: 'object', properties: {}, additionalProperties: true },
     render: (args, value) => {
       const blocks = []
@@ -2369,7 +2409,7 @@ export function apply(ctx, rawConfig) {
       reply: { type: 'boolean', description: 'true（默认）= 结果回复到上下文；false = 只写文件、回一行 stub' },
       dist: { type: 'string', description: '输出文件路径（可空）；绝对路径或相对工作区根。chars→.txt、image→.png' },
     },
-    output: mapLikeOutput,
+    output: richOutput,
     async execute(args, exec) {
       const sess = getSession(exec)
       await sess.bot.waitForChunks()
@@ -2423,7 +2463,7 @@ export function apply(ctx, rawConfig) {
       reply: { type: 'boolean', description: 'true（默认）= 结果回复到上下文；false = 只写文件、回一行 stub' },
       dist: { type: 'string', description: '输出文件路径（可空）；绝对路径或相对工作区根。chars→.txt、image→.png、full→.csv' },
     },
-    output: mapLikeOutput,
+    output: richOutput,
     async execute(args, exec) {
       const sess = getSession(exec)
       await sess.bot.waitForChunks()
@@ -3005,6 +3045,111 @@ export function apply(ctx, rawConfig) {
         + (overwritten.length ? `；覆盖 ${overwritten.length} 项` : '')
         + (skipped.length ? `；跳过 ${skipped.length} 项（受保护/凭据）：${skipped.map((s) => s.path).join('、')}` : '')
       return { action, root, done, skipped, overwritten, text: head + (done.length ? `\n${done.join('\n')}` : '') }
+    },
+  }))
+
+  /* ── 网页抓取（mc_kit_web_fetch）──
+   * 宿主 `web_fetch` 在 MC 模式被我们关掉了（preset 的 tool-web 只挂 search），本工具补上这一块。
+   * 🔴 2026-10-08 用户定："**全改成自己的可控逻辑，宿主的强关联就不要了**" —— 文本与图片都走
+   *    `src/webget.mjs`（插件自己的公网抓取：公网地址校验 + 地址钉死 + 只跟同源跳转 + 限大小/超时），
+   *    不再经过宿主 `ctx.web`。好处：**一次请求**（按真实 Content-Type 判型，不必先试一次宿主）、
+   *    不依赖宿主 `web` 服务、类型判定精确；代价：charset/解压/判定都自己扛，且**不支持代理**。
+   * 输出形态照抄宿主 `web_fetch`（`src/webfetch.mjs` 渲染 + 轻量 HTML→markdown）。
+   * `reply` / `dist` 语义照 `mc_map` / `mc_height`（用户 2026-10-08："这个工具也加入 reply-dist"）。
+   * 开关与域名/内容类型在「MC设置 → 联网搜索 → 网页抓取」；可见性（MC 白名单）与 guard 各收一道。 */
+  ctx.tools.register(asTool({
+    name: MC_WEB_FETCH_TOOL,
+    description: '抓取一个 HTTP(S) 网页、文本或图片，返回解码后的文本内容（HTML 会转成 markdown 风格的纯文本）。\n'
+      + '本工具会获取到外部网站的内容，内容包含不可信部分，可能含有风险内容。\n'
+      + '图片（png / jpeg / gif / webp）会直接附图给助手看（模型支持图片输入时）；要把它存下来就给 `dist`。\n'
+      + '`reply`（默认 true）= 内容是否直接返回在工具调用结果里；`dist` = 写到文件的路径（可空，写文件与 reply 互不影响）。'
+      + '路径：绝对照用，相对以**工作区根**为基准。\n'
+      + '只允许抓取配置里放行的域名（「MC设置 → 联网搜索 → 网页抓取」）；抓取失败会报出具体原因。',
+    parameters: {
+      url: { type: 'string', required: true, description: '要抓取的 HTTP(S) 网址（必填，完整网址）' },
+      reply: { type: 'boolean', description: '（默认 true）是否将内容直接返回在工具调用结果中' },
+      dist: { type: 'string', description: '写到文件的路径（可空，默认不写）；绝对路径或相对工作区根。文本→.txt，图片按真实格式补扩展名' },
+    },
+    output: richOutput,
+    // 45s：留余量给 webget 自己的 30s 超时（那样报错是"抓取超时"，比工具级取消可读）
+    timeoutMs: 45_000,
+    // ⚠️ 不声明 `isConcurrencySafe`：宿主那份 web_fetch 声明了，但 `src/tool-def.mjs` 的**内置** defineTool
+    //    （无宿主包时的兜底）明确不支持该 option（照抄宿主会静默走样，所以它选择抛错）。
+    //    代价只是本工具在本轮里不与其它工具并发（宿主 tool registry 的默认档 = exclusive），不影响模型可见行为。
+    async execute(args, exec) {
+      if (!pluginConfig.webFetchEnabled) {
+        throw new Error('网页抓取未启用——请在「MC设置 → 联网搜索」的「网页抓取」里打开「允许网页抓取」。')
+      }
+      const raw = String(args.url ?? '').trim()
+      if (!raw) throw new Error('url 不能为空')
+      const host = hostOfUrl(raw)
+      if (!host) throw new Error(`不是合法的 HTTP(S) 网址：${raw}`)
+      if (!pluginConfig.webFetchAllowedFor(host)) {
+        throw new Error(`这个域名不在允许抓取的列表里：${host}。`
+          + '要在「MC设置 → 联网搜索 → 网页抓取」里加上它（或打开「允许所有域名」）；'
+          + '也可以告诉用户你想抓哪个域名，让他来加。')
+      }
+      const reply = args.reply !== false
+      const dist = outputPathFor(args.dist, exec?.agent)   // 无工作区 + 相对路径 → 这里抛错
+      const out = { url: raw }
+
+      // 一次请求（自己发）：公网-only + 地址钉死 + 只跟同源跳转 —— 见 src/webget.mjs
+      let got
+      try {
+        got = await fetchUrl(raw, { signal: exec?.signal })
+      } catch (e) {
+        throw new Error(`${e?.message ?? e}`)
+      }
+      out.url = got.url
+      out.statusCode = got.statusCode
+
+      const allow = {
+        html: pluginConfig.webFetchAllowHtml,
+        text: pluginConfig.webFetchAllowText,
+        image: pluginConfig.webFetchAllowImage,
+      }
+      // 内容类型闸：**精确**判（拿到真实 Content-Type 了，不再像走宿主时那样只能粗到 html/text 两档）
+      if (!contentTypeAllowed(got.kind, allow)) {
+        throw new Error(got.kind === 'html'
+          ? '这个地址返回的是**网页（HTML）**，而「允许的内容类型」里没开「网页 HTML」——请在「MC设置 → 联网搜索 → 网页抓取」里打开它。'
+          : got.kind === 'text'
+            ? '这个地址返回的是**文本**（纯文本 / JSON / XML），而「允许的内容类型」里没开「文本」——请在「MC设置 → 联网搜索 → 网页抓取」里打开它。'
+            : '这个地址返回的是**图片**，而「允许的内容类型」里没开「图片」——请在「MC设置 → 联网搜索 → 网页抓取」里打开它。')
+      }
+
+      if (got.kind === 'image') {
+        out.image = { format: got.format, mediaType: got.mediaType, bytes: got.body.length }
+        if (dist) {
+          try { const file = withExt(dist, `.${got.format}`); out.written = { file, bytes: writeOutputFile(file, got.body) } }
+          catch (e) { out.writeError = e.message }
+        }
+        const vision = await modelAcceptsVision(exec?.agent)
+        if (!vision) out.image.warning = '当前模型不接受图片输入——已跳过附图（要图片文件请给 dist 路径）。'
+        else if (reply) {
+          let name = 'image'
+          try { name = decodeURIComponent(new URL(got.url).pathname.split('/').pop() || '') || name } catch { /* 编码坏了就用兜底名 */ }
+          Object.assign(out.image, await attachImage(got.body, name, got.mediaType))
+        }
+        if (!reply) out.note = out.written ? `已写入 ${out.written.file}（${out.written.bytes} 字节）` : '（reply=false 且未给 dist：无输出）'
+        else if (!vision) out.note = out.image.warning
+        return out
+      }
+
+      // 文本类：按声明 charset 解码（超长截断）→ 交给 webfetch 渲染（形态与宿主 web_fetch 一致）
+      const decoded = decodeBodyText(got.body, got.charset)
+      const text = renderFetchText({
+        url: got.url,
+        statusCode: got.statusCode,
+        body: { kind: got.kind, content: decoded.text },
+        truncated: got.truncatedByBytes || decoded.truncated,
+      }, WEB_FETCH_MAX_OUTPUT_CHARS)
+      if (reply) out.text = text
+      if (dist) {
+        try { const file = withExt(dist, '.txt'); out.written = { file, bytes: writeOutputFile(file, Buffer.from(text, 'utf8')) } }
+        catch (e) { out.writeError = e.message }
+      }
+      if (!reply) out.note = out.written ? `已写入 ${out.written.file}（${out.written.bytes} 字节）` : '（reply=false 且未给 dist：无输出）'
+      return out
     },
   }))
 
@@ -4108,9 +4253,12 @@ export function apply(ctx, rawConfig) {
       if (!t) { logLine('MC 模式：拿不到 scoped tools，跳过可见性限制（guard 仍会硬拒）'); return }
       const { allowOtherTools, hideAdminTools } = pluginConfig.mcMode
       const adminNames = ourToolNames.filter((n) => n.startsWith('mc_admin_'))
-      // 调试工具（mc_debug_*）只在「MC设置 → 调试」开关打开时才进可见面（用户 2026-10-05 定）
+      // 调试工具（mc_debug_*）只在「MC设置 → 调试」开关打开时才进可见面（用户 2026-10-05 定）；
+      // 网页抓取（mc_kit_web_fetch）只在「网页抓取」开关打开时进（用户 2026-10-08 定）
       const exposeDebug = pluginConfig.exposeDebugTools
-      const hidden = (n) => n.startsWith('mc_admin_') || (!exposeDebug && n.startsWith('mc_debug_'))
+      const hidden = (n) => n.startsWith('mc_admin_')
+        || (!exposeDebug && n.startsWith('mc_debug_'))
+        || (n === MC_WEB_FETCH_TOOL && !pluginConfig.webFetchEnabled)
       const wanted = [
         ...ourToolNames.filter((n) => !hidden(n)),
         ...(hideAdminTools ? [] : adminNames),
@@ -4222,6 +4370,20 @@ export function apply(ctx, rawConfig) {
         // （2026-09-16：账户体系上线后，密码只该待在「MC设置 → 账户」里）
         if (SECRETS_DIR_RE.test(text)) {
           return 'MC 模式不允许读凭据备忘目录（secrets/）；账号密码在「MC设置 → 账户」里维护，AI 不需要也不应该看到。'
+        }
+      }
+      // ①′ 网页抓取（`mc_kit_web_fetch`）：**两种 MC 模式都过**这道闸（用户 2026-10-08）——
+      //    开关关 → 硬拒；开关开但域名不在表里 → 硬拒（与白名单/可见性双保险；域名表改完当场生效）。
+      if ((isMc || isPlus) && name === MC_WEB_FETCH_TOOL) {
+        if (!pluginConfig.webFetchEnabled) {
+          return '网页抓取未启用——请在「MC设置 → 联网搜索」的「网页抓取」里打开「允许网页抓取」。'
+        }
+        if (!pluginConfig.webFetchAllowedFor(hostOfUrl(exec?.arguments?.url))) {
+          return '这个域名不在允许抓取的列表里——请在「MC设置 → 联网搜索 → 网页抓取」里加上它（或打开「允许所有域名」）。'
+        }
+        // 内容类型三个都关 = 什么都抓不了 → 这里就拒，别白跑一次网络请求
+        if (pluginConfig.webFetchNoContentTypeAllowed) {
+          return '网页抓取的「允许的内容类型」三个都关着——什么都抓不了，请在「MC设置 → 联网搜索 → 网页抓取」里至少打开一个。'
         }
       }
       if (isPlus) return undefined   // MC+：其余放行（文件全工作区；admin 可见；受保护文件按宿主默认）
@@ -4433,7 +4595,11 @@ export function apply(ctx, rawConfig) {
       + '`mcMode.hideAdminTools`（默认 true）· `expressWebEnabled` / `expressWebBase`（**web 模式**文件分享开关 + base，如 https://example.com）· '
       + '`expressDesktopEnabled` / `expressDesktopPort`（**桌面模式**文件分享开关 + 独立托管端口，默认 16049）· '
       + '`exposeDebugTools`（是否向助手暴露调试用途的工具，默认 false）· '
-      + '`allowWebSearch`（是否让 MC 模式的助手联网搜索，默认 true；MC+ 不受影响）。\n'
+      + '`allowWebSearch`（是否让 MC 模式的助手联网搜索，默认 true；MC+ 不受影响）· '
+      + '`webFetchEnabled`（是否让助手抓网页，默认 false）/ `webFetchDomains`（允许抓取的域名表：精确名、'
+      + '`*.example.com` 通配、`/正则/`、`*` 全部）/ `allowAllFetchDomains`（允许所有域名，默认 false）/ '
+      + '`webFetchAllowHtml`、`webFetchAllowText`、`webFetchAllowImage`（允许的内容类型：网页 HTML / 文本 / 图片，'
+      + '默认都 true；前两类受宿主限制只能粗到那两档，图片格式是**内置**的常见安全名单、不可配）。\n'
       + '改完**立即生效**，落在 `$DSH_HOME/whale_craft/config.json`。（白名单只能"收窄"，不能凭空添加 preset 没挂的工具。）',
     parameters: {
       action: { type: 'string', description: 'get（默认）/ set / unset / reset / list' },

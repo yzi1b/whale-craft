@@ -286,12 +286,24 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   const { readFileSync } = await import('node:fs')
   const idx = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
   console.log(`  ${!tools.has('mc_kit_share') ? '✅' : '❌'} 🔴 mc_kit_share 已移除（它只是在调宿主**另装**的 dsh-file-host，插件本身没有文件服务器）`)
-  console.log(`  ${tools.size === 32 ? '✅' : '❌'} 工具数 32（实际 ${tools.size}）：mc_* 26 + mc_kit_* 3 + mc_admin_* 1 + mc_debug_* 2`)
+  console.log(`  ${tools.size === 33 ? '✅' : '❌'} 工具数 33（实际 ${tools.size}）：mc_* 26 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 2`)
   // 只看**代码**，不看注释：注释里留着"为什么删"的说明（那是要留的）
   const codeOnly = idx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
   console.log(`  ${!/uploadToFileHost|dsh-file-host|\/serve\/file-host|mc_kit_share/.test(codeOnly) ? '✅' : '❌'} 源码里没有上传/文件服务器残留（注释里保留"为什么删"的说明）`)
   console.log(`  ${tools.has('mc_kit_image') ? '✅' : '❌'} mc_kit_image 仍在（渲染 PNG）`)
   console.log(`  ${tools.has('mc_kit_fs') ? '✅' : '❌'} mc_kit_fs 新增（文件系统：copy/move/delete/make_dir，保留符号链接）`)
+  // 2026-10-08：mc_kit_web_fetch（参数与宿主 web_fetch 一致：只有一个必填 url）
+  {
+    const wf = tools.get('mc_kit_web_fetch')
+    const wfParams = wf?.parameters?.properties ?? {}
+    const wfNames = Object.keys(wfParams)
+    const wfRequired = wf?.parameters?.required ?? []
+    console.log(`  ${!!wf ? '✅' : '❌'} mc_kit_web_fetch 已注册（抓网页转文本；宿主 web_fetch 在 MC 模式被我们关掉，这个补位）`)
+    console.log(`  ${wfNames.length === 3 && wfNames[0] === 'url' && wfRequired.length === 1 && wfRequired[0] === 'url' && wfParams.url?.type === 'string' && wfParams.reply?.type === 'boolean' && wfParams.dist?.type === 'string' ? '✅' : '❌'} 🔴 参数 = 宿主的 url + 我们自己加的 reply/dist（实际 ${JSON.stringify(wfNames)}，required=${JSON.stringify(wfRequired)}）`)
+  console.log(`  ${/MC_WEB_FETCH_TOOL = 'mc_kit_web_fetch'/.test(codeOnly) && /await fetchUrl\(raw, \{ signal: exec\?\.signal \}\)/.test(codeOnly) && !/ctx\.get\('web'\)/.test(codeOnly) ? '✅' : '❌'} 🔴 抓取**全自研**：只走自己的 fetchUrl，不经宿主 ctx.web（用户 2026-10-08 定）`)
+  console.log(`  ${/renderFetchText\(\{/.test(codeOnly) && /WEB_FETCH_MAX_OUTPUT_CHARS\)/.test(codeOnly) && /from '\.\/src\/webfetch\.mjs'/.test(codeOnly) ? '✅' : '❌'} 输出交给 src/webfetch.mjs 渲染（形态照抄宿主 web_fetch）`)
+    console.log(`  ${/n === MC_WEB_FETCH_TOOL && !pluginConfig\.webFetchEnabled/.test(codeOnly) && /name === MC_WEB_FETCH_TOOL/.test(codeOnly) && /webFetchAllowedFor/.test(codeOnly) ? '✅' : '❌'} 🔴 mc_kit_web_fetch 受 webFetchEnabled + 域名表门控（白名单 + guard 两处）`)
+  }
   console.log(`  ${!tools.has('mc_kit_memory') ? '✅' : '❌'} 🔴 mc_kit_memory 已移除（长期记忆改走宿主文件工具；索引自动注入也已移除）`)
   // 2026-10-05：新增观察工具 + 诊断工具改名进 mc_debug_*
   console.log(`  ${tools.has('mc_context') && tools.has('mc_players') ? '✅' : '❌'} 新增观察工具 mc_context / mc_players`)
@@ -2162,6 +2174,41 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   const normRead = guards.every((g) => { try { return g({ name: 'read', arguments: { path: 'E:\\x\\README.md' }, agent: { id: 'sess-P', ctx: plainCtxObj } }) === undefined } catch { return true } })
   console.log(`  ${normRead ? '✅' : '❌'} 普通会话读工作区文件不受影响（隔离只管 MC 模式）`)
 
+  // 网页抓取（mc_kit_web_fetch，2026-10-08）：guard 两档 —— 开关（默认关）+ 域名表；**MC 与 MC+ 都过**
+  {
+    const setCfg = (path, value) => tools.get('mc_admin_config').execute({ action: 'set', path, value }, A)
+    const fetchCall = (url, ctxObj = mcCtxObj) => callGuard({ name: 'mc_kit_web_fetch', arguments: { url }, agent: { id: 'sess-MC', ctx: ctxObj } })
+    const offMsg = fetchCall('https://minecraft.wiki/w/Diamond')
+    console.log(`  ${/网页抓取未启用/.test(String(offMsg)) ? '✅' : '❌'} 🔴 抓取开关默认关 → guard 硬拒：${String(offMsg).slice(0, 24)}`)
+    await setCfg('webFetchEnabled', true)
+    const outsideMsg = fetchCall('https://example.com/x')
+    console.log(`  ${/不在允许抓取的列表/.test(String(outsideMsg)) ? '✅' : '❌'} 开关开了但域名不在表里 → 拒：${String(outsideMsg).slice(0, 22)}`)
+    const okApex = fetchCall('https://minecraft.wiki/w/Diamond')
+    const okSub = fetchCall('https://zh.minecraft.wiki/w/%E9%92%BB%E7%9F%B3')
+    console.log(`  ${okApex === undefined && okSub === undefined ? '✅' : '❌'} 🔴 默认域名表放行裸域 minecraft.wiki 与子域 *.minecraft.wiki（含编码路径）`)
+    const badScheme = fetchCall('ftp://minecraft.wiki/x')
+    console.log(`  ${badScheme ? '✅' : '❌'} 非 http(s) 抓不了（取不到主机名 → 拒）：${String(badScheme).slice(0, 22)}`)
+    const plusCtxFetch = {}; presetByCtx.set(plusCtxFetch, 'minecraft-plus')
+    const plusMsg = fetchCall('https://example.com', plusCtxFetch)
+    console.log(`  ${/不在允许抓取的列表/.test(String(plusMsg)) ? '✅' : '❌'} 🔴 MC+ 也过这道闸（域名表对两档都生效）`)
+    await setCfg('allowAllFetchDomains', true)
+    console.log(`  ${fetchCall('https://example.com/x') === undefined ? '✅' : '❌'} 打开「允许所有域名」后任意公网域名放行`)
+    await setCfg('allowAllFetchDomains', false)
+    const plainMsg = fetchCall('https://example.com/x', plainCtxObj)
+    console.log(`  ${/只在 MC模式/.test(String(plainMsg)) ? '✅' : '❌'} 普通会话调它走的是"mc_kit_* 不暴露"那条（不是抓取那条）`)
+    // 「允许的内容类型」三个都关 = 什么都抓不了 → guard 直接拒（不白跑一次网络请求）
+    await setCfg('webFetchAllowHtml', false)
+    await setCfg('webFetchAllowText', false)
+    await setCfg('webFetchAllowImage', false)
+    const noTypeMsg = fetchCall('https://minecraft.wiki/x')
+    console.log(`  ${/三个都关着/.test(String(noTypeMsg)) ? '✅' : '❌'} 🔴 内容类型三类都关时 guard 就拒（${String(noTypeMsg).slice(0, 22)}）`)
+    await setCfg('webFetchAllowHtml', true)
+    await setCfg('webFetchAllowText', true)
+    await setCfg('webFetchAllowImage', true)
+    console.log(`  ${fetchCall('https://minecraft.wiki/x') === undefined ? '✅' : '❌'} 三类都开回来后又放行`)
+    await tools.get('mc_admin_config').execute({ action: 'reset' }, A)
+  }
+
   // 🔴 2026-10-04 用户定：新增 **MC+ 变体**（在 MC 基础上开放标准全部工具）与
   //    "其他模式不再暴露 mc/mckit" —— guard 按三档分：
   //    MC（全部硬边界）/ MC+（只保留凭据）/ 其他（拒 mc_*、mc_kit_*；mc_admin_* 例外）
@@ -2390,6 +2437,17 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     fire('agent/created', plusOffAgent)
     console.log(`  ${restrictCalls.slice(before).every((c) => !(c.preset === 'minecraft-plus' && Array.isArray(c.f?.allow))) ? '✅' : '❌'} 🔴 开关关掉后 MC+ 仍**不套白名单**（web_search 照常可见）`)
     await tools.get('mc_admin_config').execute({ action: 'unset', path: 'allowWebSearch' }, A)
+  }
+  // 🔴 2026-10-08「网页抓取」（默认关）：关 → 不进白名单；开 → 进
+  console.log(`  ${allowList && !allowList.includes('mc_kit_web_fetch') ? '✅' : '❌'} 🔴 默认（抓取开关关）白名单**不含** mc_kit_web_fetch`)
+  {
+    const before = restrictCalls.length
+    await tools.get('mc_admin_config').execute({ action: 'set', path: 'webFetchEnabled', value: true }, A)
+    const onAgent = { id: 'sess-MC-FETCH', session: mkSession('whale-mcfetch-'), ctx: makeAgentCtx('minecraft'), inbox: mkInbox() }
+    fire('agent/created', onAgent)
+    const onAllow = restrictCalls.slice(before).find((c) => c.preset === 'minecraft')?.f?.allow ?? null
+    console.log(`  ${Array.isArray(onAllow) && onAllow.includes('mc_kit_web_fetch') ? '✅' : '❌'} 🔴 抓取开关打开后新建的 MC 会话白名单**含** mc_kit_web_fetch`)
+    await tools.get('mc_admin_config').execute({ action: 'unset', path: 'webFetchEnabled' }, A)
   }
   // 🔴 宿主对不认识的名字**抛错**；要是直接放弃，隔离就等于没做（pwsh 又回来了）
   console.log(`  ${allowList && !allowList.includes('glob') && !allowList.includes('grep') ? '✅' : '❌'} 🔴 不在场的工具（这台 preset 没挂 tool-fs-search ⇒ glob/grep）被过滤掉，**不是**整次白名单作废`)
@@ -3077,112 +3135,41 @@ console.log('\n--- 行事准则 RULES.md / 新开关 / 边界信息 ---')
   console.log(`  ${/allowWebSearch 必须是/.test(String(webBad)) ? '✅' : '❌'} 非布尔被拒：${String(webBad).slice(0, 40)}…`)
   await tools.get('mc_admin_config').execute({ action: 'reset' }, A)
 
-  /* 🔴 老配置迁移（两档）：expressMode → expressWebEnabled；expressEnabled/expressBase → expressWebEnabled/expressWebBase（都删旧键、落盘） */
+  /* 「网页抓取」三键（2026-10-08）：开关默认关 + 域名表默认 minecraft.wiki / *.minecraft.wiki + 允许所有默认关 */
   {
-    const { mkdtempSync, writeFileSync, readFileSync } = await import('node:fs')
-    const { tmpdir } = await import('node:os')
-    const { join } = await import('node:path')
-    const { PluginConfig } = await import('./src/config.mjs')
-    const fails = []
-    // ① 最老的 expressMode（online→true，off/local/乱写/缺省→false）
-    for (const [old, want] of [['online', true], ['off', false], ['local', false], ['乱写', false], [undefined, false]]) {
-      const dir = mkdtempSync(join(tmpdir(), 'whale-mig-'))
-      writeFileSync(join(dir, 'config.json'), JSON.stringify(old === undefined ? {} : { expressMode: old }), 'utf8')
-      const cfg = new PluginConfig(dir)
-      const file = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
-      const ok = cfg.expressWebEnabled === want && !('expressMode' in file) &&
-        (old === undefined ? !('expressWebEnabled' in file) : file.expressWebEnabled === want)
-      if (!ok) fails.push(`expressMode=${String(old)}→${want} 实得 ${cfg.expressWebEnabled}/${JSON.stringify(file.expressWebEnabled)}`)
-    }
-    // ② 2026-10-04 的单套旧键 → web 那套
-    {
-      const dir = mkdtempSync(join(tmpdir(), 'whale-mig2-'))
-      writeFileSync(join(dir, 'config.json'), JSON.stringify({ expressEnabled: true, expressBase: 'https://old.example.com' }), 'utf8')
-      const cfg = new PluginConfig(dir)
-      const file = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
-      const ok = cfg.expressWebEnabled === true && cfg.expressWebBase === 'https://old.example.com' &&
-        !('expressEnabled' in file) && !('expressBase' in file) && file.expressWebEnabled === true
-      if (!ok) fails.push(`单套旧键迁移失败：${JSON.stringify(file)}`)
-    }
-    console.log(`  ${fails.length === 0 ? '✅' : '❌'} 🔴 老文件分享键迁移（expressMode / expressEnabled+expressBase → web 那套；删旧键落盘）${fails.length ? '：' + fails.join('；') : ''}`)
+    const get = (path) => tools.get('mc_admin_config').execute({ action: 'get', path }, A)
+    const set = (path, value) => tools.get('mc_admin_config').execute({ action: 'set', path, value }, A).catch((e) => e.message)
+    const def = await get('webFetchEnabled')
+    console.log(`  ${def.value === false ? '✅' : '❌'} 🔴 webFetchEnabled 默认**关**（${def.value}）`)
+    const domDef = await get('webFetchDomains')
+    console.log(`  ${Array.isArray(domDef.value) && domDef.value.length === 2 && domDef.value.includes('minecraft.wiki') && domDef.value.includes('*.minecraft.wiki') ? '✅' : '❌'} 默认域名表 = minecraft.wiki / *.minecraft.wiki（${JSON.stringify(domDef.value)}）`)
+    const allDef = await get('allowAllFetchDomains')
+    console.log(`  ${allDef.value === false ? '✅' : '❌'} allowAllFetchDomains 默认**关**（${allDef.value}）`)
+    await set('webFetchEnabled', true)
+    await set('webFetchDomains', ['example.com', '*.example.org'])
+    await set('allowAllFetchDomains', true)
+    const on = await get('webFetchEnabled'); const domOn = await get('webFetchDomains'); const allOn = await get('allowAllFetchDomains')
+    console.log(`  ${on.value === true && allOn.value === true && Array.isArray(domOn.value) && domOn.value.includes('*.example.org') ? '✅' : '❌'} 三键都能被管理员工具改（${on.value}/${allOn.value}/${JSON.stringify(domOn.value)}）`)
+    const badBool = await set('webFetchEnabled', 'yes')
+    console.log(`  ${/webFetchEnabled 必须是 true\/false/.test(String(badBool)) ? '✅' : '❌'} 非布尔被拒：${String(badBool).slice(0, 40)}…`)
+    const badList = await set('webFetchDomains', 'minecraft.wiki')
+    console.log(`  ${/webFetchDomains 必须是字符串数组/.test(String(badList)) ? '✅' : '❌'} 域名表非数组被拒：${String(badList).slice(0, 40)}…`)
+    // 「允许的内容类型」两键（默认都开）
+    const htmlDef = await get('webFetchAllowHtml')
+    const textDef = await get('webFetchAllowText')
+    console.log(`  ${htmlDef.value === true && textDef.value === true ? '✅' : '❌'} 🔴 内容类型两个开关默认都**开**（${htmlDef.value}/${textDef.value}）`)
+    const badType = await set('webFetchAllowHtml', 'yes')
+    console.log(`  ${/webFetchAllowHtml 必须是 true\/false/.test(String(badType)) ? '✅' : '❌'} 非布尔被拒：${String(badType).slice(0, 40)}…`)
+    // 「图片」开关（默认开；**格式是内置名单、不可配** —— 用户 2026-10-08 定）
+    const imgDef = await get('webFetchAllowImage')
+    console.log(`  ${imgDef.value === true ? '✅' : '❌'} 🔴 webFetchAllowImage 默认**开**（${imgDef.value}）`)
+    const badImg = await set('webFetchAllowImage', 'yes')
+    console.log(`  ${/webFetchAllowImage 必须是 true\/false/.test(String(badImg)) ? '✅' : '❌'} 非布尔被拒：${String(badImg).slice(0, 40)}…`)
+    const goneFmt = await set('webFetchImageFormats', ['png'])
+    console.log(`  ${/未知配置项/.test(String(goneFmt)) ? '✅' : '❌'} 🔴 图片格式表已不是配置键（改也没用，报未知项）`)
+    await tools.get('mc_admin_config').execute({ action: 'reset' }, A)
   }
 
-  /* 「连接到MC」（2026-10-04）：服务器历史（全局）+ 注入提示词 */
-  {
-    const { mkdtempSync, readFileSync, existsSync } = await import('node:fs')
-    const { tmpdir } = await import('node:os')
-    const { join } = await import('node:path')
-    const { ServerHistory, SERVERS_FILE, MAX_SERVERS } = await import('./src/serverhistory.mjs')
-    const dir = mkdtempSync(join(tmpdir(), 'whale-srv-'))
-    const hist = new ServerHistory({ dir })
-    hist.record('a.example'); hist.record('b.example'); hist.record('a.example')
-    console.log(`  ${hist.list()[0] === 'a.example' && hist.list().length === 2 ? '✅' : '❌'} 服务器历史：去重 + 最近优先（${hist.list().join(', ')}）`)
-    for (let i = 0; i < 30; i++) hist.record(`s${i}.example`)
-    console.log(`  ${hist.list().length === MAX_SERVERS ? '✅' : '❌'} 封顶 ${MAX_SERVERS} 条（实得 ${hist.list().length}）`)
-    console.log(`  ${existsSync(join(dir, SERVERS_FILE)) ? '✅' : '❌'} 落盘在**全局**状态目录：${SERVERS_FILE}`)
-    hist.remove(hist.list()[0])
-    const reread = new ServerHistory({ dir })
-    console.log(`  ${reread.list().length === MAX_SERVERS - 1 ? '✅' : '❌'} 删除后重新读盘一致（${reread.list().length} 条）`)
-
-    const { buildConnectPrompt } = await import('./src/connect-prompt.mjs')
-    const p1 = buildConnectPrompt({ address: 'a.example:25566', account: 'DeepSeek (id: acc-1)' })
-    const p2 = buildConnectPrompt({ address: '192.168.1.5:54321', account: 'X (id: acc-2)', via: 'lan' })
-    console.log(`  ${p1.includes('a.example:25566') && p1.includes('acc-1') && !/local network/.test(p1) ? '✅' : '❌'} 提示词含地址 + 账户 \`名字 (id: …)\`；手动连接不追加局域网说明`)
-    console.log(`  ${/local network/.test(p2) ? '✅' : '❌'} 🔴 局域网触发才追加"该地址可能是临时的"`)
-
-    const isrc = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
-    console.log(`  ${/path === '\/api\/mc\/servers'/.test(isrc) && /path === '\/api\/mc\/lan'/.test(isrc) && /path === '\/api\/mc\/connect'/.test(isrc) ? '✅' : '❌'} 三个新端点在 index.js（servers / lan / connect）`)
-    console.log(`  ${/flattenMotd\(ok \? ping\.motd : h\?\.motd\)\.replace\(\/\[\\r\\n\]\+\/g, ' '\)/.test(isrc) ? '✅' : '❌'} 局域网行的 MOTD **剥颜色码 + 换行符换成空格**再给前端`)
-    console.log(`  ${/path === '\/api\/mc\/servers' \|\| path === '\/api\/mc\/lan'/.test(isrc) && /path === '\/api\/mc\/connect'/.test(isrc) ? '✅' : '❌'} 🔴 三个都进了 /api/mc 分派（servers/lan 走转发名单、connect 内联；漏一个就 404，踩过）`)
-    console.log(`  ${/if \(via !== 'lan'\) serverHistory\.record\(address\)/.test(isrc) ? '✅' : '❌'} 🔴 只有**手动连接**才记历史（局域网直连不记）`)
-    console.log(`  ${/source: \{ kind: 'plugin:whale_craft', form: 'notice'/.test(isrc) && /agent\.steer\(message\)/.test(isrc) && /interruptWait\?\.\('connect'\)/.test(isrc) ? '✅' : '❌'} 🔴 对话中：连接注入走**插件提示行**（plugin:whale_craft/notice）+ steer`)
-    console.log(`  ${/asUser = body\.asUser === true/.test(isrc) && /\[system\] \$\{text\}/.test(isrc) && /source: \{ kind: 'user' \}/.test(isrc) ? '✅' : '❌'} 🔴 新对话页：改投**玩家消息**（source kind='user'、正文前加 [system] ）`)
-  }
-
-  /* 受保护文件在记忆库（MemoryStore）里：**可读不可写**（RULES.md / AGENTS.md / config.json 同一套，用户 2026-10-03 定）*/
-  {
-    const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
-    const { tmpdir } = await import('node:os')
-    const { join } = await import('node:path')
-    const { MemoryStore } = await import('./src/memory.mjs')
-    const cwd = mkdtempSync(join(tmpdir(), 'whale-prot-'))
-    const root = join(cwd, '.whale-craft')
-    mkdirSync(root, { recursive: true })
-    writeFileSync(join(root, 'RULES.md'), '# 受保护的准则\n', 'utf8')
-    writeFileSync(join(root, 'config.json'), '{"schema":1,"rulesVersion":"9.9.9"}\n', 'utf8')
-    const store = new MemoryStore(root, { create: false })
-    const memReadRules = store.read({ path: 'RULES.md' })
-    console.log(`  ${/受保护的准则/.test(String(memReadRules.content)) ? '✅' : '❌'} 🔴 记忆库**可以读**行事准则（可读不可写）`)
-    const memReadCfg = store.read({ path: 'config.json' })
-    console.log(`  ${/"rulesVersion":"9\.9\.9"/.test(String(memReadCfg.content)) ? '✅' : '❌'} 🔴 记忆库**可以读**工作区 config.json`)
-    const protW1 = (() => { try { store.write({ path: 'config.json', content: '{}' }); return '' } catch (e) { return e.message } })()
-    const protW2 = (() => { try { store.delete({ path: 'RULES.md' }); return '' } catch (e) { return e.message } })()
-    const protW3 = (() => { try { store.append({ path: 'AGENTS.md', text: 'x' }); return '' } catch (e) { return e.message } })()
-    console.log(`  ${/只读/.test(protW1) && /只读/.test(protW2) && /只读/.test(protW3) ? '✅' : '❌'} 🔴 记忆库对受保护文件的写/删全被拒（config.json / RULES.md / AGENTS.md）`)
-    const tree = (store.list() ?? []).map((f) => f.rel).join(',')
-    console.log(`  ${!tree.includes('config.json') && !tree.includes('RULES.md') ? '✅' : '❌'} 受保护文件不进记忆目录树（list 里看不到）`)
-  }
-
-  // 边界信息工具
-  const caps = await tools.get('mc_capabilities').execute({}, A)
-  const vers = caps?.game?.testedVersions ?? []
-  // ⚠️ **不许断言"清单里必须有 26.2"**（2026-09-16 第八轮踩到）：官方 npm 版没有 26.2，
-  //    只有本机那份打过补丁的树有；CI 是在干净环境跑官方依赖的，写死就等于把 CI 判死。
-  //    这里只断言**自洽性** —— 清单像样、端点出自清单、mineflayer 版本报得出来；
-  //    "这台机器支持到哪"属于部署事实，作为信息行打印，不判分。
-  console.log(`  ${vers.length >= 20 && vers.includes(caps?.game?.latest) && vers.includes(caps?.game?.oldest) ? '✅' : '❌'} mc_capabilities 报出支持的 MC 版本（${vers.length} 个，端点 ${caps?.game?.oldest} → ${caps?.game?.latest} 均在清单内）`)
-  console.log(`  ${vers.includes('26.2') === (caps?.game?.latest === '26.2') ? '✅' : '❌'} 清单与上界自洽（本机装的那份${vers.includes('26.2') ? '**含** 26.2（打过补丁的树）' : '不含 26.2（官方版）'}）`)
-  console.log(`  ${caps?.game?.oldest && caps?.game?.latest ? '✅' : '❌'} 给出范围 ${caps?.game?.oldest} → ${caps?.game?.latest}（mineflayer ${caps?.game?.mineflayer}）`)
-  console.log(`  ${/microsoft/i.test(JSON.stringify(caps?.auth?.notSupported)) ? '✅' : '❌'} 明说微软登录暂不支持`)
-  console.log(`  ${caps?.tools?.count >= 26 && Array.isArray(caps?.tools?.names) ? '✅' : '❌'} 报了工具总数 ${caps?.tools?.count} + 清单`)
-  console.log(`  ${caps?.limits?.sequence?.steps === 64 && caps?.config?.file ? '✅' : '❌'} 报了上限与配置文件路径`)
-}
-
-// ── 认证 URL 构造（2026-09-15 真机 bug 回归测试）──
-// 真机症状：mc_connect 一律报 `Failed to parse URL from /authserver/authenticate`
-// 根因：调用点传了 {authUrl,...}，但 #authenticate 签名没接参数、函数体读 this.cfg（已清空）。
-// 教训：只测"缺凭据守卫"抓不到这个——**必须走一遍真实认证路径**，把实际发出的 URL 抓下来断言。
-// 2026-09-16 更新：凭据不再走 connect 的参数，改由 `auth` 描述符传（账户库解析出来的）。
 console.log('\n--- 认证请求 URL（真机 bug 回归）---')
 {
   const { McBot } = await import('./src/core.mjs')
@@ -3947,6 +3934,188 @@ console.log('\n--- MC 版本范围判定（src/mcversion.mjs）---')
   console.log(`  ${JSON.stringify(parseRelease('1.19')) === '[1,19,0]' && JSON.stringify(parseRelease('26.1')) === '[26,1,0]' ? '✅' : '❌'} parseRelease 缺段补 0（1.19→1.19.0；26.1→26.1.0）`)
 }
 
+console.log('\n--- 网页抓取：域名表匹配 + 输出渲染（src/config.mjs hostAllowed / src/webfetch.mjs）---')
+{
+  const { hostAllowed } = await import('./src/config.mjs')
+  const { htmlToMarkdown, renderFetchText, EXTERNAL_WEB_CONTENT_NOTICE, WEB_FETCH_MAX_OUTPUT_CHARS } = await import('./src/webfetch.mjs')
+  const def = ['minecraft.wiki', '*.minecraft.wiki']
+  const domainCases = [
+    // [主机名, 表, allowAll, 期望]
+    ['minecraft.wiki', def, false, true],
+    ['zh.minecraft.wiki', def, false, true],
+    ['a.b.minecraft.wiki', def, false, true],          // 通配 * = 任意字符（多级子域也中）
+    ['MINECRAFT.WIKI', def, false, true],              // 大小写不敏感
+    ['minecraft.wiki:443', def, false, true],          // 带端口（hostAllowed 直接收 host，端口也容错）
+    ['evilminecraft.wiki', def, false, false],         // 通配要求 `*.` 前面有点 → 不中
+    ['wiki', def, false, false],
+    ['', def, false, false],
+    ['example.com', def, false, false],
+    ['example.com', [], false, false],                 // 空表 = 一个都不允许
+    ['example.com', [], true, true],                   // 允许所有
+    ['anything.test', ['*'], false, true],             // `*` = 全部放行
+    ['sub.example.com', ['*.example.com'], false, true],
+    ['example.com', ['*.example.com'], false, false],  // 裸域不中通配（默认表就是靠这个分开的）
+    ['api.example.com', ['/^api\\./'], false, true],   // 正则
+    ['web.example.com', ['/^api\\./'], false, false],
+  ]
+  const wrong = domainCases.filter(([host, list, all, exp]) => hostAllowed(host, { allowAll: all, list }) !== exp)
+  console.log(`  ${wrong.length === 0 ? '✅' : '❌'} hostAllowed：精确 / 通配 / 正则 / 星号 / 空表 / 大小写（${domainCases.length} 例）${wrong.length ? '：' + wrong.map(([h, , a, e]) => `${h}(期望${e})`).join(', ') : ''}`)
+  const badRe = hostAllowed('x.test', { list: ['/[unclosed/'] })
+  console.log(`  ${badRe === false ? '✅' : '❌'} 坏正则不炸（忽略该条，按不命中算）`)
+
+  const html = '<h1>钻石</h1><p>钻石是<strong>很硬</strong>的。</p>'
+    + '<ul><li>用铁镐</li><li>Y=-59</li></ul>'
+    + '<p>见 <a href="https://minecraft.wiki/w/Diamond">Diamond</a>。</p>'
+    + '<script>alert(1)</script><style>p{}</style><img src="/a.png" alt="图">'
+  const md = htmlToMarkdown(html)
+  console.log(`  ${md.includes('# 钻石') && md.includes('- 用铁镐') && md.includes('[Diamond](https://minecraft.wiki/w/Diamond)') ? '✅' : '❌'} 轻量 HTML→markdown：标题/列表/链接（\n${JSON.stringify(md.slice(0, 90))}…）`)
+  console.log(`  ${!md.includes('alert(1)') && !md.includes('p{}') ? '✅' : '❌'} 🔴 script/style 的内容被整段丢掉（不把脚本喂给模型）`)
+  console.log(`  ${md.includes('![图](/a.png)') ? '✅' : '❌'} img → markdown 图片语法`)
+  console.log(`  ${htmlToMarkdown('a &amp; b &lt;x&gt; &#65; &nbsp;') === 'a & b <x> A' ? '✅' : '❌'} 实体解码（命名 / 十进制 / nbsp）`)
+  console.log(`  ${htmlToMarkdown('') === '' && !/<[a-z]/i.test(htmlToMarkdown('<div>a</div>')) ? '✅' : '❌'} 剥完标签不留裸尖括号（空输入也不炸）`)
+
+  const textRes = { url: 'https://minecraft.wiki/w/X', statusCode: 200, body: { kind: 'text', content: 'plain body' }, truncated: false }
+  const textOut = renderFetchText(textRes)
+  const lines2 = textOut.split('\n')
+  console.log(`  ${lines2[0] === 'Fetched https://minecraft.wiki/w/X (HTTP 200)' ? '✅' : '❌'} 🔴 首行与宿主同形：Fetched <url> (HTTP <status>)（${JSON.stringify(lines2[0])}）`)
+  console.log(`  ${textOut.includes(EXTERNAL_WEB_CONTENT_NOTICE) ? '✅' : '❌'} 正文前带反注入声明（外部内容当数据、不当指令）`)
+  console.log(`  ${textOut.includes('plain body') && !textOut.includes('Content truncated') ? '✅' : '❌'} 纯文本正文原样透传、没截断就不加尾注`)
+  const cutRes = renderFetchText({ ...textRes, body: { kind: 'text', content: 'x'.repeat(500) } }, 200)
+  console.log(`  ${cutRes.length <= 200 && cutRes.endsWith('full text.)') ? '✅' : '❌'} 🔴 超上限时保住尾部那句"换个更具体的 URL"（总长 ${cutRes.length} ≤ 200）`)
+  const provTrunc = renderFetchText({ ...textRes, truncated: true }, 10_000)
+  console.log(`  ${provTrunc.includes('Content truncated') ? '✅' : '❌'} 抓取侧截断过（truncated:true）也补尾注`)
+  console.log(`  ${renderFetchText({ ...textRes, body: { kind: 'text', content: 'x'.repeat(300_000) } }).length >= WEB_FETCH_MAX_OUTPUT_CHARS - 100 ? '✅' : '❌'} 默认上限 ${WEB_FETCH_MAX_OUTPUT_CHARS}（与宿主 tool-web 的 fetchMaxOutputChars 一致）`)
+  console.log(`  ${!/friendlyFetchError/.test((await import('node:fs')).readFileSync(new URL('./src/webfetch.mjs', import.meta.url), 'utf8')) ? '✅' : '❌'} 🔴 src/webfetch.mjs 里没有"宿主错误翻译"残留（不再走宿主）`)
+}
+
+console.log('\n--- 公网抓取（src/webget.mjs：唯一出网口；文本 + 图片一套逻辑）---')
+{
+  const { isPublicIp, classifyContentType, contentTypeAllowed, decodeBodyText, charsetOf, supportedImageFormat, fetchUrl, WEB_IMAGE_FORMATS, WEB_GET_MAX_BODY_CHARS } = await import('./src/webget.mjs')
+  const { createServer } = await import('node:http')
+  const { gzipSync, brotliCompressSync } = await import('node:zlib')
+  const idxSrc = (await import('node:fs')).readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+
+  // ① 公网地址判定（照宿主规则自己实现的那份；比宿主更严：tunnelling/转换前缀按内嵌 IPv4 复核）
+  const ipCases = [
+    ['8.8.8.8', true], ['1.2.3.4', true], ['172.32.0.1', true], ['100.63.0.1', true],
+    ['127.0.0.1', false], ['10.1.2.3', false], ['172.16.0.1', false], ['192.168.1.1', false],
+    ['169.254.1.1', false], ['100.64.0.1', false], ['0.0.0.0', false], ['224.0.0.1', false],
+    ['255.255.255.255', false], ['192.0.2.1', false], ['198.51.100.7', false], ['203.0.113.9', false],
+    ['198.18.0.1', false], ['192.88.99.1', false],
+    ['::1', false], ['::', false], ['fd00::1', false], ['fe80::1', false], ['ff02::1', false],
+    ['2001:db8::1', false], ['2001:0:0:0:0:0:0:1', false], ['2606:4700::1111', true],
+    ['2001:4860:4860::8888', true], ['::ffff:127.0.0.1', false], ['::ffff:8.8.8.8', true],
+    ['64:ff9b::10.0.0.1', false], ['64:ff9b::8.8.8.8', true], ['2002:0a00:0001::1', false],
+    ['2002:0808:0808::1', true], ['3fff::1', false], ['not-an-ip', false], ['', false],
+  ]
+  const ipBad = ipCases.filter(([ip, exp]) => isPublicIp(ip) !== exp)
+  console.log(`  ${ipBad.length === 0 ? '✅' : '❌'} 🔴 公网地址判定（私网/回环/链路本地/CGNAT/保留/多播/文档段 + IPv6 映射·NAT64·6to4·Teredo 的内嵌 IPv4 复核）：${ipBad.length ? ipBad.map(([ip, e]) => `${ip}期望${e}`).join(', ') : `${ipCases.length} 例全过`}`)
+
+  // ② 内容类型判定（**只有内置的格式和未知的格式**：没有"是图片但不在名单"这一档）
+  const ctCases = [
+    ['text/html', 'html'], ['text/html; charset=UTF-8', 'html'], ['application/xhtml+xml', 'html'],
+    ['text/plain', 'text'], ['application/json', 'text'], ['application/ld+json', 'text'],
+    ['application/xml', 'text'], ['application/rss+xml', 'text'], ['image/svg+xml', 'text'],
+    ['image/png', 'image'], ['image/jpeg', 'image'], ['image/jpg', 'image'], ['image/gif', 'image'], ['image/webp', 'image'],
+    ['image/bmp', null], ['image/avif', null], ['image/tiff', null], ['application/pdf', null],
+    ['text', null], ['', null], [undefined, null],
+  ]
+  const ctBad = ctCases.filter(([ct, kind]) => (classifyContentType(ct)?.kind ?? null) !== kind)
+  console.log(`  ${ctBad.length === 0 ? '✅' : '❌'} 🔴 classifyContentType：html / text（含 JSON/XML/加号后缀 xml/svg+xml）/ 内置四种图片 / 其余 null（${ctCases.length} 例）${ctBad.length ? '：' + ctBad.map(([ct]) => ct).join(', ') : ''}`)
+  console.log(`  ${classifyContentType('image/jpg')?.format === 'jpeg' && classifyContentType('image/svg+xml')?.kind === 'text' ? '✅' : '❌'} jpg 归一成 jpeg；image/svg+xml 算**文本**（宿主同款分类顺序）`)
+  console.log(`  ${supportedImageFormat('image/png') === 'png' && supportedImageFormat('image/bmp') === null && WEB_IMAGE_FORMATS.length === 4 ? '✅' : '❌'} supportedImageFormat 只认内置四种（${WEB_IMAGE_FORMATS.join('/')}）`)
+  const allowCases = [
+    ['html', { html: true, text: false, image: false }, true],
+    ['html', { html: false, text: true, image: true }, false],
+    ['text', { html: true, text: false, image: true }, false],
+    ['image', { html: true, text: true, image: true }, true],
+    ['image', { html: true, text: true, image: false }, false],
+    ['other', { html: true, text: true, image: true }, false],
+  ]
+  const allowBad = allowCases.filter(([kind, allow, exp]) => contentTypeAllowed(kind, allow) !== exp)
+  console.log(`  ${allowBad.length === 0 ? '✅' : '❌'} contentTypeAllowed 三开关精确判定（${allowCases.length} 例）`)
+
+  // ③ charset 解码（声明了就用它；不认识的直接报错，不吐乱码）
+  console.log(`  ${charsetOf('text/html; charset=GBK') === 'gbk' && charsetOf('text/html') === undefined ? '✅' : '❌'} charsetOf 取声明编码（小写）`)
+  console.log(`  ${decodeBodyText(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]), 'gbk').text === '中文' ? '✅' : '❌'} 🔴 按 GBK 解码（不是硬套 utf-8，页面不吐乱码）`)
+  const longText = decodeBodyText(Buffer.alloc(WEB_GET_MAX_BODY_CHARS + 5, 0x61), undefined)
+  console.log(`  ${longText.text.length === WEB_GET_MAX_BODY_CHARS && longText.truncated === true ? '✅' : '❌'} 正文超过 ${WEB_GET_MAX_BODY_CHARS} 字符 → 截断并标记`)
+  const badCs = (() => { try { decodeBodyText(Buffer.from('x'), 'nope-9') } catch (e) { return e.message } })()
+  console.log(`  ${/不认识/.test(String(badCs)) ? '✅' : '❌'} 不认识的 charset 直接报错：${String(badCs).slice(0, 20)}…`)
+
+  // ④ 真链路：对着**本机 http 服务**跑（注入 lookup/assertPublic —— 本机是私网地址，正常路径会拒）
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+  const PAGE = '<h1>标题</h1><p>正文</p>'
+  const serve = (handler) => new Promise((resolve) => {
+    const s = createServer(handler)
+    s.listen(0, '127.0.0.1', () => resolve({ server: s, port: s.address().port }))
+  })
+  const a = await serve((req, res) => {
+    if (req.url === '/page.html') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(PAGE); return }
+    if (req.url === '/api.json') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"a":1}'); return }
+    if (req.url === '/ok.png') { res.writeHead(200, { 'content-type': 'image/png' }); res.end(PNG); return }
+    if (req.url === '/gbk.html') { res.writeHead(200, { 'content-type': 'text/html; charset=gbk' }); res.end(Buffer.from([0xd6, 0xd0, 0xce, 0xc4])); return }
+    if (req.url === '/gzip.html') { res.writeHead(200, { 'content-type': 'text/html', 'content-encoding': 'gzip' }); res.end(gzipSync(Buffer.from(PAGE))); return }
+    if (req.url === '/br.json') { res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'br' }); res.end(brotliCompressSync(Buffer.from('{"b":2}'))); return }
+    if (req.url === '/weird.html') { res.writeHead(200, { 'content-type': 'text/html', 'content-encoding': 'zstd' }); res.end(PAGE); return }
+    if (req.url === '/bmp.png') { res.writeHead(200, { 'content-type': 'image/bmp' }); res.end(PNG); return }
+    if (req.url === '/noct') { res.writeHead(200, {}); res.end('x'); return }
+    if (req.url === '/big.txt') { res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '4096' }); res.end(Buffer.alloc(4096, 0x61)); return }
+    if (req.url === '/chunked.txt') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end(Buffer.alloc(4096, 0x61)); return }
+    if (req.url === '/big.png') { res.writeHead(200, { 'content-type': 'image/png', 'content-length': '4096' }); res.end(Buffer.alloc(4096, 1)); return }
+    if (req.url === '/redir.html') { res.writeHead(302, { location: '/page.html' }); res.end(); return }
+    if (req.url === '/cross.html') { res.writeHead(302, { location: `http://127.0.0.1:${b.port}/page.html` }); res.end(); return }
+    if (req.url === '/404') { res.writeHead(404); res.end('nope'); return }
+    res.writeHead(404); res.end()
+  })
+  const b = await serve((req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<p>x</p>') })
+  const local = (path) => `http://127.0.0.1:${a.port}${path}`
+  const seams = { lookup: async () => [{ address: '127.0.0.1', family: 4 }], assertPublic: () => true, timeoutMs: 5000 }
+  try {
+    const html = await fetchUrl(local('/page.html'), seams)
+    console.log(`  ${html.kind === 'html' && html.statusCode === 200 && html.body.toString() === PAGE && html.charset === 'utf-8' ? '✅' : '❌'} 🔴 抓到 HTML：kind=html + 正文 + charset（${html.mediaType}）`)
+    const json = await fetchUrl(local('/api.json'), seams)
+    console.log(`  ${json.kind === 'text' && json.body.toString() === '{"a":1}' ? '✅' : '❌'} JSON 归 text（宿主同款分类）`)
+    const png = await fetchUrl(local('/ok.png'), seams)
+    console.log(`  ${png.kind === 'image' && png.format === 'png' && Buffer.compare(png.body, PNG) === 0 ? '✅' : '❌'} 🔴 抓到图片：kind=image + format + 原始字节（${png.body.length} 字节）`)
+    const gbk = await fetchUrl(local('/gbk.html'), seams)
+    console.log(`  ${gbk.charset === 'gbk' && decodeBodyText(gbk.body, gbk.charset).text === '中文' ? '✅' : '❌'} 端到端 GBK：声明 + 解码都对`)
+    const gz = await fetchUrl(local('/gzip.html'), seams)
+    console.log(`  ${gz.body.toString() === PAGE ? '✅' : '❌'} 🔴 gzip 响应自动解压（我们没声明 accept-encoding，服务器硬压也认）`)
+    const br = await fetchUrl(local('/br.json'), seams)
+    console.log(`  ${br.body.toString() === '{"b":2}' ? '✅' : '❌'} brotli 也解`)
+    const weird = await fetchUrl(local('/weird.html'), seams).catch((e) => e.message)
+    console.log(`  ${/不支持的压缩方式/.test(String(weird)) ? '✅' : '❌'} 不认识的 content-encoding 明确报错（不吐二进制垃圾）`)
+    const bmp = await fetchUrl(local('/bmp.png'), seams).catch((e) => e.message)
+    console.log(`  ${/不受支持/.test(String(bmp)) && /image\/bmp/.test(String(bmp)) ? '✅' : '❌'} 🔴 image/bmp（是图片但没内置）也算不支持，且**在读 body 之前**就拒`)
+    const noct = await fetchUrl(local('/noct'), seams).catch((e) => e.message)
+    console.log(`  ${/未知类型/.test(String(noct)) ? '✅' : '❌'} 没有 Content-Type 也拒（不猜）`)
+    const bigTxt = await fetchUrl(local('/big.txt'), { ...seams, maxBytes: 64 }).catch((e) => e.message)
+    console.log(`  ${/响应太大/.test(String(bigTxt)) ? '✅' : '❌'} 🔴 声明了 Content-Length 且超上限 → 直接报错（与宿主 provider 同款）：${String(bigTxt).slice(0, 22)}`)
+    const chunked = await fetchUrl(local('/chunked.txt'), { ...seams, maxBytes: 64 })
+    console.log(`  ${chunked.truncatedByBytes === true && chunked.body.length === 64 ? '✅' : '❌'} 🔴 没声明长度、边下边超上限 → **截断**（不算错，body=${chunked.body.length}）`)
+    const bigImg = await fetchUrl(local('/big.png'), { ...seams, maxBytes: 64 }).catch((e) => e.message)
+    console.log(`  ${/太大/.test(String(bigImg)) ? '✅' : '❌'} 🔴 图片超上限 → **报错**（截一半的图是坏图）：${String(bigImg).slice(0, 20)}`)
+    const redir = await fetchUrl(local('/redir.html'), seams)
+    console.log(`  ${redir.kind === 'html' && redir.url.endsWith('/page.html') ? '✅' : '❌'} 同源跳转照跟（最终 ${new URL(redir.url).pathname}）`)
+    const cross = await fetchUrl(local('/cross.html'), seams).catch((e) => e.message)
+    console.log(`  ${/跨域跳转/.test(String(cross)) ? '✅' : '❌'} 🔴 跨域跳转不跟（要用户直接抓最终地址）`)
+    const nf = await fetchUrl(local('/404'), seams).catch((e) => e.message)
+    console.log(`  ${/HTTP 404/.test(String(nf)) ? '✅' : '❌'} 非 2xx 报错带状态码：${String(nf).slice(0, 20)}`)
+    // 默认参数（不注入）：127.0.0.1 必须被"只允许公网"挡下 —— 这条不发任何请求
+    const blocked = await fetchUrl(local('/page.html')).catch((e) => e.message)
+    console.log(`  ${/非公网地址/.test(String(blocked)) ? '✅' : '❌'} 🔴 默认参数下私网地址直连被拒（只允许公网）`)
+    const fileScheme = await fetchUrl('file:///etc/passwd', seams).catch((e) => e.message)
+    console.log(`  ${/只支持 http\/https/.test(String(fileScheme)) ? '✅' : '❌'} 非 http(s) 拒`)
+    const creds = await fetchUrl('http://u:p@127.0.0.1/x.png', seams).catch((e) => e.message)
+    console.log(`  ${/不允许带用户名\/密码/.test(String(creds)) ? '✅' : '❌'} 🔴 URL 带凭据拒（别把用户名密码发出去）`)
+  } finally {
+    a.server.close(); b.server.close()
+  }
+  console.log(`  ${/fetchUrl\(raw, \{ signal: exec\?\.signal \}\)/.test(idxSrc) && /from '\.\/src\/webget\.mjs'/.test(idxSrc) ? '✅' : '❌'} 工具接上了 webget（一次请求、文本与图片同一套）`)
+}
+}
+
 console.log('\n--- 客户端 bundle（client.js 静态检查）---')
 {
   const { readFileSync } = await import('node:fs')
@@ -4139,6 +4308,23 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
     ['开关叫「允许联网搜索」，描述逐字（MC+ 不受限）', /label: '允许联网搜索'/.test(code) && /允许MC模式下的助手联网搜索内容，MC\+模式不受限制/.test(code)],
     ['「允许联网搜索」开关一拨就存（乐观更新 + 失败回滚）', /setAllowWebSearch\(want\)/.test(code) && /allowWebSearch: want/.test(code) && /if \(!ok\) setAllowWebSearch\(prev\)/.test(code)],
     ['前端把服务端值按"默认开"读（!== false）', /setAllowWebSearch\(c\.allowWebSearch !== false\)/.test(code)],
+    // ── 「联网搜索」页 → 「网页抓取」组（2026-10-08）：开关（默认关）+ 允许所有域名 + 域名表（一行一条）──
+    ['「网页抓取」组：开关「允许网页抓取」+ 「允许所有域名」', /label: '允许网页抓取'/.test(code) && /label: '允许所有域名'/.test(code)],
+    ['🔴 抓取开关的小字是定稿原文（MC+ 的 web_fetch 归宿主管）', /desc: '允许助手抓取网页完整内容。MC\+模式的web_fetch工具受宿主管理不受本开关限制'/.test(code)],
+    ['抓取开关一拨就存（乐观更新 + 失败回滚）', /setWebFetchOn\(want\)/.test(code) && /webFetchEnabled: want/.test(code) && /if \(!ok\) setWebFetchOn\(prev\)/.test(code)],
+    ['「允许所有域名」一拨就存（乐观更新 + 失败回滚）', /setFetchAllDomains\(want\)/.test(code) && /allowAllFetchDomains: want/.test(code) && /if \(!ok\) setFetchAllDomains\(prev\)/.test(code)],
+    ['域名表：一行一条 + 保存按钮 + 写法提示（精确/通配/正则/*）', /允许抓取的域名（一行一条）/.test(code) && /webFetchDomains: textToWhitelist\(fetchDomainsText\)/.test(code) && /\*\.minecraft\.wiki/.test(code)],
+    ['🔴 布局照「指令白名单」：「允许所有域名」排在域名表**之前**', code.indexOf("label: '允许所有域名'") > 0 && code.indexOf("label: '允许所有域名'") < code.indexOf('允许抓取的域名（一行一条）')],
+    ['🔴 「允许所有域名」打开时域名表**变灰只读**（并说明不再生效）', /已允许所有域名，域名表不再生效/.test(code) && /if \(!fetchAllDomains\) onFetchDomainsText/.test(code)],
+    ['域名表按"默认关"读（=== true）', /setWebFetchOn\(c\.webFetchEnabled === true\)/.test(code) && /setFetchAllDomains\(c\.allowAllFetchDomains === true\)/.test(code)],
+    // 「允许的内容类型」（2026-10-08）：两个开关，默认都开（宿主只回 html / text 两类，粒度只能到这）
+    ['「允许的内容类型」两个开关：网页 HTML / 文本', /'允许的内容类型'/.test(code) && /label: '网页 HTML'/.test(code) && /label: '文本'/.test(code)],
+    ['两个开关默认**开**（!== false）＋一拨就存 + 失败回滚', /setFetchAllowHtml\(c\.webFetchAllowHtml !== false\)/.test(code) && /setFetchAllowText\(c\.webFetchAllowText !== false\)/.test(code) && /setFetchAllowHtml\(want\)/.test(code) && /if \(!ok\) setFetchAllowHtml\(prev\)/.test(code) && /setFetchAllowText\(want\)/.test(code) && /if \(!ok\) setFetchAllowText\(prev\)/.test(code)],
+    ['「允许的内容类型」第三个开关：图片（内置 png/jpeg/gif/webp）', /label: '图片'/.test(code) && /png \/ jpeg \/ gif \/ webp/.test(code)],
+    ['图片开关一拨就存（乐观更新 + 失败回滚）', /setFetchAllowImage\(want\)/.test(code) && /webFetchAllowImage: want/.test(code) && /if \(!ok\) setFetchAllowImage\(prev\)/.test(code)],
+    ['🔴 没有可配置的图片格式表（内置四种，页面只说明）', !/允许的图片格式/.test(code) && !/webFetchImageFormats/.test(code)],
+    ['图片开关的说明里写出内置四种格式（不再是单独的提示行）', /label: '图片'/.test(code) && /png \/ jpeg \/ gif \/ webp/.test(code) && !/只支持上面那四种格式/.test(code)],
+    ['🔴 三类都关时页面明说"什么都抓不了"', /三类都关着，助手什么都抓不了/.test(code) && /!fetchAllowHtml && !fetchAllowText && !fetchAllowImage/.test(code)],
     // ── 「调试」页（2026-10-05）：工作区无关的「开放助手调试工具」开关 ──
     ['「调试」页存在（DebugPane + data-wc-pane-page:debug）', /function DebugPane/.test(code) && /'data-wc-pane-page': 'debug'/.test(code)],
     ['标签页叫「调试」，开关叫「开放助手调试工具」', /label: '调试'/.test(code) && /label: '开放助手调试工具'/.test(code)],

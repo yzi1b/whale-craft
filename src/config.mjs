@@ -150,6 +150,39 @@ export const DEFAULT_CONFIG = {
    * **工作区无关**（全局 config.json）。
    */
   allowWebSearch: true,
+  /**
+   * 「MC设置 → 联网搜索」页的「网页抓取」：是否向助手暴露 **`mc_kit_web_fetch`**（抓网页 → 文本 / 图片）。
+   * **默认关**（用户 2026-10-08 定）；**工作区无关**（全局 config.json）。
+   * 关时 MC / MC+ 都看不见它，guard 也硬拒。
+   * 抓取实现全在 `src/webget.mjs`（公网-only 的自己人写）——**不依赖宿主的联网服务**。
+   */
+  webFetchEnabled: false,
+  /**
+   * 允许抓取的域名表。写法与 `commandWhitelist` 同一套：
+   *   精确（`minecraft.wiki`）· 通配（`*.minecraft.wiki`，`*` = 任意字符）· 正则（`/^.+\.wiki$/`）· `*` = 全部放行。
+   * 大小写不敏感、只看主机名（忽略端口）；**空表 = 一个都不允许**（要放开就打开 {@link allowAllFetchDomains}）。
+   */
+  webFetchDomains: ['minecraft.wiki', '*.minecraft.wiki'],
+  /** 「网页抓取」的「允许所有域名」开关（默认关）：打开后不再看 {@link webFetchDomains}。 */
+  allowAllFetchDomains: false,
+  /**
+   * 「网页抓取 → 允许的内容类型」（**三个开关、默认都开**）。
+   *
+   * 🔴 2026-10-08 抓取**全自研**（`src/webget.mjs`，不再经宿主 `ctx.web`）⇒ 拿得到**真实 `Content-Type`**，
+   * 所以这里是**精确**判定（不是"粗到 html/text 两档"）：
+   *   · `html` = `text/html` / `application/xhtml+xml`；
+   *   · `text` = 其余 `text/*` + `application/json` / `application/xml` / `*+json` / `*+xml`（含 `image/svg+xml`）；
+   *   · `image` = **只支持内置那四种**（见 {@link webFetchAllowImage}）。
+   * 三个都关 = 什么都抓不了（guard 直接拒，不会白跑一次请求）。
+   */
+  webFetchAllowHtml: true,
+  webFetchAllowText: true,
+  /**
+   * 「允许的内容类型 → 图片」（默认**开**）：图片由**插件自己下载**（`src/webget.mjs`，和文本同一套逻辑）。
+   * 允许哪几种格式是**内置名单**（`WEB_IMAGE_FORMATS` = png / jpeg / gif / webp，= 宿主附件服务认的那四种），
+   * **不可配置**（用户 2026-10-08 定："只有内置的格式和未知的格式"）。
+   */
+  webFetchAllowImage: true,
 
 }
 
@@ -643,6 +676,48 @@ export class PluginConfig {
     return this.get('allowWebSearch') !== false
   }
 
+    /** 「网页抓取」开关（默认关）——MC / MC+ 模式下 `mc_kit_web_fetch` 是否进可见面 */
+  get webFetchEnabled () {
+    return this.get('webFetchEnabled') === true
+  }
+
+  /** 「允许所有域名」开关（默认关） */
+  get allowAllFetchDomains () {
+    return this.get('allowAllFetchDomains') === true
+  }
+
+  /** 允许抓取的域名表（非字符串项已剔除） */
+  get webFetchDomains () {
+    const v = this.get('webFetchDomains')
+    return Array.isArray(v) ? v.map((x) => String(x ?? '').trim()).filter(Boolean) : []
+  }
+
+  /** 这个主机名现在允许抓取吗（开关关 = 一律不允许） */
+  webFetchAllowedFor (host) {
+    if (!this.webFetchEnabled) return false
+    return hostAllowed(host, { allowAll: this.allowAllFetchDomains, list: this.webFetchDomains })
+  }
+
+  /** 「允许的内容类型 → 网页 HTML」开关（默认开） */
+  get webFetchAllowHtml () {
+    return this.get('webFetchAllowHtml') !== false
+  }
+
+  /** 「允许的内容类型 → 文本」开关（默认开；纯文本 / JSON / XML，含 SVG） */
+  get webFetchAllowText () {
+    return this.get('webFetchAllowText') !== false
+  }
+
+  /** 「允许的内容类型 → 图片」开关（默认开；格式是内置名单，不可配） */
+  get webFetchAllowImage () {
+    return this.get('webFetchAllowImage') !== false
+  }
+
+  /** 三类内容类型是不是**都被关掉**了（= 什么都抓不了） */
+  get webFetchNoContentTypeAllowed () {
+    return !this.webFetchAllowHtml && !this.webFetchAllowText && !this.webFetchAllowImage
+  }
+
   /** 这个 preset id 算不算 MC 模式 */
   isMcModePreset (presetId) {
     if (!presetId) return false
@@ -686,6 +761,47 @@ export class PluginConfig {
 
 /* ─────────────── 内部工具 ─────────────── */
 
+/** 转义正则元字符（通配域名要拼进 `RegExp`） */
+const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * 主机名是否在允许抓取的域名表里。写法与 `commandAllowed` **同一套**（用户 2026-10-08："类似现在的允许指令"）：
+ *   · 精确：`minecraft.wiki`（整个主机名相等）
+ *   · 通配：`*.minecraft.wiki`（`*` = 任意字符；因此**不含**裸域，裸域要另写一条 —— 默认表就是这么配的）
+ *   · 正则：`/^.+\.wiki$/`（斜杠包裹，可带 flags，缺省 `i`）
+ *   · `*`：全部放行
+ * 大小写不敏感；只看主机名（端口、路径不参与）。
+ * @param {string} host - URL 的主机名（可带端口，会被忽略）
+ * @param {{allowAll?: boolean, list?: string[]}} [rules]
+ * @returns {boolean}
+ */
+export function hostAllowed (host, { allowAll = false, list = [] } = {}) {
+  if (allowAll) return true
+  const h = String(host ?? '').trim().toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '')
+  if (!h) return false
+  for (const entry of Array.isArray(list) ? list : []) {
+    const e = String(entry ?? '').trim()
+    if (!e) continue
+    if (e === '*') return true
+    if (e.startsWith('/') && e.lastIndexOf('/') > 0) {
+      const end = e.lastIndexOf('/')
+      try {
+        if (new RegExp(e.slice(1, end), e.slice(end + 1) || 'i').test(h)) return true
+      } catch { /* 坏正则忽略 */ }
+      continue
+    }
+    if (e.includes('*')) {
+      const pattern = e.toLowerCase().split('*').map(escapeRe).join('.*')
+      try {
+        if (new RegExp(`^${pattern}$`, 'i').test(h)) return true
+      } catch { /* 理论上不会走到 */ }
+      continue
+    }
+    if (e.toLowerCase() === h) return true
+  }
+  return false
+}
+
 function validate (top, rest, value) {
   const key = [top, ...rest].join('.')
   const isStrArray = Array.isArray(value) && value.every((x) => typeof x === 'string')
@@ -702,8 +818,14 @@ function validate (top, rest, value) {
     return
   }
   if (top === 'allowAllCommands' || top === 'ensureMcPreset' || top === 'exposeDebugTools'
-    || top === 'allowWebSearch' || top === 'expressWebEnabled' || top === 'expressDesktopEnabled') {
+    || top === 'allowWebSearch' || top === 'expressWebEnabled' || top === 'expressDesktopEnabled'
+    || top === 'webFetchEnabled' || top === 'allowAllFetchDomains'
+    || top === 'webFetchAllowHtml' || top === 'webFetchAllowText' || top === 'webFetchAllowImage') {
     if (typeof value !== 'boolean') throw new Error(`${top} 必须是 true/false`)
+    return
+  }
+  if (top === 'webFetchDomains') {
+    if (!isStrArray) throw new Error('webFetchDomains 必须是字符串数组（如 ["minecraft.wiki","*.minecraft.wiki","/^.+\\\\.wiki$/"]）')
     return
   }
   if (top === 'expressWebBase') {

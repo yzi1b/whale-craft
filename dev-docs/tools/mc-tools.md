@@ -8,8 +8,8 @@
 
 | 模式         | 暴露范围                                                                                                                                                                                                          |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **MC模式**   | 本插件：`mc_*` 除 `mc_admin_config` 外的 + `mc_kit_*` <br>宿主：文件工具 `read`/`write`/`edit`/`glob`/`grep`/`read_image` + 后台任务 `job_list`/`job_output`/`job_kill` + 目标 `get_goal`/`create_goal`/`update_goal` + `todo_write` + 联网搜索 `web_search`（受「MC设置 → 联网搜索」的 `allowWebSearch` 开关控制，默认开）+ `mcMode.allowOtherTools` 配置项<br>**不含** `mc_admin_config`、`present`（交付走 `mc_kit_express`）、`web_fetch`（抓取走 `mc_kit_web_fetch`） |
-| **MC+模式**  | 全部本插件工具（含`mc_admin_config`）；不套白名单，另见标准模式全量工具                                                                                                                                             |
+| **MC模式**   | 本插件：`mc_*` 除 `mc_admin_config` 外的 + `mc_kit_*`（其中 `mc_kit_web_fetch` 受「MC设置 → 联网搜索 → 网页抓取」的 `webFetchEnabled` 开关控制，默认关）<br>宿主：文件工具 `read`/`write`/`edit`/`glob`/`grep`/`read_image` + 后台任务 `job_list`/`job_output`/`job_kill` + 目标 `get_goal`/`create_goal`/`update_goal` + `todo_write` + 联网搜索 `web_search`（受「MC设置 → 联网搜索」的 `allowWebSearch` 开关控制，默认开）+ `mcMode.allowOtherTools` 配置项<br>**不含** `mc_admin_config`、`present`（交付走 `mc_kit_express`）、宿主的 `web_fetch`（抓取走 `mc_kit_web_fetch`） |
+| **MC+模式**  | 全部本插件工具（含`mc_admin_config`；`mc_kit_web_fetch` 同样受 `webFetchEnabled` 门控）；不套白名单，另见标准模式全量工具                                                                                                                                             |
 | **其他模式** | 仅`mc_admin_config`（`mc_*` / `mc_kit_*` 全部隐藏，另有 guard 硬拒兜底）                                                                                                                                          |
 
     debug 工具，在设置后启用调试工具后，在且只在 MC / MC+ 模式下暴露与生效。
@@ -218,6 +218,19 @@
 - **描述**：操作文件系统。**MC模式**下只能操作 `.whale-craft/` 下，**MC+模式**按宿主设置（一般为工作区）。
 - **参数**：`action:string*`（copy / move / delete / make_dir）、`from:string`（copy/move 必须）、`to:string`（copy/move 必须，末尾不带/则是作为目标文件或目录，或是合并目录，带/则是放到目录下）、`path:string`（delete/make_dir 必须）、`overwrite:bool=false`（控制copy、move是否覆盖）
 - **备注**：路径为绝对路径，或**相对于工作区目录**的相对路径。copy、move 的 `from` 与 delete 的 `path` 允许末尾通配符 `/*`（意为选中目录下所有子项）；此时 copy/move 的 `to` 必须是目录、**不存在会自动创建**。操作均递归；**符号链接一律按链接本身处理（不跟随其目标）**。**受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径不可删改**（通配命中则跳过并报告）。守卫不区分大小写。不允许末尾是“/.”或“\.”的情况。工作区目录、记忆目录及选中其子文件的通配符不能被移动的from、删除选中，否则返回错误消息。不显式覆盖时，出现重叠则返回错误消息。任何失败的操作都应在动手前停止并返回错误信息，不可有副作用。
+
+### `mc_kit_web_fetch`
+
+- **描述**：抓取一个 HTTP(S) 地址，把内容给助手看。**文本类**（HTML 转 markdown 风格纯文本）与宿主 `web_fetch` 同形（首行 `Fetched <url> (HTTP <status>)` + 反注入声明 + 正文 + 截断尾注，总长上限 200000 字符）；**图片**会直接附图给模型（模型有视觉时）或落盘。**不需要**宿主 `web_fetch` 工具启用，也**不依赖宿主的联网服务**。
+- **参数**：`url:string*`、`reply:bool=true`、`dist:string`（`reply` / `dist` 语义**照 `mc_map` / `mc_height`**：`reply=false` 只写文件、回一行 stub；写文件与 reply 互不影响）。
+- **超时**：45s（抓取自身 30s 超时先触发，报错是"抓取超时"）
+- **内容范围（三类，用户 2026-10-08 定）**：
+  - **html**：`text/html` / `application/xhtml+xml` → 转成 markdown 风格文本；
+  - **text**：其余 `text/*` + `application/json` / `application/xml` / `*+json` / `*+xml`（含 `image/svg+xml`）；
+  - **image**：**只有内置那四种** —— `png` / `jpeg`（含 `image/jpg`）/ `gif` / `webp`（= 宿主附件服务认的 `imageLimits.mediaTypes`）。**其它一律算不支持**（不区分"是图片但没内置"与"根本不是图片"），在**读 body 之前**就拒。
+  - 三个开关（`webFetchAllowHtml` / `webFetchAllowText` / `webFetchAllowImage`，默认都开）**精确**对应上面三类。
+- **门控**：默认**关**。要在「MC设置 → 联网搜索 → 网页抓取」里打开「允许网页抓取」，并按 `webFetchDomains`（精确名 / `*.example.com` 通配 / `/正则/` / `*`，默认 `minecraft.wiki` + `*.minecraft.wiki`）或「允许所有域名」放行域名；「允许的内容类型」再收一道。**MC 与 MC+ 两档都受此门控**（白名单 + guard 双保险）。
+- **实现**：🔴 **全自研、一次请求**（用户 2026-10-08："全改成自己的可控逻辑，宿主的强关联就不要了"）—— 文本与图片都走 `src/webget.mjs`（**唯一出网口**：只允许 http/https、禁 URL 带凭据、**每个解析地址都必须是公网**、地址**钉死**、只跟同源跳转 ≤5、限大小 / 30s、按声明 charset 解码、`gzip`/`deflate`/`br` 自动解压）。防 SSRF 规则照宿主但**更严**（tunnelling / 转换前缀按内嵌 IPv4 复核）。渲染在 `src/webfetch.mjs`（轻量 HTML→markdown，无新依赖）。⚠️ **没有代理支持**（宿主 provider 有 `proxyRouteFor`）——代理部署下抓取可能连不上。
 
 ## 管理（`mc_admin_*`）
 

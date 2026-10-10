@@ -29,7 +29,7 @@ DSH host 进程
    ├─ McRegistry            agentId → McSession
    │   └─ McSession         McBot + events[]（≤200 条）+ Watchdog + selectedAccount
    │       └─ McBot         src/core.mjs：mineflayer 实例（一个游戏角色）
-   ├─ 工具注册（32 个）      mc_* 26 / mc_kit_* 3 / mc_admin_* 1 / mc_debug_* 2，全部经 asTool()
+   ├─ 工具注册（33 个）      mc_* 26 / mc_kit_* 4 / mc_admin_* 1 / mc_debug_* 2，全部经 asTool()
    ├─ HTTP（webServer）
    │   ├─ /api/mc/*                     状态/停止/设置（账户/配置/提示词/分享/preset 名单）
    │   └─ /api/whale-craft/express/*    发布区文件（**仅 web 模式且分享开启**时服务）
@@ -43,7 +43,7 @@ DSH host 进程
 浏览器
 └─ client.js
    ├─ McStatusBar           会话标题条状态 + 「强制停止」
-   ├─ McSettingsModal       账户 / 指令白名单 / 提示词 / 文件分享 四个标签页
+   ├─ McSettingsModal       账户 / 指令白名单 / 提示词 / 文件分享 / 联网搜索 / 调试 标签页
    └─ McSettingsDockEntry   新会话页（hero 区）的入口按钮
 ```
 
@@ -122,7 +122,7 @@ kind 变化先 release 再套新）：
 
 | 档 | preset | 可见性（`applyMcModePolicy`） | guard（每次调用现场判，切模式自愈） |
 | --- | --- | --- | --- |
-| `mc` | minecraft | `restrict({allow})` 白名单：mc_*（按 `hideAdminTools` 去 / 留 `mc_admin_*`）+ mc_kit_* + 文件工具（`MC_FILE_TOOLS`）+ **后台任务/目标/待办**（`job_*` / `get_goal` / `create_goal` / `update_goal` / `todo_write`，`MC_EXTRA_HOST_TOOLS`）+ **联网搜索**（宿主 `web_search`，`MC_WEB_SEARCH_TOOL`，按 `allowWebSearch`，默认开）+ `mcMode.allowOtherTools`；`mc_debug_*` 仅当 `exposeDebugTools` 开时才进（**不含** `present`：MC 模式不暴露文件交付，走 `mc_kit_express`） | ① admin 硬拒 ② `exposeDebugTools` 关时拒 `mc_debug_*` ③ `allowWebSearch` 关时拒 `web_search` ④ 凭据/secrets 硬拒 ⑤ 受保护文件只读 ⑥ 文件 jailed `.whale-craft/`（空路径也算越界）⑦ present 限会话工作区（若经 allowOtherTools 放行） |
+| `mc` | minecraft | `restrict({allow})` 白名单：mc_*（按 `hideAdminTools` 去 / 留 `mc_admin_*`）+ mc_kit_* + 文件工具（`MC_FILE_TOOLS`）+ **后台任务/目标/待办**（`job_*` / `get_goal` / `create_goal` / `update_goal` / `todo_write`，`MC_EXTRA_HOST_TOOLS`）+ **联网搜索**（宿主 `web_search`，`MC_WEB_SEARCH_TOOL`，按 `allowWebSearch`，默认开）+ `mcMode.allowOtherTools`；`mc_debug_*` 仅当 `exposeDebugTools` 开时才进；`mc_kit_web_fetch` 仅当 `webFetchEnabled` 开时才进（**不含** `present`：MC 模式不暴露文件交付，走 `mc_kit_express`） | ① admin 硬拒 ② `exposeDebugTools` 关时拒 `mc_debug_*` ③ `allowWebSearch` 关时拒 `web_search` ④ **`webFetchEnabled` 关 / 域名不在表里时拒 `mc_kit_web_fetch`**（两档 MC 都过）⑤ 凭据/secrets 硬拒 ⑥ 受保护文件只读 ⑦ 文件 jailed `.whale-craft/`（空路径也算越界）⑧ present 限会话工作区（若经 allowOtherTools 放行） |
 | `mc-plus` | minecraft-plus | **不套白名单**（组成=标准全表，mc/mckit 走全局注册直接可见；`mc_admin_*` 也可见）；仅当 `exposeDebugTools` 关时 `restrict({deny})` 掉 `mc_debug_*`。**联网搜索不受 `allowWebSearch` 影响**（全表里本来就有 tool-web） | 仅凭据/secrets 硬拒（文件全工作区；受保护文件按宿主默认） |
 | `other` | 其余 | `restrict({deny})`：`mc_*`（mc_admin_* 除外）+ `mc_kit_*` 从可见面摘掉 | **拒调** mc_* / mc_kit_*（mc_admin_* 除外）—— "不再给其他模式暴露"的第二道锁 |
 

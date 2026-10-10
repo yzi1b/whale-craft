@@ -3,7 +3,7 @@
 > 面向接手本仓库的 AI agent（**只给 agent 看、由 agent 维护**；需要人看的底层设计放 [`dev-docs/`](../dev-docs/)）。**先读这一页**，再按需进入各专题。
 > 仓库根有一份 [`AGENTS.md`](../AGENTS.md) 作为引导入口（DSH 宿主会把根 `AGENTS.md` 当工作区指令自动注入），
 > 它只放"先读这里 + 最硬的几条铁律 + 验证命令"，完整地图与铁律速查以本页为准。
-> 快照：whale_craft **0.2.0**（**开发中，未发布**；自 `v0.1.7` 起累计：issue #1 修复、`tools/dev.mjs`、26.2 兼容层移除、DSH 版本范围、插件页本地化、按工作区 config.json、**设置两态 + 插件页「设置」入口 + 「连接到MC」弹窗 + 文件分享改开关 + 调试/联网搜索开关**）；**0.2.0-beta.1（2026-10-06）**已作为预览发布，已知：registry 安装后 `failed to import`（宿主 resolver bug，见 history.md F14，`src/resolver-shim.mjs` 临时兜底），2026-10-06。
+> 快照：whale_craft **0.2.0**（**开发中，未发布**；自 `v0.1.7` 起累计：issue #1 修复、`tools/dev.mjs`、26.2 兼容层移除、DSH 版本范围、插件页本地化、按工作区 config.json、**设置两态 + 插件页「设置」入口 + 「连接到MC」弹窗 + 文件分享改开关 + 调试/联网搜索/网页抓取开关**）；**0.2.0-beta.1（2026-10-06）**已作为预览发布，已知：registry 安装后 `failed to import`（宿主 resolver bug，见 history.md F14，`src/resolver-shim.mjs` 临时兜底），2026-10-06。
 > 本文档写"机制与不变式（为什么）"；**细节以代码为准**，文档负责给地图与避坑指引。
 
 ## 项目一句话
@@ -24,11 +24,11 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 
 | 位置 | 角色 |
 | --- | --- |
-| `index.js`（~3.9k 行） | **host 半端入口**：`apply()` 装配一切 —— Config / McSession / Watchdog、29 个工具、HTTP API、提示词注入、MC模式/MC+模式 三档权限策略、归档保护、扩展加载 |
+| `index.js`（~3.9k 行） | **host 半端入口**：`apply()` 装配一切 —— Config / McSession / Watchdog、33 个工具、HTTP API、提示词注入、MC模式/MC+模式 三档权限策略、归档保护、扩展加载 |
 | `presets/*.patch.yml` | 「MC模式」「MC+模式」两个 preset 的**声明式**定义（0.2.0-rc.2+ 注册表；经 `dsh.bundle.patch` 数组随包挂载） |
 | `client.js`（~1.8k 行） | **浏览器半端 bundle**（手写 factory，无构建步骤，HMR 热更）：状态条 / MC设置弹窗 / 新会话页 hero 入口 |
 | `src/core.mjs`（~2k 行） | `McBot`：mineflayer 封装（连接/重连/动作/观察/协议护栏）；**不依赖 DSH**，可独立测试 |
-| `src/*.mjs` | 协作模块（watchdog / memory / config / **wsconfig** / **protected** / accounts / agentsmd / express / **express-server** / image / png / lan / ping / wait / user-message / version-prompt / **resolver-shim** …），全部由 index.js 组装 |
+| `src/*.mjs` | 协作模块（watchdog / memory / config / **wsconfig** / **protected** / accounts / agentsmd / express / **express-server** / **webfetch** / **webget** / image / png / lan / ping / wait / user-message / version-prompt / **resolver-shim** …），全部由 index.js 组装 |
 | `tools/` | `check-core.mjs`（静态检查）、`dev.mjs`（隔离调试实例，**本机主用**）、`isolate.mjs`（老方式，需 DSH 源码 checkout） |
 | `selfcheck.mjs`（~3.5k 行） | 600+ 条离线断言：假 ctx 加载**真** `apply()`，不连 MC |
 | `scripts/` | `publish-npm.mjs`（本机手动发 npm）、`land-workflow-fix.mjs`（工作流文件落地）、`release.workflow.yml`（模板） |
@@ -43,7 +43,7 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 | 文档 | 内容 | 何时读 |
 | --- | --- | --- |
 | [architecture.md](architecture.md) | 全局架构、运行时数据流、注入/唤醒/隔离/自举机制、HTTP 面 | 想理解"系统怎么转" |
-| [tool-catalog.md](tool-catalog.md) | 29 个工具逐个说明 + 通用约定 | 改/加工具时 |
+| [tool-catalog.md](tool-catalog.md) | 33 个工具逐个说明 + 通用约定 | 改/加工具时 |
 | [src-modules.md](src-modules.md) | src/ 模块参考：导出、语义、不变式、坑 | 改某个模块时 |
 | [client-ui.md](client-ui.md) | 浏览器半端：插槽扩展点、**图标约定**、root vs 会话作用域 | 改 client.js / 加 UI 入口时 |
 | [dev-workflow.md](dev-workflow.md) | 本机环境硬约束、隔离铁律、自检、调试、升级敏感点 | **动手前必读** |

@@ -49,9 +49,9 @@ npm run check                 # = check-core + selfcheck
 
 | 位置 | 角色 |
 | --- | --- |
-| `index.js` | host 半端入口：`apply()` 装配一切（会话/看门狗/29 个工具/HTTP/提示词注入/权限策略） |
+| `index.js` | host 半端入口：`apply()` 装配一切（会话/看门狗/33 个工具/HTTP/提示词注入/权限策略） |
 | `client.js` | 浏览器半端 bundle（手写 factory，无构建步骤，HMR 热更） |
-| `src/*.mjs` | 15 个协作模块（core = mineflayer 封装，**不依赖 DSH**，可独立测试） |
+| `src/*.mjs` | 协作模块（core = mineflayer 封装，**不依赖 DSH**，可独立测试） |
 | `presets/*.patch.yml` | 「MC模式」「MC+模式」两个 preset 的声明式定义 |
 | `selfcheck.mjs` | 600+ 条离线断言：假 ctx 加载**真** `apply()`，不连 MC |
 | `tools/` | `check-core.mjs`（静态检查）、`dev.mjs`（隔离调试实例） |

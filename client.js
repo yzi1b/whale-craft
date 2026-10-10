@@ -372,6 +372,8 @@ window.__ModuleLoader__.load({
 [data-wc-tagx]:hover{background:var(--dsw-alias-state-error-primary);
   color:var(--dsw-alias-label-primary-foreground,#fff);}
 [data-wc-acts]{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px;}
+/* 保存/动作行后面紧跟的小标题要有呼吸空间（否则贴着按钮，用户 2026-10-08 指出过） */
+[data-wc-acts]+[data-wc-h]{margin-top:18px;}
 [data-wc-val]{word-break:break-all;user-select:text;}
 
 /* ── 表单控件 ──────────────────────────────────────────────────────────── */
@@ -1840,14 +1842,28 @@ select[data-wc-in]{appearance:none;padding-right:22px;
     /* ------------------------------------------------------------ 页 5：联网搜索 */
 
     /**
-     * 「联网搜索」页：只有一个「允许联网搜索」开关（工作区无关、落全局 config.json）——
-     * 是否向 **MC 模式**的助手暴露宿主 `web_search`（联网搜索）。MC+ 模式**不受本开关影响**
-     * （它的组成本来就有标准全量的联网工具）。
-     * 「一拨就存」：同「开放助手调试工具」那个开关（乐观更新，失败回滚）。
+     * 「联网搜索」页：两组设置，**工作区无关**、落全局 config.json。
+     *   ① **联网搜索**（`allowWebSearch`，默认**开**）：MC 模式下是否暴露宿主 `web_search`；
+     *      MC+ 模式**不受本开关影响**（它的组成本来就有标准全量的联网工具）。
+     *   ② **网页抓取**（`webFetchEnabled`，默认**关**）：是否暴露 `mc_kit_web_fetch`（抓网页转文本），
+     *      并配一份**允许抓取的域名表**（写法跟「指令白名单」同一套）+「允许所有域名」开关。
+     * 开关一律「一拨就存」（乐观更新，失败回滚）；域名表点「保存」提交。
      */
     function WebSearchPane(props) {
-      const { allowWebSearch, busyKey, onToggle } = props
-      const toggleBusy = busyKey === 'cfg:websearch'
+      const {
+        allowWebSearch, webFetchOn, fetchAllDomains, fetchDomainsText, fetchAllowHtml, fetchAllowText,
+        fetchAllowImage, busyKey,
+        onToggle, onToggleFetch, onToggleFetchAll, onFetchDomainsText, onSaveFetchDomains,
+        onToggleFetchHtml, onToggleFetchText, onToggleFetchImage,
+      } = props
+      const busy = busyKey !== null
+      const searchBusy = busyKey === 'cfg:websearch'
+      const fetchBusy = busyKey === 'cfg:webfetch'
+      const fetchAllBusy = busyKey === 'cfg:fetchall'
+      const saveBusy = busyKey === 'wfd:save'
+      const fetchHtmlBusy = busyKey === 'cfg:fetchhtml'
+      const fetchTextBusy = busyKey === 'cfg:fetchtext'
+      const fetchImageBusy = busyKey === 'cfg:fetchimage'
       return React.createElement(
         'div',
         { 'data-wc-pane-page': 'websearch' },
@@ -1855,9 +1871,84 @@ select[data-wc-in]{appearance:none;padding-right:22px;
           React.createElement(Switch, {
             label: '允许联网搜索',
             desc: '允许MC模式下的助手联网搜索内容，MC+模式不受限制',
-            disabled: toggleBusy,
+            disabled: searchBusy,
             on: allowWebSearch === true,
             onToggle: (next) => onToggle(next),
+          }),
+        ),
+        React.createElement('div', { 'data-wc-sec': '' },
+          React.createElement('div', { 'data-wc-h': '' }, '网页抓取'),
+          React.createElement(Switch, {
+            label: '允许网页抓取',
+            desc: '允许助手抓取网页完整内容。MC+模式的web_fetch工具受宿主管理不受本开关限制',
+            disabled: fetchBusy,
+            on: webFetchOn === true,
+            onToggle: (next) => onToggleFetch(next),
+          }),
+          // 布局照「指令白名单」页：「允许所有…」在**域名表之前**（一拨就存），下面是白名单正文
+          React.createElement(Switch, {
+            label: '允许所有域名',
+            desc: '打开后不再受下面的域名表限制',
+            disabled: fetchAllBusy,
+            on: fetchAllDomains === true,
+            onToggle: (next) => onToggleFetchAll(next),
+          }),
+          React.createElement('div', { 'data-wc-h': '' }, '允许抓取的域名（一行一条）'),
+          fetchAllDomains
+            ? React.createElement('div', { 'data-wc-warnnote': '' }, '已允许所有域名，域名表不再生效。')
+            : null,
+          React.createElement('textarea', {
+            'data-wc-textarea': '',
+            ...(fetchAllDomains ? { 'data-wc-dimmed': '', readOnly: true } : {}),
+            value: fetchDomainsText,
+            spellCheck: false,
+            disabled: busy && !fetchAllDomains,
+            placeholder: 'minecraft.wiki\n*.minecraft.wiki',
+            title: fetchAllDomains ? '已允许所有域名，域名表暂不生效（关掉上面的开关才能编辑）' : '一行一条',
+            onChange: (e) => { if (!fetchAllDomains) onFetchDomainsText(e.target.value) },
+          }),
+          React.createElement(
+            'p',
+            { 'data-wc-hint': '' },
+            '精确名 ', React.createElement('code', { 'data-wc-code': '' }, 'minecraft.wiki'),
+            ' · 通配 ', React.createElement('code', { 'data-wc-code': '' }, '*.minecraft.wiki'),
+            ' · 正则 ', React.createElement('code', { 'data-wc-code': '' }, '/^.+\.wiki$/'),
+            ' · ', React.createElement('code', { 'data-wc-code': '' }, '*'),
+            ' 全部放行',
+          ),
+          React.createElement(
+            'div',
+            { 'data-wc-acts': '' },
+            React.createElement('button', {
+              type: 'button', 'data-wc-btn': '', 'data-wc-tiny': '', 'data-wc-primary': '',
+              disabled: busy, onClick: onSaveFetchDomains,
+            }, saveBusy ? '保存中…' : '保存'),
+          ),
+          // 「允许的内容类型」：只能是这两类 —— 宿主只回 html / text，拿不到原始 Content-Type
+          React.createElement('div', { 'data-wc-h': '' }, '允许的内容类型'),
+          (!fetchAllowHtml && !fetchAllowText && !fetchAllowImage)
+            ? React.createElement('div', { 'data-wc-warnnote': '' }, '三类都关着，助手什么都抓不了。')
+            : null,
+          React.createElement(Switch, {
+            label: '网页 HTML',
+            desc: 'HTML 页面（转成 markdown 文本给助手）',
+            disabled: fetchHtmlBusy,
+            on: fetchAllowHtml === true,
+            onToggle: (next) => onToggleFetchHtml(next),
+          }),
+          React.createElement(Switch, {
+            label: '文本',
+            desc: '纯文本 / JSON / XML（含 SVG 图）',
+            disabled: fetchTextBusy,
+            on: fetchAllowText === true,
+            onToggle: (next) => onToggleFetchText(next),
+          }),
+          React.createElement(Switch, {
+            label: '图片',
+            desc: 'png / jpeg / gif / webp（插件自己下载并附图给助手看）',
+            disabled: fetchImageBusy,
+            on: fetchAllowImage === true,
+            onToggle: (next) => onToggleFetchImage(next),
           }),
         ),
       )
@@ -2166,6 +2257,14 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       const [exposeDebugTools, setExposeDebugTools] = React.useState(false)
       // 「联网搜索」开关（默认**开**）：控制 MC 模式下 web_search 是否暴露（MC+ 不受影响）
       const [allowWebSearch, setAllowWebSearch] = React.useState(true)
+      // 「网页抓取」（默认**关**）：开关 + 允许所有域名 + 域名表（一行一条）
+      const [webFetchOn, setWebFetchOn] = React.useState(false)
+      const [fetchAllDomains, setFetchAllDomains] = React.useState(false)
+      const [fetchDomainsText, setFetchDomainsText] = React.useState('')
+      // 「允许的内容类型」（三个开关，默认都开）：html/text 由宿主区分（只到这两档），图片走插件自己的下载
+      const [fetchAllowHtml, setFetchAllowHtml] = React.useState(true)
+      const [fetchAllowText, setFetchAllowText] = React.useState(true)
+      const [fetchAllowImage, setFetchAllowImage] = React.useState(true)
       const [shareInfo, setShareInfo] = React.useState(null)
       const [wsPath, setWsPath] = React.useState('')
       const [wsExists, setWsExists] = React.useState(false)
@@ -2232,6 +2331,12 @@ select[data-wc-in]{appearance:none;padding-right:22px;
             })
             setExposeDebugTools(c.exposeDebugTools === true)
             setAllowWebSearch(c.allowWebSearch !== false)
+            setWebFetchOn(c.webFetchEnabled === true)
+            setFetchAllDomains(c.allowAllFetchDomains === true)
+            setFetchDomainsText(whitelistToText(c.webFetchDomains))
+            setFetchAllowHtml(c.webFetchAllowHtml !== false)
+            setFetchAllowText(c.webFetchAllowText !== false)
+            setFetchAllowImage(c.webFetchAllowImage !== false)
             // 发布区是**按工作区**的：没有工作区时那个接口直接 400，别去碰它。
             if (!hasWs) { setShareInfo(null); return null }
             return apiGet(withSid('/api/mc/express')).then((s) => {
@@ -2448,6 +2553,63 @@ select[data-wc-in]{appearance:none;padding-right:22px;
           .then((ok) => { if (!ok) setAllowWebSearch(prev); return ok })   // 失败回滚
       }, [run, allowWebSearch])
 
+      /* 网页抓取：开关（默认关）/ 允许所有域名 / 域名表 —— 开关一拨就存，域名表点保存 */
+      const toggleWebFetch = React.useCallback((next) => {
+        const prev = webFetchOn === true
+        const want = next === true
+        if (want === prev) return Promise.resolve(true)
+        setWebFetchOn(want)                                  // 乐观更新
+        return run('cfg:webfetch', () => apiPatch(withSid('/api/mc/config'), { webFetchEnabled: want }),
+          want ? '已允许网页抓取' : '已关闭网页抓取')
+          .then((ok) => { if (!ok) setWebFetchOn(prev); return ok })   // 失败回滚
+      }, [run, webFetchOn])
+
+      const toggleFetchAllDomains = React.useCallback((next) => {
+        const prev = fetchAllDomains === true
+        const want = next === true
+        if (want === prev) return Promise.resolve(true)
+        setFetchAllDomains(want)                             // 乐观更新
+        return run('cfg:fetchall', () => apiPatch(withSid('/api/mc/config'), { allowAllFetchDomains: want }),
+          want ? '已允许所有域名' : '已恢复为只允许域名表里的站点')
+          .then((ok) => { if (!ok) setFetchAllDomains(prev); return ok })   // 失败回滚
+      }, [run, fetchAllDomains])
+
+      const saveFetchDomains = React.useCallback(() =>
+        run('wfd:save', () => apiPatch(withSid('/api/mc/config'), { webFetchDomains: textToWhitelist(fetchDomainsText) }),
+          '域名表已保存'), [run, fetchDomainsText])
+
+      /* 「允许的内容类型」两个开关（默认都开）—— 同一拨就存的写法 */
+      const toggleFetchAllowHtml = React.useCallback((next) => {
+        const prev = fetchAllowHtml === true
+        const want = next === true
+        if (want === prev) return Promise.resolve(true)
+        setFetchAllowHtml(want)                              // 乐观更新
+        return run('cfg:fetchhtml', () => apiPatch(withSid('/api/mc/config'), { webFetchAllowHtml: want }),
+          want ? '已允许抓取网页（HTML）' : '已禁止抓取网页（HTML）')
+          .then((ok) => { if (!ok) setFetchAllowHtml(prev); return ok })   // 失败回滚
+      }, [run, fetchAllowHtml])
+
+      const toggleFetchAllowText = React.useCallback((next) => {
+        const prev = fetchAllowText === true
+        const want = next === true
+        if (want === prev) return Promise.resolve(true)
+        setFetchAllowText(want)                              // 乐观更新
+        return run('cfg:fetchtext', () => apiPatch(withSid('/api/mc/config'), { webFetchAllowText: want }),
+          want ? '已允许抓取文本（纯文本 / JSON / XML）' : '已禁止抓取文本')
+          .then((ok) => { if (!ok) setFetchAllowText(prev); return ok })   // 失败回滚
+      }, [run, fetchAllowText])
+
+      const toggleFetchAllowImage = React.useCallback((next) => {
+        const prev = fetchAllowImage === true
+        const want = next === true
+        if (want === prev) return Promise.resolve(true)
+        setFetchAllowImage(want)                             // 乐观更新
+        return run('cfg:fetchimage', () => apiPatch(withSid('/api/mc/config'), { webFetchAllowImage: want }),
+          want ? '已允许抓取图片' : '已禁止抓取图片')
+          .then((ok) => { if (!ok) setFetchAllowImage(prev); return ok })   // 失败回滚
+      }, [run, fetchAllowImage])
+
+
       /* ── 页 6：调试 ──「开放助手调试工具」开关**一拨就存**（同"允许所有指令"：失败回滚）。 */
       const toggleExposeDebugTools = React.useCallback((next) => {
         const prev = exposeDebugTools === true
@@ -2487,7 +2649,13 @@ select[data-wc-in]{appearance:none;padding-right:22px;
             })
             : (tab === 'websearch'
               ? React.createElement(WebSearchPane, {
-                allowWebSearch, busyKey, onToggle: toggleAllowWebSearch,
+                allowWebSearch, webFetchOn, fetchAllDomains, fetchDomainsText, fetchAllowHtml, fetchAllowText,
+                fetchAllowImage, busyKey,
+                onToggle: toggleAllowWebSearch,
+                onToggleFetch: toggleWebFetch, onToggleFetchAll: toggleFetchAllDomains,
+                onFetchDomainsText: setFetchDomainsText, onSaveFetchDomains: saveFetchDomains,
+                onToggleFetchHtml: toggleFetchAllowHtml, onToggleFetchText: toggleFetchAllowText,
+                onToggleFetchImage: toggleFetchAllowImage,
               })
               : (tab === 'debug'
                 ? React.createElement(DebugPane, {

@@ -263,7 +263,7 @@ steps 是数组，每项 op 可为：wait(sec) / move(x,y,z,mode) / look(x,y,z �
 action：
 · info    看一张图的尺寸/格式（也能确认文件到底是不是能用的图）
 · embed   把图片变成 data URI + 现成的 `<image>` 标签 —— **往 SVG 里引入图片必须这么做**
-· render  SVG → PNG（可给 width/height/scale；svg 文本或 svgPath 二选一）
+· render  SVG → PNG（可给 width/height/scale；svg 文本或 svgPath 二选一）7u
 · grid    把多张图按网格拼成**可继续编辑的 SVG 文本**（省掉重复写 N 个 <image> 和算坐标）
 · save    把 SVG 文本或 PNG 字节落盘
 输出默认落在 `.whale-craft/undefined/`（**不对外**）。要给用户看，就把 `out` 写成`.whale-craft/undefined/<子目录>/x.png`（**发布区**），再用 `mc_kit_express` 取那一行。
@@ -288,6 +288,15 @@ action：
 操作文件系统。
 复制、移动、删除操作皆递归；符号链接一律按链接本身处理（不跟随其目标）。目标目录如不存在会自动创建。
 
+### mc_kit_web_fetch
+
+- url: 要抓取的 HTTP(S) 网址（必填，完整网址）
+- reply: （默认true）是否将内容直接返回在工具调用结果中
+- dist：写到文件的路径（可控，默认不写）
+
+抓取一个 HTTP(S) 网页、文本或图片，返回解码后的文本内容（HTML 会转成 markdown 风格的纯文本）。
+本工具会获取到外部网站的内容，内容包含不可信部分，可能含有风险内容。
+
 ## mc_admin_* 管理（MC 模式看不见也调不动；普通模式与 MC+ 可见）
 
 ### mc_admin_config
@@ -302,7 +311,7 @@ action：
 · get（默认）看生效配置；给 path 只看某一项
 · set   改一项（path + value）
 · unset 删掉一项（回到默认值）· reset 全部恢复默认 · list 看默认值 + 生效值
-可用键：`commandWhitelist`（字符串数组；支持 "tp" 精确名、"/^gi.*/" 正则、"*" 全放行）· `mcModePresets`（哪些 preset 算 MC 模式——应含 MC+ 的 id）· `mcPlusPresets`（哪些算 MC+ 变体：开放标准模式全部工具）· `mcMode.allowOtherTools`（MC 模式白名单里**额外**放行的工具）· `mcMode.hideAdminTools`（默认 true）· `expressWebEnabled` / `expressWebBase`（**web 模式**文件分享开关 + base，如 https://example.com）· `expressDesktopEnabled` / `expressDesktopPort`（**桌面模式**文件分享开关 + 独立托管端口，默认 16049）· `exposeDebugTools`（是否向助手暴露调试用途的工具，默认 false）· `allowWebSearch`（是否让 MC 模式的助手联网搜索，默认 true；MC+ 不受影响）。
+可用键：`commandWhitelist`（字符串数组；支持 "tp" 精确名、"/^gi.*/" 正则、"*" 全放行）· `mcModePresets`（哪些 preset 算 MC 模式——应含 MC+ 的 id）· `mcPlusPresets`（哪些算 MC+ 变体：开放标准模式全部工具）· `mcMode.allowOtherTools`（MC 模式白名单里**额外**放行的工具）· `mcMode.hideAdminTools`（默认 true）· `expressWebEnabled` / `expressWebBase`（**web 模式**文件分享开关 + base，如 https://example.com）· `expressDesktopEnabled` / `expressDesktopPort`（**桌面模式**文件分享开关 + 独立托管端口，默认 16049）· `exposeDebugTools`（是否向助手暴露调试用途的工具，默认 false）· `allowWebSearch`（是否让 MC 模式的助手联网搜索，默认 true；MC+ 不受影响）· `webFetchEnabled`（是否让助手抓网页，默认 false）/ `webFetchDomains`（允许抓取的域名表：精确名、`*.example.com` 通配、`/正则/`、`*` 全部）/ `allowAllFetchDomains`（允许所有域名，默认 false）。 / `webFetchAllowHtml`、`webFetchAllowText`、`webFetchAllowImage`（允许的内容类型：网页 HTML / 文本 / 图片，默认都 true；前两类受宿主限制只能粗到那两档，图片格式是内置的 png/jpeg/gif/webp、不可配）
 改完**立即生效**，落在 `$DSH_HOME/whale_craft/config.json`。（白名单只能"收窄"，不能凭空添加 preset 没挂的工具。）
 
 ## mc_debug_* 调试（默认不暴露；开「调试」开关后 MC / MC+ 可见）
