@@ -239,8 +239,18 @@ steps 是数组，每项 op 可为：wait(sec) / move(x,y,z,mode) / look(x,y,z �
 
 以玩家身份执行服务器指令。**白名单可配置**（默认 tp/give/time/weather/say/gamemode/effect/setblock/fill/clone/summon/title/clear/xp）。要放行别的指令，在**普通会话**里用 `mc_admin_config` 改 `commandWhitelist`（MC 模式会话改不了）。
 ⚠️ 这是**最后手段**：正经动作优先 `mc_act` / `mc_build` / `mc_move`（那些不需要 OP）。
+使用 mc_kit_rules{type:command} 获取可以使用的指令列表。
 
 ## mc_kit_*
+
+### mc_kit_rules
+
+- type：必填，字符串（command / web_fetch）
+
+获取当前生效的规则策略（只读）。`type`：
+· `command`   —— `mc_command` 能用的服务器指令（白名单 / 是否全放行）
+· `web_fetch` —— `mc_kit_web_fetch` 允许抓取的域名与内容类型
+规则由用户在「MC设置」里维护（MC 模式会话改不了）。
 
 ### mc_kit_image
 
@@ -296,6 +306,7 @@ action：
 
 抓取一个 HTTP(S) 网页、文本或图片，返回解码后的文本内容（HTML 会转成 markdown 风格的纯文本）。
 本工具会获取到外部网站的内容，内容包含不可信部分，可能含有风险内容。
+使用 mc_kit_rules{type:web_fetch} 获取允许的域名和内容类型。
 
 ## mc_admin_* 管理（MC 模式看不见也调不动；普通模式与 MC+ 可见）
 

@@ -201,6 +201,12 @@
 
 ## 游戏外辅助（`mc_kit_*`）
 
+### `mc_kit_rules`
+
+- **描述**：读取当前生效的规则策略（只读）：`command`（`mc_command` 的服务器指令白名单 / 是否全放行）、`web_fetch`（`mc_kit_web_fetch` 允许的域名与内容类型）。读的是 `mc_admin_config` 的同一份配置，只是不给改。
+- **参数**：`type:string*`（command / web_fetch）
+- **超时**：默认
+
 ### `mc_kit_image`
 
 - **描述**：图像：info/embed/render（SVG→PNG）/grid/save

@@ -286,12 +286,20 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   const { readFileSync } = await import('node:fs')
   const idx = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
   console.log(`  ${!tools.has('mc_kit_share') ? '✅' : '❌'} 🔴 mc_kit_share 已移除（它只是在调宿主**另装**的 dsh-file-host，插件本身没有文件服务器）`)
-  console.log(`  ${tools.size === 33 ? '✅' : '❌'} 工具数 33（实际 ${tools.size}）：mc_* 26 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 2`)
+  console.log(`  ${tools.size === 34 ? '✅' : '❌'} 工具数 34（实际 ${tools.size}）：mc_* 26 + mc_kit_* 5 + mc_admin_* 1 + mc_debug_* 2`)
   // 只看**代码**，不看注释：注释里留着"为什么删"的说明（那是要留的）
   const codeOnly = idx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
   console.log(`  ${!/uploadToFileHost|dsh-file-host|\/serve\/file-host|mc_kit_share/.test(codeOnly) ? '✅' : '❌'} 源码里没有上传/文件服务器残留（注释里保留"为什么删"的说明）`)
   console.log(`  ${tools.has('mc_kit_image') ? '✅' : '❌'} mc_kit_image 仍在（渲染 PNG）`)
   console.log(`  ${tools.has('mc_kit_fs') ? '✅' : '❌'} mc_kit_fs 新增（文件系统：copy/move/delete/make_dir，保留符号链接）`)
+  // 2026-10-12：mc_kit_rules（规则只读查询；MC 模式看不见 mc_admin_config，但要知道放行了什么）
+  {
+    const kr = tools.get('mc_kit_rules')
+    const krNames = Object.keys(kr?.parameters?.properties ?? {})
+    const krReq = kr?.parameters?.required ?? []
+    console.log(`  ${!!kr ? '✅' : '❌'} mc_kit_rules 已注册（按 type 只读回当前规则策略）`)
+    console.log(`  ${krNames.length === 1 && krNames[0] === 'type' && krReq.length === 1 && krReq[0] === 'type' && kr?.parameters?.properties?.type?.type === 'string' ? '✅' : '❌'} 🔴 参数 = 单个必填 type（实际 ${JSON.stringify(krNames)}，required=${JSON.stringify(krReq)}）`)
+  }
   // 2026-10-08：mc_kit_web_fetch（参数与宿主 web_fetch 一致：只有一个必填 url）
   {
     const wf = tools.get('mc_kit_web_fetch')
@@ -2103,6 +2111,14 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   const wlOk = await tools.get('mc_command').execute({ command: '/op me' }, A).catch((e) => e.message)
   console.log(`  ${/不在线/.test(String(wlOk)) ? '✅' : '❌'} 白名单内的指令放行（只因未连服而报"不在线"）`)
   await tools.get('mc_admin_config').execute({ action: 'reset' }, A)
+
+  // ③′ mc_kit_rules：MC 模式看不见 mc_admin_config，但这扇**只读**窗口要能报出当前规则（2026-10-12）
+  const rulesCmd = await tools.get('mc_kit_rules').execute({ type: 'command' }, A)
+  console.log(`  ${rulesCmd.type === 'command' && Array.isArray(rulesCmd.whitelist) && typeof rulesCmd.allowAll === 'boolean' ? '✅' : '❌'} mc_kit_rules{type:command} 报指令策略（白名单 ${rulesCmd.whitelist?.length} 条 + allowAll=${rulesCmd.allowAll}）`)
+  const rulesWf = await tools.get('mc_kit_rules').execute({ type: 'web_fetch' }, A)
+  console.log(`  ${rulesWf.type === 'web_fetch' && Array.isArray(rulesWf.domains) && rulesWf.contentTypes && typeof rulesWf.contentTypes.image === 'boolean' && Array.isArray(rulesWf.contentTypes.imageFormats) ? '✅' : '❌'} mc_kit_rules{type:web_fetch} 报抓取策略（域名 ${rulesWf.domains?.length} 条 + 内容类型 ${JSON.stringify({ h: rulesWf.contentTypes?.html, t: rulesWf.contentTypes?.text, i: rulesWf.contentTypes?.image })}）`)
+  const rulesBad = await tools.get('mc_kit_rules').execute({ type: 'nope' }, A).then(() => null).catch((e) => e.message)
+  console.log(`  ${/未知 type/.test(String(rulesBad)) ? '✅' : '❌'} mc_kit_rules 未知 type 报错：${String(rulesBad).slice(0, 40)}`)
 
   // ④ guard：MC 模式调管理工具必须被硬拒；普通模式不被拒
   const mcCtxObj = {}; presetByCtx.set(mcCtxObj, 'minecraft')

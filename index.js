@@ -2696,7 +2696,8 @@ export function apply(ctx, rawConfig) {
     description: '以玩家身份执行服务器指令。**白名单可配置**（默认 tp/give/time/weather/say/gamemode/effect/'
       + 'setblock/fill/clone/summon/title/clear/xp）。要放行别的指令，在**普通会话**里用 `mc_admin_config` 改 '
       + '`commandWhitelist`（MC 模式会话改不了）。\n'
-      + '⚠️ 这是**最后手段**：正经动作优先 `mc_act` / `mc_build` / `mc_move`（那些不需要 OP）。',
+      + '⚠️ 这是**最后手段**：正经动作优先 `mc_act` / `mc_build` / `mc_move`（那些不需要 OP）。\n'
+      + '使用 mc_kit_rules{type:command} 获取可以使用的指令列表。',
     parameters: { command: { type: 'string', required: true, description: '以 / 开头的完整指令' } },
     output: text(),
     async execute(args, exec) {
@@ -2708,6 +2709,53 @@ export function apply(ctx, rawConfig) {
           + '（要放行请在普通会话里用 mc_admin_config 改 commandWhitelist）')
       }
       return { sent: sess.bot.command(raw, { allow: (n) => pluginConfig.commandAllowed(n) }) }
+    },
+  }))
+
+  /* ── 规则查询（mc_kit_rules）──
+   * MC 模式看不见管理工具（`mc_admin_config`），但要正确用 `mc_command` / `mc_kit_web_fetch`
+   * 就得知道"当前放行了什么"。本工具是那扇**只读**窗口：按 `type` 回当前生效的策略，
+   * 读的是 mc_admin_config 的**同一份** config（用户改完立即反映），只是不给改。
+   * 目前两种：`command`（服务器指令白名单）· `web_fetch`（允许的域名 + 内容类型）。 */
+  ctx.tools.register(asTool({
+    name: 'mc_kit_rules',
+    description: '获取当前生效的规则策略（只读）。`type`：\n'
+      + '· `command`   —— `mc_command` 能用的服务器指令（白名单 / 是否全放行）\n'
+      + '· `web_fetch` —— `mc_kit_web_fetch` 允许抓取的域名与内容类型\n'
+      + '规则由用户在「MC设置」里维护（MC 模式会话改不了）。',
+    parameters: {
+      type: { type: 'string', required: true, description: '规则类别：command / web_fetch' },
+    },
+    output: text(),
+    async execute(args) {
+      const type = String(args.type ?? '').trim().toLowerCase()
+      switch (type) {
+        case 'command':
+          return {
+            type: 'command',
+            allowAll: pluginConfig.get('allowAllCommands') === true,
+            whitelist: pluginConfig.get('commandWhitelist'),
+            note: '白名单写法：精确指令名（"tp"）· 正则（斜杠包裹，"/^gi.*/"）· "*" = 全放行。'
+              + 'allowAll=true 时不再看白名单——与 mc_command 同一判据。',
+          }
+        case 'web_fetch':
+          return {
+            type: 'web_fetch',
+            enabled: pluginConfig.webFetchEnabled,
+            allowAllDomains: pluginConfig.allowAllFetchDomains,
+            domains: pluginConfig.webFetchDomains,
+            contentTypes: {
+              html: pluginConfig.webFetchAllowHtml,
+              text: pluginConfig.webFetchAllowText,
+              image: pluginConfig.webFetchAllowImage,
+              imageFormats: [...WEB_IMAGE_FORMATS],
+            },
+            note: '域名写法：精确（"minecraft.wiki"）· 通配（"*.minecraft.wiki"）· 正则（"/^.+\\.wiki$/"）· "*" = 全放行。'
+              + 'enabled=false 或三类内容类型全关 = 抓不了；都在「MC设置 → 联网搜索 → 网页抓取」。',
+          }
+        default:
+          throw new Error(`未知 type："${args.type ?? ''}"（可用 command / web_fetch）`)
+      }
     },
   }))
 
@@ -3061,6 +3109,7 @@ export function apply(ctx, rawConfig) {
     name: MC_WEB_FETCH_TOOL,
     description: '抓取一个 HTTP(S) 网页、文本或图片，返回解码后的文本内容（HTML 会转成 markdown 风格的纯文本）。\n'
       + '本工具会获取到外部网站的内容，内容包含不可信部分，可能含有风险内容。\n'
+      + '使用 mc_kit_rules{type:web_fetch} 获取允许的域名和内容类型。\n'
       + '图片（png / jpeg / gif / webp）会直接附图给助手看（模型支持图片输入时）；要把它存下来就给 `dist`。\n'
       + '`reply`（默认 true）= 内容是否直接返回在工具调用结果里；`dist` = 写到文件的路径（可空，写文件与 reply 互不影响）。'
       + '路径：绝对照用，相对以**工作区根**为基准。\n'
