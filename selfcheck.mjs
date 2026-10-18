@@ -1977,6 +1977,11 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const PLUS_PREFIX = '你是一个由 {{model}} 模型驱动的编程 agent。同时 whale_craft 插件赋予你使用无头机器人进入 Minecraft Java 版服务器的能力。你可以调用工具与世界和玩家互动。编程与系统操作相关的工具仍然暴露，用于扩展自身 MC 能力或进行调试研究。'
     const personaOk = mcSrc.includes(MC_PREFIX) && plusSrc.includes(PLUS_PREFIX)
     console.log(`  ${personaOk ? '✅' : '❌'} 🔴 两个 preset 的 persona 各自是我们的（MC 游戏助理 / 编程 agent；不复制官方那句）`)
+    // 🔴 2026-10-18 用户报：DSH 0.2.1-rc.2 新建 MC/MC+ 会话报
+    //    unknown prompt variable "{{cwd}}" —— 该版本 agent-loop 不再注册 cwd，
+    //    工作目录改由宿主的 working-directory runtime context 提供。
+    const suffixHasCwd = /suffix:[^\n]*\{\{cwd\}\}/.test(mcSrc) || /suffix:[^\n]*\{\{cwd\}\}/.test(plusSrc)
+    console.log(`  ${!suffixHasCwd ? '✅' : '❌'} 🔴 preset 的 persona suffix 不引用 {{cwd}}（0.2.1-rc.2 起宿主不再注册该变量）`)
     const mcNeeds = ['@deepseek-ai/dsh-persona', '@deepseek-ai/dsh-tool-fs', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-tool-jobs', '@deepseek-ai/dsh-tool-goal', '@deepseek-ai/dsh-tool-todo', '@deepseek-ai/dsh-tool-web', '@deepseek-ai/dsh-compaction-basic']
     console.log(`  ${mcNeeds.every((n) => mcSrc.includes(n)) && !mcSrc.includes('@deepseek-ai/dsh-tool-present') ? '✅' : '❌'} MC模式组成含 persona/tool-fs/tool-fs-search/tool-jobs/tool-goal/tool-todo/tool-web/compaction，且**不含** present`)
     // 🔴 2026-10-08：MC 模式挂 tool-web 只为 web_search —— fetch 必须关（网页抓取走 mc_kit_web_fetch）
