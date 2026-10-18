@@ -13,9 +13,9 @@
 - 🔒 **账户安全**：支持离线账户、第三方皮肤站账户。凭据写在宿主配置中，AI不会直接拿到，使用类似“凭据管理器”的机制进行操作
 - 📢 **提示词调优**：插件内置提示词，教会AI如何与AI交互，如何存储记忆等，也提供“建出好建筑”的建议、引导。部分提示词还可自由修改
 
-> ⚠️ **当前为预览版 `0.2.0-beta.2`**
+> ⚠️ **当前为预览版 `0.2.0-beta.3`**
 >
-> 预览版，面向 DSH **0.2.0-rc.2 及以上**。0.2.0 正式版功能尚未全部完成，本版本先行发布已完成功能，以及支持 DSH 0.2.0-rc.2 和 DSH Desktop。**预览版可能存在未知问题，如遇到请向我们反馈。**
+> 预览版，面向 DSH **0.2.0-rc.2 及以上**（含 0.2.1-rc.2）。0.2.0 正式版功能尚未全部完成，本版本先行发布已完成功能，以及支持 DSH 0.2.0-rc.2 / 0.2.1-rc.2 和 DSH Desktop。**预览版可能存在未知问题，如遇到请向我们反馈。**
 >
 > ⚠️ **相对于 0.1 的破坏性变更**
 >
@@ -50,11 +50,11 @@
 >
 > 无论你从何种方式安装本插件，安装完成后，为保证所有功能正常，务必完全重启DSH实例。
 
-对你的 AI 说：`帮我安装插件 npm:whale_craft@^0.2.0-beta.2`
+对你的 AI 说：`帮我安装插件 npm:whale_craft@^0.2.0-beta.3`
 
 ### DSH 插件管理
 
-在 DSH 主界面找到“插件”，点击打开插件页面，点击“添加插件”按钮，在输入框中输入 `whale_craft@^0.2.0-beta.2`，点击安装。
+在 DSH 主界面找到“插件”，点击打开插件页面，点击“添加插件”按钮，在输入框中输入 `whale_craft@^0.2.0-beta.3`，点击安装。
 
 ### 手动安装
 
@@ -73,7 +73,7 @@ dsh plugin --profile web add github:yzi1b/whale-craft
 从 npm 安装：
 
 ```bash
-dsh plugin --profile web add whale_craft@^0.2.0-beta.2
+dsh plugin --profile web add whale_craft@^0.2.0-beta.3
 ```
 
 别忘了重启DSH。
@@ -112,7 +112,7 @@ dsh plugin --profile web add whale_craft@^0.2.0-beta.2
 
 ```bash
 node tools/check-core.mjs     # 全树语法 + 动态 import + 私有字段一致性（改 core.mjs 必跑）
-node selfcheck.mjs            # 726 条离线断言（假 ctx，不需要 MC 服务器、不连网）
+node selfcheck.mjs            # 1044 条离线断言（假 ctx，不需要 MC 服务器、不连网）
 node tools/check-standalone-import.mjs   # 干净环境回归：pack → 独立目录 install → import 必须成功（慢，CI 跑）
 # 起一个隔离 DSH 实例验证"整树加载"（需要一份 DSH checkout）：
 DSH_ROOT=/path/to/deepseek-harness node tools/isolate.mjs start
@@ -139,7 +139,8 @@ CI 跑的就是这两条（`.github/workflows/ci.yml`）：**ubuntu（Node 22 / 
   名字必须是 `NPM_TOKEN`，值是 npm 的 Automation token。
 - 也可以**在本机手动发**（不依赖任何 secret）：`npm login` 后跑 `npm run publish:npm`
   —— 前置校验、失败即停、默认要确认，细则见 `agent-docs/release.md`。
-- **每个版本改了什么**见 [`CHANGELOG.md`](CHANGELOG.md)（`0.2.0-beta.2`：修新 DSH 上装不上 / 跑不起来、
+- **每个版本改了什么**见 [`CHANGELOG.md`](CHANGELOG.md)（`0.2.0-beta.3`：新增联网搜索 / 网页抓取 / 规则查看 / 文件系统工具、
+  MC 模式工具面调整，修 DSH 0.2.1-rc.2 上新建会话报错；`0.2.0-beta.2`：修新 DSH 上装不上 / 跑不起来、
   新增 MC+模式、连接类工具收口；`0.1.7`：修 1.21/1.21.1 进服掉线、断线状态不同步、`mc_events` 等待堵住唤醒；
   `0.1.6`：修皮肤站登录 400；`0.1.5`：修"连不存在的服把整个 DSH 搞崩"、`mc_lan` 只留局域网公告、新增 `mc_ping`）。
 
@@ -197,11 +198,11 @@ players through tool calls to build, survive and finish tasks.
 - 🔒 **Account safety** — offline and third-party (Yggdrasil) accounts. Credentials live in the host config and are never handed to the model directly, via a credential-manager-style flow.
 - 📢 **Tuned prompts** — built-in prompts teach the agent how to interact with the world and how to keep memory, and give advice that guides good builds. Some prompts are freely editable.
 
-> ⚠️ **Preview release `0.2.0-beta.2`**
+> ⚠️ **Preview release `0.2.0-beta.3`**
 >
-> For DSH **0.2.0-rc.2 and above**. Not all 0.2.0 features are finished; this release ships what is
-> done, plus support for DSH 0.2.0-rc.2 and DSH Desktop. **A preview may have unknown issues — please
-> report them if you hit any.**
+> For DSH **0.2.0-rc.2 and above** (including 0.2.1-rc.2). Not all 0.2.0 features are finished; this
+> release ships what is done, plus support for DSH 0.2.0-rc.2 / 0.2.1-rc.2 and DSH Desktop. **A preview
+> may have unknown issues — please report them if you hit any.**
 >
 > ⚠️ **Breaking changes from 0.1**
 >
@@ -241,11 +242,11 @@ players through tool calls to build, survive and finish tasks.
 >
 > However you install the plugin, fully restart the DSH instance afterwards so every feature works.
 
-Tell your agent: *"install the plugin `npm:whale_craft@^0.2.0-beta.2`"*
+Tell your agent: *"install the plugin `npm:whale_craft@^0.2.0-beta.3`"*
 
 ### DSH plugin manager
 
-Open **Plugins** from the DSH main UI, click **Add plugin**, enter `whale_craft@^0.2.0-beta.2`, and
+Open **Plugins** from the DSH main UI, click **Add plugin**, enter `whale_craft@^0.2.0-beta.3`, and
 install.
 
 ### Manual install
@@ -265,7 +266,7 @@ dsh plugin --profile web add github:yzi1b/whale-craft
 Install from npm:
 
 ```bash
-dsh plugin --profile web add whale_craft@^0.2.0-beta.2
+dsh plugin --profile web add whale_craft@^0.2.0-beta.3
 ```
 
 Don't forget to restart DSH.
@@ -280,7 +281,7 @@ Don't forget to restart DSH.
 | --- | --- | --- |
 | Toolset | Only MC-game tools, plus other necessary tools | Additionally exposes all standard-mode tools, e.g. running commands |
 | File tool boundary | Only files under the workspace's `.whale-craft/` | All files in the workspace (all files once permissions are relaxed) |
-| Prompt injection | RULES.md / version note / memory index; workspace `AGENTS.md` optional | The same, plus workspace `AGENTS.md` always injected |
+| Prompt injection | RULES.md / version note; workspace `AGENTS.md` optional | The same, plus workspace `AGENTS.md` always injected |
 | Watchdog / long-term memory / MC Settings | ✓ | ✓ |
 
 Outside these two modes, other modes no longer expose MC-play tools (MC admin tools excepted).
@@ -304,7 +305,7 @@ Outside these two modes, other modes no longer expose MC-play tools (MC admin to
 
 ```bash
 node tools/check-core.mjs     # whole-tree syntax + dynamic import + private-field consistency
-node selfcheck.mjs            # 726 offline assertions (fake ctx; no MC server, no network)
+node selfcheck.mjs            # 1044 offline assertions (fake ctx; no MC server, no network)
 node tools/check-standalone-import.mjs   # clean-env regression: pack → install → import must succeed (slow; CI)
 # run an isolated DSH instance to check whole-tree loading (needs a DSH checkout):
 DSH_ROOT=/path/to/deepseek-harness node tools/isolate.mjs start
@@ -339,10 +340,12 @@ first (`prepublishOnly`) — **a broken tree cannot be published**.
 - You can also **publish from your own machine** (no secret needed): `npm login`, then
   `npm run publish:npm` — pre-flight checks, stops on failure, asks for confirmation by default;
   details in `agent-docs/release.md`.
-- **What changed in each version** — see [`CHANGELOG.md`](CHANGELOG.md) (`0.2.0-beta.2`: fixes so it
-  installs / runs on the new DSH, new MC+ mode, connection tools consolidated; `0.1.7`: 1.21/1.21.1
-  disconnect, connection state out of sync, `mc_events` wait blocking wake-ups; `0.1.6`: skin-site login
-  400; `0.1.5`: crash on a non-existent server, `mc_lan` kept to LAN announcements, new `mc_ping`).
+- **What changed in each version** — see [`CHANGELOG.md`](CHANGELOG.md) (`0.2.0-beta.3`: web search,
+  web fetch, rules inspection and filesystem tools, MC-mode toolset changes, fix for session creation
+  errors on DSH 0.2.1-rc.2; `0.2.0-beta.2`: fixes so it installs / runs on the new DSH, new MC+ mode,
+  connection tools consolidated; `0.1.7`: 1.21/1.21.1 disconnect, connection state out of sync,
+  `mc_events` wait blocking wake-ups; `0.1.6`: skin-site login 400; `0.1.5`: crash on a non-existent
+  server, `mc_lan` kept to LAN announcements, new `mc_ping`).
 
 ---
 

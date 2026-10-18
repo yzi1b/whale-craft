@@ -1,6 +1,6 @@
 {
   "name": "whale_craft",
-  "version": "0.2.0-beta.2",
+  "version": "0.2.0-beta.3",
   "description": "让 DSH 加入 Minecraft 服务器游玩：有自己的游戏角色，能探索、建造、聊天。",
   "keywords": [
     "dsh",
