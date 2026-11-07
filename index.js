@@ -608,8 +608,9 @@ export function apply(ctx, rawConfig) {
    * 「当前地址」= 浏览器**实际在用**的那个地址（在线 base 的默认值 / 「获取当前」按钮的值）。
    *
    * 精度从高到低：
-   *   ① **浏览器自己报的** `clientOrigin`（查询参数，前端塞 `location.origin`）——
-   *     协议/域名/端口都是它真在用的，反代终止 TLS 也不会错。只认 host 与请求 Host 一致的；
+   *   ① **浏览器自己报的** `clientBase`（查询参数，前端塞 `document.baseURI` 的应用根，
+   *      含反代前缀）——协议/域名/端口/挂载前缀都是它真在用的，反代终止 TLS 也不会错。
+   *      旧客户端只报 `clientOrigin`（origin，不含前缀）也认；只认 host 与请求 Host 一致的；
    *   ② `Origin` 请求头；
    *   ③ `Referer`（只取 origin，且 host 必须与 Host 一致）；
    *   ④ `X-Forwarded-Proto` + `Host`；
@@ -619,8 +620,8 @@ export function apply(ctx, rawConfig) {
    * 🔴 为什么必须有 ①/③ 这两档：用户可能从 `https://域名` 访问、而 TLS 是**反代终止**的
    * （转发到本机是明文 http，代理也未必带 `X-Forwarded-Proto`）—— 只看 Host 会推出 `http://域名`：
    * 协议错，图片会被浏览器当混合内容挡掉。
-   * ⚠️ DSH **没有"挂载前缀"概念**（`API_PATH` 是常量 `/api`，前端一律用根绝对路径调接口），
-   * 所以反代额外加的路径前缀不可能自动得知 —— 那种情况由用户自己补（前缀会原样拼在 base 后面）。
+   * DSH 0.2.2 起支持 `--public-url https://host/prefix/` 的前缀部署；浏览器报的 `clientBase`
+   * 会把这个前缀带来（宿主客户端同样以 `document.baseURI` 为根调接口），不再需要用户手补。
    */
   const currentBaseOf = (req, hints = {}) => {
     const host = String(req?.headers?.host ?? '').trim()
@@ -633,8 +634,8 @@ export function apply(ctx, rawConfig) {
         return u.protocol === 'http:' || u.protocol === 'https:' ? `${u.protocol}//${u.host}` : ''
       } catch { return '' }
     }
-    // ① 浏览器报上来的（最准：协议/域名/端口都是它真在用的）——服务端不裁剪它；host 必须与请求 Host 一致
-    const hint = normalizeExpressBase(hints.clientOrigin)
+    // ① 浏览器报上来的（最准：协议/域名/端口/前缀都是它真在用的）——服务端不裁剪它；host 必须与请求 Host 一致
+    const hint = normalizeExpressBase(hints.clientBase) || normalizeExpressBase(hints.clientOrigin)
     if (hint && sameHost(hint)) return hint
     // ② Origin 头
     const o = normalizeExpressBase(originPart(req?.headers?.origin))
@@ -1230,13 +1231,16 @@ export function apply(ctx, rawConfig) {
       const gate = await gateOf()
       if (!gate.ok) return sendJson(res, 400, { ok: false, error: gate.error })
       // 顺带把「当前地址」给前端：base 的「获取当前」按钮 / 切到在线时的自动填，都用它
-      // （`clientOrigin` = 浏览器塞进来的 `location.origin`，最精准那一档）
+      // （`clientBase` = 浏览器塞进来的应用根（含反代前缀），最精准那一档；`clientOrigin` 是旧客户端别名）
       const st = expressServer.status
       const wantPort = pluginConfig.expressDesktopPort
       return ok({
         ...sharedStat(gate.cwd),
         mode: hostMode(),
-        currentBase: currentBaseOf(req, { clientOrigin: url?.searchParams?.get('clientOrigin') }),
+        currentBase: currentBaseOf(req, {
+          clientBase: url?.searchParams?.get('clientBase'),
+          clientOrigin: url?.searchParams?.get('clientOrigin'),
+        }),
         // desktop：独立端口现状（设置页据此红字提示 / 显示"已开放"）
         port: wantPort,
         listening: st.listening && st.port === wantPort,

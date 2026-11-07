@@ -475,6 +475,29 @@ select[data-wc-in]{appearance:none;padding-right:22px;
     /** 拼一行的调试文本（**只放状态码**，绝不回显请求体 —— 里面有密码） */
     const describe = (e, status) => `${e?.message ?? e}${status ? `（HTTP ${status}）` : ''}`
 
+    /**
+     * 插件 API 路径 → 实际请求 URL。
+     * 🔴 DSH 支持 `--public-url https://host/prefix/` 的前缀部署（反代剥掉前缀后转发）；
+     * 宿主自己的客户端用 `document.baseURI` 解析相对路径，插件若写死 `/api/...` 会绕过前缀、
+     * 打到域名根上。所以统一去掉前导斜杠，按当前页面的挂载根解析。
+     */
+    function apiUrl(path) {
+      const rel = String(path ?? '').replace(/^\/+/, '')
+      try {
+        if (typeof document !== 'undefined' && document.baseURI) return new URL(rel, document.baseURI).href
+      } catch { /* 落到原路径 */ }
+      return path
+    }
+
+    /** 应用挂载根（含反代前缀、不含末尾斜杠）：`https://host/prefix`；拿不到回 ''。 */
+    function appBase() {
+      try {
+        if (typeof document === 'undefined' || !document.baseURI) return ''
+        const u = new URL('.', document.baseURI)   // 与相对 API 路径同一套解析：取文档所在目录
+        return (u.origin + u.pathname).replace(/\/+$/, '')
+      } catch { return '' }
+    }
+
     async function apiFetch(path, opts) {
       const init = Object.assign({ headers: { accept: 'application/json' } }, opts)
       if (init.body !== undefined && init.body !== null) {
@@ -484,7 +507,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       }
       let res
       try {
-        res = await fetch(path, init)
+        res = await fetch(apiUrl(path), init)
       } catch (e) {
         throw new Error(`连不上后端：${e?.message ?? e}`)
       }
@@ -522,7 +545,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
         if (!sessionId) return undefined
         let alive = true
         const tick = () => {
-          fetch('/api/mc/status?sessionId=' + encodeURIComponent(sessionId), {
+          fetch(apiUrl('/api/mc/status?sessionId=' + encodeURIComponent(sessionId)), {
             headers: { accept: 'application/json' },
           })
             .then((r) => (r.ok ? r.json() : null))
@@ -563,7 +586,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       const stop = React.useCallback(() => {
         if (!sessionId) return
         setBusy(true)
-        fetch('/api/mc/stop', {
+        fetch(apiUrl('/api/mc/stop'), {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ sessionId, reason: '用户强制停止' }),
@@ -643,7 +666,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       if (mcPresetIdsAsked) return
       mcPresetIdsAsked = true
       try {
-        fetch('/api/mc/presets', { headers: { accept: 'application/json' } })
+        fetch(apiUrl('/api/mc/presets'), { headers: { accept: 'application/json' } })
           .then((r) => (r.ok ? r.json() : null))
           .then((j) => {
             const list = Array.isArray(j?.mcModePresets) ? j.mcModePresets.map(String).filter(Boolean) : []
@@ -699,7 +722,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
         let tries = 0
         let timer = null
         const tick = () => {
-          fetch('/api/mc/mode?sessionId=' + encodeURIComponent(sessionId), {
+          fetch(apiUrl('/api/mc/mode?sessionId=' + encodeURIComponent(sessionId)), {
             headers: { accept: 'application/json' },
           })
             .then((r) => (r.ok ? r.json() : null))
@@ -750,7 +773,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       React.useEffect(() => {
         if (!active || !sessionId) return undefined
         let alive = true
-        fetch('/api/mc/mode?sessionId=' + encodeURIComponent(sessionId), { headers: { accept: 'application/json' } })
+        fetch(apiUrl('/api/mc/mode?sessionId=' + encodeURIComponent(sessionId)), { headers: { accept: 'application/json' } })
           .then((r) => (r.ok ? r.json() : null))
           .then((j) => { if (alive && typeof j?.hasWorkspace === 'boolean') setServerHas(j.hasWorkspace) })
           .catch(() => { /* 拿不到就不下结论（返回 null ⇒ 不拦） */ })
@@ -2489,10 +2512,10 @@ select[data-wc-in]{appearance:none;padding-right:22px;
        * 清除分享数据**必须确认**（不可撤销）。
        * ⚠️ 输入框文本状态在 SharePane 内部（`baseText`/`portText`），这里**不能**去 set：
        *    保存完 `load()` 会刷新，pane 的 useEffect（+ key 变化）会自己同步回输入框。 */
-      /** 向服务端要「当前地址」：把浏览器**自己正在用的** origin 一起报上去（最精准）。 */
+      /** 向服务端要「当前地址」：把浏览器**自己正在用的**应用根（含反代前缀）一起报上去（最精准）。 */
       const fetchCurrentBase = React.useCallback(() => {
-        const here = (typeof location !== 'undefined' && location.origin) ? location.origin : ''
-        const q = here ? '&clientOrigin=' + encodeURIComponent(here) : ''
+        const here = appBase()
+        const q = here ? '&clientBase=' + encodeURIComponent(here) : ''
         return apiGet(withSid('/api/mc/express') + q).then((s) => String(s?.currentBase ?? ''))
       }, [withSid])
 
@@ -2798,7 +2821,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       const onClick = () => {
         if (busy || !sessionId) return
         setBusy(true)
-        fetch('/api/mc/branch-plus', {
+        fetch(apiUrl('/api/mc/branch-plus'), {
           method: 'POST',
           headers: { 'content-type': 'application/json', accept: 'application/json' },
           body: JSON.stringify({ sessionId, messageId: props?.messageId }),

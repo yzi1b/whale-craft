@@ -193,7 +193,8 @@ kind 变化先 release 再套新）：
 - **设置两类模式（2026-10-04）**：`resolveWorkspaceCwd` 解析 sessionId → 工作区（或 client 报的 cwd），**可空、不建档**；`settingsGate` = 它 + 查不到就 400 + `ensureMemoryRootForCwd`（"点开 MC设置"是仅有的两个建记忆目录时机之一）。**accounts / authservers 是全局数据、不走闸门**；`/api/mc/config` 与 `agents-md` GET **可无工作区**（前者只回全局键、工作区键为 `null`；后者只读回内置默认）。`/api/mc/express` 仍必须有工作区。
   🔴 无工作区时 `wsCfgValues(null)` 只返回空配置、`memoryRootFor(null)` 返回 `null`；调用方必须显式走无工作区响应，不能创建目录。
 - **express 路由安全**：uuid 是 DSH 工作区注册表的**稳定 id**（查不到就 404，**不退回目录名**）；路径**逐段**白名单拼接（`..`/`.`/空段/段内分隔符/盘符/`~`/控制字符一律拒）→ 拼完 `realpath` 复查仍在发布区内（**符号链接也出不去**）；不列目录；单文件 ≤32MB；svg/html 加 `Content-Security-Policy: sandbox`。
-- **base 推导链**（online 模式"获取当前"）：浏览器 `location.origin` → `Origin` 头 → 同源 `Referer` → `X-Forwarded-Proto`+`Host` → `Host`。
+- **base 推导链**（online 模式"获取当前"）：浏览器应用根 `clientBase`（`document.baseURI`，**含反代前缀**；旧客户端的 `clientOrigin` 仍兼容）→ `Origin` 头 → 同源 `Referer` → `X-Forwarded-Proto`+`Host` → `Host`。
+- **浏览器端所有插件请求都过 `apiUrl()`**：去掉前导 `/` 后按 `document.baseURI` 解析（宿主自己的客户端也这样），支持 `--public-url https://host/prefix/` 的前缀部署；写死 `/api/...` 会打到域名根。
 
 ## 10. 发布区与文件分享（.out vs .express）
 

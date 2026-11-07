@@ -1094,16 +1094,19 @@ console.log('\n--- 发布区：目录即白名单 / 不用 token / 必须防穿�
       console.log(`  ${s1.ok && s1.dir === join(cwd, '.whale-craft', E.EXPRESS_DIR) && s1.files >= 1 ? '✅' : '❌'} 分享数据现状：${s1.dir}（${s1.files} 个文件 / ${s1.bytes} 字节）`)
       // 「当前地址」（base 的「获取当前」/ 切在线时自动填）：从**这次请求**推出来
       console.log(`  ${s1.currentBase === 'http://127.0.0.1:39999' ? '✅' : '❌'} 「当前地址」从 Host 推出来：${s1.currentBase}`)
-      // 🔴 最精准的那一档：浏览器把 `location.origin` 报上来（协议/域名/端口都是它真在用的）
-      const withHint = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd) + '&clientOrigin=' + encodeURIComponent('https://127.0.0.1:39999'))
+      // 🔴 最精准的那一档：浏览器把应用根（document.baseURI，含反代前缀）报上来
+      const withHint = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd) + '&clientBase=' + encodeURIComponent('https://127.0.0.1:39999'))
       const hintBody = JSON.parse(String(withHint.body ?? '{}'))
-      console.log(`  ${hintBody.currentBase === 'https://127.0.0.1:39999' ? '✅' : '❌'} 🔴 浏览器报的 clientOrigin 优先（最准）：${hintBody.currentBase}`)
-      const hintPath = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd) + '&clientOrigin=' + encodeURIComponent('https://127.0.0.1:39999/proxy'))
+      console.log(`  ${hintBody.currentBase === 'https://127.0.0.1:39999' ? '✅' : '❌'} 🔴 浏览器报的 clientBase 优先（最准）：${hintBody.currentBase}`)
+      const hintPath = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd) + '&clientBase=' + encodeURIComponent('https://127.0.0.1:39999/proxy'))
       const hintPathBody = JSON.parse(String(hintPath.body ?? '{}'))
-      console.log(`  ${hintPathBody.currentBase === 'https://127.0.0.1:39999/proxy' ? '✅' : '❌'} 服务端不擅自裁剪 clientOrigin（真要带反代前缀时不会被吃掉；但 location.origin 本身不含路径）：${hintPathBody.currentBase}`)
-      const badHint = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd) + '&clientOrigin=' + encodeURIComponent('https://evil.example.com'))
+      console.log(`  ${hintPathBody.currentBase === 'https://127.0.0.1:39999/proxy' ? '✅' : '❌'} 🔴 子路径部署：clientBase 的挂载前缀原样保留（分享 URL 不会丢 /proxy）：${hintPathBody.currentBase}`)
+      const legacyHint = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd) + '&clientOrigin=' + encodeURIComponent('https://127.0.0.1:39999'))
+      const legacyHintBody = JSON.parse(String(legacyHint.body ?? '{}'))
+      console.log(`  ${legacyHintBody.currentBase === 'https://127.0.0.1:39999' ? '✅' : '❌'} 旧客户端的 clientOrigin 仍认（向后兼容）：${legacyHintBody.currentBase}`)
+      const badHint = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd) + '&clientBase=' + encodeURIComponent('https://evil.example.com/proxy'))
       const badHintBody = JSON.parse(String(badHint.body ?? '{}'))
-      console.log(`  ${badHintBody.currentBase === 'http://127.0.0.1:39999' ? '✅' : '❌'} clientOrigin 的 host 与请求 Host 不一致 → 不认（退回 Host）：${badHintBody.currentBase}`)
+      console.log(`  ${badHintBody.currentBase === 'http://127.0.0.1:39999' ? '✅' : '❌'} clientBase 的 host 与请求 Host 不一致 → 不认（退回 Host，不泄漏错误前缀）：${badHintBody.currentBase}`)
       const fwd = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd), { 'x-forwarded-proto': 'https' })
       const fwdBody = JSON.parse(String(fwd.body ?? '{}'))
       console.log(`  ${fwdBody.currentBase === 'https://127.0.0.1:39999' ? '✅' : '❌'} 反代场景认 X-Forwarded-Proto：${fwdBody.currentBase}`)
@@ -3898,7 +3901,30 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
     })()],
     ['设置接口全都带上 sessionId（服务端要用它定位工作区）', /const withSid = \(p\) =>/.test(code) && /apiGet\(withSid\('\/api\/mc\/accounts'\)\)/.test(code) && /apiPatch\(withSid\('\/api\/mc\/config'\)/.test(code) && !/api(Get|Patch|Post|Delete)\('\/api\/mc\/(config|authservers)'/.test(code)],
     // 🔴 门控名单走**专门的小接口**（不需要工作区）：用 /api/mc/config 会被闸门拒 → 静默退回兜底名单
-    ['前端门控名单取 /api/mc/presets（不带 sessionId）', /fetch\('\/api\/mc\/presets'/.test(code) && !/fetch\('\/api\/mc\/config'/.test(code)],
+    ['前端门控名单取 /api/mc/presets（不带 sessionId）', /fetch\(apiUrl\('\/api\/mc\/presets'\)/.test(code) && !/fetch\(apiUrl\('\/api\/mc\/config'\)/.test(code)],
+    // 🔴 2026-11-07：DSH 支持 --public-url 前缀部署；搜索/所有请求必须按 document.baseURI 解析，
+    //    写死 `/api/...` 会打到域名根、绕过反代前缀（宿主自己的客户端也这么做）。
+    ['插件请求按 document.baseURI 解析（支持反代前缀）', /function apiUrl\(path\)[\s\S]{0,260}document\.baseURI/.test(code) && /replace\(\/\^\\\/\+\/, ''\)/.test(code)],
+    ['没有写死根绝对路径的 /api 请求（前缀部署不会被绕过）', !/fetch\(\s*['"`]\/api\//.test(code)],
+    ['apiFetch 统一走 apiUrl（设置接口全都覆盖）', /res = await fetch\(apiUrl\(path\), init\)/.test(code)],
+    ['「当前地址」上报应用根 clientBase（含前缀），不再只报 origin', /const here = appBase\(\)/.test(code) && /'&clientBase=' \+ encodeURIComponent\(here\)/.test(code) && !/location\.origin/.test(code)],
+    ['apiUrl / appBase 真的按 document.baseURI 解析（子路径 / 根 / index.html 都对）', (() => {
+      const m = /function apiUrl\(path\) \{[\s\S]*?\n    \}/.exec(code)
+      const b = /function appBase\(\) \{[\s\S]*?\n    \}/.exec(code)
+      if (!m || !b) return false
+      try {
+        const run = new Function('document', `${m[0]}\n${b[0]}\nreturn { apiUrl, appBase }`)
+        const prefixed = run({ baseURI: 'https://host/ui/' })
+        const indexed = run({ baseURI: 'https://host/ui/index.html' })
+        const root = run({ baseURI: 'https://host/' })
+        return prefixed.apiUrl('/api/mc/presets?x=1') === 'https://host/ui/api/mc/presets?x=1'
+          && prefixed.apiUrl('api/mc/stop') === 'https://host/ui/api/mc/stop'
+          && root.apiUrl('/api/mc/status') === 'https://host/api/mc/status'
+          && prefixed.appBase() === 'https://host/ui'
+          && indexed.appBase() === 'https://host/ui'
+          && root.appBase() === 'https://host'
+      } catch { return false }
+    })()],
     // 🔴 2026-09-16 真机 bug：两个入口都把模态框写成 `createElement(McSettingsModal, null)`
     //    → sessionId 永远是 undefined → 点开设置就报"缺少 sessionId"。
     ['模态框真的拿到了 props（不是 null）', !/React\.createElement\(McSettingsModal, null\)/.test(code) && /React\.createElement\(McSettingsModal, \{ \.\.\.props, wsCwd \}\)/.test(code)],
