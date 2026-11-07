@@ -1,6 +1,6 @@
 {
   "name": "whale_craft",
-  "version": "0.2.0-beta.3",
+  "version": "0.2.0-beta.4",
   "description": "让 DSH 加入 Minecraft 服务器游玩：有自己的游戏角色，能探索、建造、聊天。",
   "keywords": [
     "dsh",
@@ -20,8 +20,8 @@
     "url": "https://github.com/yzi1b/whale-craft/issues"
   },
   "engines": {
-    "node": ">=22",
-    "dsh": ">=0.2.0-rc.2 <0.3.0"
+    "node": ">=24.9.0",
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
   },
   "type": "module",
   "main": "index.js",
@@ -55,8 +55,8 @@
     "sharp": "^0.35.3"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0",
-    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-tools": ">=0.2.2-rc.1 <0.3.0",
     "@deepseek-ai/schemastery": "*"
   },
   "peerDependenciesMeta": {
