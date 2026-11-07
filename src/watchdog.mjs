@@ -142,10 +142,12 @@ export class Watchdog {
    * @param {object} o.agent  当前会话的 agent（注入消息用）
    * @param {Function} o.onFire 事件回调钩子（用于同步到 sess.events）
    */
-  constructor ({ ctx, sess, agent, promptSignal = null }) {
+  constructor ({ ctx, sess, agent, promptSignal = null, tickMs = 1000 }) {
     this.ctx = ctx
     this.sess = sess
     this.agent = agent
+    /** tick 周期：生产固定 1000ms；自检可调小，避免每条注入都真等 1 秒。 */
+    this.tickMs = Number.isFinite(Number(tickMs)) && Number(tickMs) > 0 ? Number(tickMs) : 1000
     /**
      * 注入用的 AbortSignal。
      *
@@ -280,7 +282,7 @@ export class Watchdog {
     this.#bind()
     this.#startJob()
     // 🔴 同理：定时器回调里抛错是 uncaughtException，会把整个宿主带走（宿主只防未处理拒绝）。
-    this.tickTimer = setInterval(() => { try { this.#tick() } catch (e) { this.#record('lifecycle', `看门狗 tick 出错（已吞，不影响进程）：${e?.message ?? e}`) } }, 1000)
+    this.tickTimer = setInterval(() => { try { this.#tick() } catch (e) { this.#record('lifecycle', `看门狗 tick 出错（已吞，不影响进程）：${e?.message ?? e}`) } }, this.tickMs)
     this.tickTimer.unref?.()
     this.#record('lifecycle', `看门狗已挂载（${this.config.wakeOn.heartbeat ? `心跳 ${this.config.heartbeatSec}s` : '无心跳'}）`)
     return this.status()

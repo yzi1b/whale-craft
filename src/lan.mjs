@@ -45,6 +45,16 @@ export function parseLanBroadcast (msg) {
 /* ─────────────────────────── 网络探测 ─────────────────────────── */
 
 /**
+ * 实际监听时长（毫秒）：秒数夹在 [0.5, 15]；缺省/非法 → 3 秒。
+ * 纯函数，自检验上限时不必真等 15 秒。
+ * @param {number|string} seconds
+ * @returns {number}
+ */
+export function lanWaitMs (seconds) {
+  return Math.max(500, Math.min(Number(seconds) || 3, 15) * 1000)
+}
+
+/**
  * 听 Minecraft 的局域网广播（多播 224.0.2.60:4445）。
  * 到点自动收工；有些环境禁多播，那就只听本机广播，拿不到也不报错。
  * @returns {Promise<Array<{host:string, port:number, motd:string, source:'broadcast'}>>}
@@ -75,7 +85,7 @@ export function listenLanBroadcast ({ seconds = 3, group = LAN_BROADCAST.group, 
         try { sock.addMembership(group) } catch { /* 禁多播的环境：只听本机广播 */ }
       })
     } catch { close() }
-    const t = setTimeout(close, Math.max(500, Math.min(Number(seconds) || 3, 15) * 1000))
+    const t = setTimeout(close, lanWaitMs(seconds))
     t.unref?.()
   })
 }

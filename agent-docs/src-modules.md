@@ -49,8 +49,8 @@
 
 **导出**：`Watchdog`、`WATCH_DEFAULTS`。
 
-- 构造 `{ctx, sess, agent, promptSignal}`（promptSignal **必传**，`sessionController.prompt` 是 @Remote）。
-- `arm()` 幂等：`learnName(sess.bot.username)`（**从登录档案现学游戏名**，不写进源码——防私人名字随开源副本泄露）→ 绑 bot 事件 → `#startJob()`（宿主 jobs，`kind:'mc-watch'`，`owner:agent`；无 jobs 服务降级"无 job 模式"）→ 1s `setInterval(#tick)`。
+- 构造 `{ctx, sess, agent, promptSignal, tickMs}`（promptSignal **必传**，`sessionController.prompt` 是 @Remote；`tickMs` 生产默认 1000，自检传小值避免每条注入真等 1 秒）。
+- `arm()` 幂等：`learnName(sess.bot.username)`（**从登录档案现学游戏名**，不写进源码——防私人名字随开源副本泄露）→ 绑 bot 事件 → `#startJob()`（宿主 jobs，`kind:'mc-watch'`，`owner:agent`；无 jobs 服务降级"无 job 模式"）→ `setInterval(#tick, tickMs)`。
 - `disarm(reason, {notify, fromJob})`：先 teardown，再把 job 结算（**幂等**，只结算一次；`readOutput` = 留档末 30 条）；`notify` 时注入"你已经不在 MC 里了…"。自动关闭时机：offline 且不重连 / `mc_disconnect{notify}` / stopSession / 会话 destroy / 宿主 kill job（`fromJob:true`）。
 - **唤醒矩阵**（`wakeOn`，`mc_config` 可改）：
 

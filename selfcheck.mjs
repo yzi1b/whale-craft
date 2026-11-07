@@ -338,7 +338,7 @@ console.log('\n--- 看门狗 v2 ---')
       const srv = createServer((sock) => { sock.destroy() })      // 接受即掐断
       await new Promise((r) => srv.listen(0, '127.0.0.1', r))
       const port = srv.address().port
-      const bot = new McBot({ instanceId: 'selftest-offline', connectTimeoutMs: 1500, lockDir: tmpDir, logFile: join(tmpDir, 'x.log') })
+      const bot = new McBot({ instanceId: 'selftest-offline', connectTimeoutMs: 600, lockDir: tmpDir, logFile: join(tmpDir, 'x.log') })
       const seen = []
       bot.on('offline', (e) => seen.push(e))
       let threw = null
@@ -409,11 +409,12 @@ console.log('\n--- 看门狗 v2 ---')
         ctx: fakeCtx, sess: stub,
         agent: { id: 'w', status: 'running', steer: () => {} },
         onFire: () => {},
+        tickMs: 50,                     // 自检不等生产那 1s tick
       })
       wd.arm()
       wd.updateConfig({ observeWindowMs: 100 })
       stub.bot.emit('chat', { who: 'someone', text: 'deepseek 在吗' })     // 命中叫法
-      await new Promise((r) => setTimeout(r, 1400))                        // 观察窗口 + tick(1s)
+      await new Promise((r) => setTimeout(r, 300))                        // 观察窗口 + tick(1s)
       console.log(`  ${interruptedWith ? '✅' : '❌'} 🔴 看门狗注入前会打断等待（interruptWait("${interruptedWith ?? ''}")）`)
       try { wd.disarm('自检结束', { notify: false }) } catch {}
     }
@@ -2291,12 +2292,12 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const deadPort = probeSrv.address().port
     await new Promise((r) => probeSrv.close(r))
     const { McBot } = await import('./src/core.mjs')
-    const probeBot = new McBot({ instanceId: 'selftest-refused' })
+    const probeBot = new McBot({ instanceId: 'selftest-refused', connectTimeoutMs: 800 })
     let refusedErr = null
     try {
       await probeBot.connect({ host: '127.0.0.1', port: deadPort, version: '1.20.4', auth: { mode: 'offline', name: 'ProbeBot' } })
     } catch (e) { refusedErr = e }
-    await new Promise((r) => setTimeout(r, 600))     // 给 socket error 冒出来的时间（事故里它是延迟 emit 的）
+    await new Promise((r) => setTimeout(r, 200))     // 给 socket error 冒出来的时间（事故里它是延迟 emit 的）
     console.log(`  ${refusedErr !== null ? '✅' : '❌'} 连不存在的服务器：以**普通错误**结束（工具能返回给模型）`)
     console.log(`  ${/ECONNREFUSED|连接|refused|超时/i.test(String(refusedErr?.message ?? '') + String(probeBot.lastError ?? '')) ? '✅' : '❌'} 错误文本能说清（${String(probeBot.lastError ?? refusedErr?.message ?? '').slice(0, 48)}）`)
     try { probeBot.stop?.('自检结束') } catch { /* 收尾失败无所谓 */ }
@@ -3065,13 +3066,14 @@ console.log('\n--- 看门狗唤醒投递（真机 bug 回归）---')
     agent: { id: 'sess-w', status: 'idle' },
     onFire: () => {},
     promptSignal: new AbortController().signal,
+    tickMs: 50,                       // 自检不等生产那 1s tick
   })
   wd.updateConfig({ observeWindowMs: 100, maxWakePerMinute: 100 })
   wd.arm()
 
   // 空闲状态下命中叫法 → 走 'queue'（= followup，开新一轮）
   bot.emit('chat', { who: '<user>', text: 'deepseek，你在这里建一座地标塔' })
-  await new Promise((r) => setTimeout(r, 1400))
+  await new Promise((r) => setTimeout(r, 300))
 
   const got = deliver[0]
   console.log(`  ${got ? '✅' : '❌'} 空闲时能真正投递出去（${deliver.length} 次）`)
@@ -3083,7 +3085,7 @@ console.log('\n--- 看门狗唤醒投递（真机 bug 回归）---')
   deliver.length = 0
   wd.agent = { id: 'sess-w', status: 'running' }
   bot.emit('chat', { who: '<user>', text: 'deepseek 在吗' })
-  await new Promise((r) => setTimeout(r, 1400))
+  await new Promise((r) => setTimeout(r, 300))
   console.log(`  ${deliver[0]?.mode === 'steer' ? '✅' : '❌'} 运行中走 steer=插话不打断：mode=${deliver[0]?.mode}`)
   console.log(`  ${wd.stats.injected >= 1 ? '✅' : '❌'} 注入计数已累加（${wd.stats.injected}）`)
 
@@ -3092,12 +3094,12 @@ console.log('\n--- 看门狗唤醒投递（真机 bug 回归）---')
   const droppedBefore = wd.stats.dropped
   wd.gate = () => false
   bot.emit('chat', { who: '<user>', text: 'deepseek 又在吗' })
-  await new Promise((r) => setTimeout(r, 1400))
+  await new Promise((r) => setTimeout(r, 300))
   console.log(`  ${deliver.length === 0 ? '✅' : '❌'} 🔴 闸门关着（已退出 MC 模式）→ **一次都不注入**（实际 ${deliver.length} 次）`)
   console.log(`  ${wd.stats.dropped > droppedBefore ? '✅' : '❌'} 被丢弃的注入记进 stats.dropped（${wd.stats.dropped}）`)
   wd.gate = () => true
   bot.emit('chat', { who: '<user>', text: 'deepseek 回来了吗' })
-  await new Promise((r) => setTimeout(r, 1400))
+  await new Promise((r) => setTimeout(r, 300))
   console.log(`  ${deliver.length >= 1 ? '✅' : '❌'} 闸门打开（切回 MC 模式）→ 立刻恢复注入（${deliver.length} 次；不用重新 arm）`)
 
   wd.disarm('自检结束')
@@ -3357,12 +3359,13 @@ console.log('\n--- 看门狗唤醒投递（提示词注入，非用户消息）-
     sess: { bot, events: [], agentId: 'sess-w', config: {} },
     agent: fakeAgent,
     promptSignal: new AbortController().signal,
+    tickMs: 50,                       // 自检不等生产那 1s tick
   })
   wd.updateConfig({ observeWindowMs: 100, maxWakePerMinute: 100 })
   wd.arm()
 
   bot.emit('chat', { who: '<user>', text: 'deepseek，你在这里建一座地标塔' })
-  await new Promise((r) => setTimeout(r, 1400))
+  await new Promise((r) => setTimeout(r, 300))
 
   const msg = steerCalls[0]
   console.log(`  ${steerCalls.length === 1 ? '✅' : '❌'} 走 agent.steer（${steerCalls.length} 次）`)
@@ -3377,7 +3380,7 @@ console.log('\n--- 看门狗唤醒投递（提示词注入，非用户消息）-
   steerCalls.length = 0
   fakeAgent.status = 'running'
   bot.emit('chat', { who: '<user>', text: 'deepseek 在吗' })
-  await new Promise((r) => setTimeout(r, 1400))
+  await new Promise((r) => setTimeout(r, 300))
   console.log(`  ${steerCalls.length === 1 && promptCalls.length === 0 ? '✅' : '❌'} 运行中也用 steer（不分叉成 followup）`)
 
   wd.disarm('自检结束')
@@ -3484,7 +3487,7 @@ console.log('\n--- 局域网探测（mc_lan）---')
     const listenPort = 45551
     const srv = createSocket({ type: 'udp4' })
     await new Promise((r) => srv.bind(0, '127.0.0.1', r))
-    const wait = L.listenLanBroadcast({ seconds: 2, port: listenPort })
+    const wait = L.listenLanBroadcast({ seconds: 1, port: listenPort })
     await new Promise((r) => setTimeout(r, 150))
     const send = (s) => new Promise((r) => srv.send(Buffer.from(s, 'utf8'), listenPort, '127.0.0.1', r))
     await send('[MOTD]A Minecraft Server[/MOTD][AD]25565[/AD]')
@@ -3497,16 +3500,14 @@ console.log('\n--- 局域网探测（mc_lan）---')
     console.log(`  ${heard.length === 1 ? '✅' : '❌'} 垃圾包被丢、同 host+port 去重（听到 ${heard.length} 条）`)
   }
 
-  // ⑤ 到点必须收工（别把工具调用挂住），且写死的 15s 上限还在
+  // ⑤ 到点必须收工（别把工具调用挂住）；上限用**纯函数**验，不真等 15 秒
   {
     const t0 = Date.now()
     const heard = await L.listenLanBroadcast({ seconds: 1 })
     const dt = Date.now() - t0
     console.log(`  ${dt >= 900 && dt < 2500 && Array.isArray(heard) ? '✅' : '❌'} seconds=1 到点就返回（实测 ${dt}ms，没人公告也返回空数组）`)
-    const t1 = Date.now()
-    await L.listenLanBroadcast({ seconds: 999 })
-    const dt1 = Date.now() - t1
-    console.log(`  ${dt1 < 16000 ? '✅' : '❌'} seconds 再大也被夹到 15 秒上限（实测 ${dt1}ms）`)
+    const waits = [L.lanWaitMs(999), L.lanWaitMs(1), L.lanWaitMs(0), L.lanWaitMs(-5), L.lanWaitMs('x')]
+    console.log(`  ${waits[0] === 15000 && waits[1] === 1000 && waits[2] === 3000 && waits[3] === 500 && waits[4] === 3000 ? '✅' : '❌'} 等待时长夹在 [0.5s, 15s]、缺省 3s（纯函数：${waits.join(' / ')}ms）`)
   }
 
   // ⑥ 工具面：注册了、参数只剩 seconds（`mode` 已于 2026-10-05 移除）
@@ -3566,7 +3567,7 @@ console.log('\n--- 单地址探测（mc_ping）---')
   const blackhole = tcpServer(() => { /* 收下连接，什么都不回 */ })
   await new Promise((r) => blackhole.listen(0, '127.0.0.1', r))
   const t0 = Date.now()
-  const silent = await P.statusPing({ host: '127.0.0.1', port: blackhole.address().port, timeoutMs: 1200 })
+  const silent = await P.statusPing({ host: '127.0.0.1', port: blackhole.address().port, timeoutMs: 400 })
   const wall = Date.now() - t0
   blackhole.close()
   console.log(`  ${silent.ok === false && wall < 3000 ? '✅' : '❌'} 黑洞连接 → ${wall}ms 就被硬超时掐掉（不是等上游 120 秒）`)

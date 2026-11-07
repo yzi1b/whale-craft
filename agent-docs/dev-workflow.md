@@ -74,6 +74,11 @@ npm run dev:stop              # 按 pidfile 停实例
 - **覆盖分组**（节标题）：超时保护单元｜工具面与参数｜每会话实例分离｜未连接行为｜看门狗 v2（含断线同步、等待被打断）｜mc_act/give/sequence/stop｜强制停止顺序｜MC设置 HTTP（真路由）｜发布区与文件分享（防穿透/两模式/base 推导）｜玩家说话辨认｜记忆树｜图像地图｜扩展点｜归档保护｜提示词注入单通道与去重｜配置+权限隔离｜协议护栏禁发未知包｜幽灵在线｜账户/凭据分离｜受保护文件（RULES/AGENTS/config.json 可读不可写）与版本标记｜认证 URL｜未处理拒绝不留患｜唤醒投递（必须提示词注入）｜job 结算｜事件队列单一写入方｜无 OP 建造｜放置判据（与 minecraft-data 真值表比对）｜mc_connect 全参数｜client bundle 静态断言｜mc_lan/mc_ping｜设置页 UI 静态断言｜打包完整性｜**宿主包缺省**（内置 defineTool 与宿主逐字对拍 + 无宿主模拟子进程）。
 - **无宿主模拟**（2026-10-04，issue #5）：`tools/no-host-init.mjs`（module.register 解析钩子）屏蔽 `@deepseek-ai/dsh-tools`/`schemastery` 后**再跑一遍 selfcheck**（子进程），并逐字比对 33 个工具的注册形状——本机 link 安装测不出的问题靠它钉住；发布侧另有 `tools/check-standalone-import.mjs`（干净安装 import 回归，CI 必跑，改回静态 import 必红）。
 - **加断言的惯例**：断言要打在**真实实现**上（别只测 stub）；曾有"集成断言假绿"（复制完 preset 要改 persona/关 shell 那两条测不到）与"前端拿不到真路由"（真机 404）的教训，所以有一条专门**打真路由**的断言。计数口径：README 里写的 726/686 是历史数字，以实际运行为准（当前 600+ ✅）。
+- **保持快**（2026-11-08 优化，167s → ~34s）：自检是日常高频命令，**别用真实等待去验上限**。
+  - 连接类：`McBot` 的 `connectTimeoutMs` 传小值（连关闭端口验失败路径）。
+  - 看门狗：`new Watchdog({..., tickMs: 50})` + `observeWindowMs: 100`，等 ~300ms 即可（生产 tick 是 1s）。
+  - 时长夹取这类纯计算抽成纯函数（如 `lanWaitMs`），别真等 15 秒。
+  - 网络协议测试保留真实回环/本地服务（那是在验实现），但超时参数取满足断言的最小值。
 
 ## 6. 调试技巧
 
