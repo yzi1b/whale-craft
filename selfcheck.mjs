@@ -102,7 +102,13 @@ const fakeCtx = {
     composedPreset: (agentCtx) => presetByCtx.get(agentCtx),
   },
   profileContext: { name: 'web' },
-  webServer: { register: (route) => { registeredRoutes.push(route); return () => {} } },
+  // 宿主 0.2.2 的信任列表在 connection 服务上（0.2.0 的 webRuntime 已删除）
+  connection: { trustedHosts: [] },
+  webServer: {
+    register: (route) => { registeredRoutes.push(route); return () => {} },
+    host: '192.0.2.10',      // 非回环的 listener 绑定地址：宿主栅栏会放行它
+    protocol: 'http:',
+  },
   // 必须在 apply 之前就在，否则归档保护的包装装不上
   workspaceRegistry: { archiveSession: async (sid) => { archivedSessions.push(String(sid)) } },
   // 系统提示：收集插件注册的动态 context（本插件已不注册任何 systemPrompt 段）
@@ -916,6 +922,19 @@ console.log('\n--- 发布区：目录即白名单 / 不用 token / 必须防穿�
   console.log(`  ${oldShape.status === 404 ? '✅' : '❌'} 🔴 旧地址（/api/mc/whale-craft/<目录名>/…）已停用：${oldShape.status}`)
   const foreign = await callFile('GET', `/api/whale-craft/express/${WS_UUID}/note.svg`, { host: 'evil.example.com' })
   console.log(`  ${foreign.status === 403 ? '✅' : '❌'} 外来 Host 仍被信任栅栏挡在门外（403）`)
+  // 🔴 2026-11-07：信任列表必须跟宿主 0.2.2 的 connection 服务对齐（公网反代 / 局域网直连）
+  fakeCtx.connection.trustedHosts = ['mc.example.com']
+  const viaTrusted = await callFile('GET', expressUrl, { host: 'mc.example.com' })
+  console.log(`  ${viaTrusted.status === 200 ? '✅' : '❌'} --trusted-host 的权威（connection.trustedHosts）被放行（公网反代）：${viaTrusted.status}`)
+  const viaTrustedApi = await callRaw('GET', '/api/mc/presets', { host: 'mc.example.com' })
+  console.log(`  ${viaTrustedApi.status === 200 ? '✅' : '❌'} 设置接口 /api/mc 同样认可信主机：${viaTrustedApi.status}`)
+  const sameOrigin = await callFile('GET', expressUrl, { host: 'mc.example.com', origin: 'https://mc.example.com' })
+  console.log(`  ${sameOrigin.status === 200 ? '✅' : '❌'} 可信主机 + 同源 Origin 放行：${sameOrigin.status}`)
+  const crossOrigin = await callFile('GET', expressUrl, { host: 'mc.example.com', origin: 'https://evil.example.com' })
+  console.log(`  ${crossOrigin.status === 403 ? '✅' : '❌'} 可信主机 + 不同源 Origin 仍拒（403）：${crossOrigin.status}`)
+  fakeCtx.connection.trustedHosts = []
+  const viaBind = await callFile('GET', expressUrl, { host: '192.0.2.10:39999' })
+  console.log(`  ${viaBind.status === 200 ? '✅' : '❌'} listener 绑定地址（局域网直连 IP）被放行：${viaBind.status}`)
   const head = await callFile('HEAD', expressUrl)
   console.log(`  ${head.status === 200 && head.body === null ? '✅' : '❌'} HEAD 只有头没有体`)
   const dirReq = await callFile('GET', `/api/whale-craft/express/${WS_UUID}`)
@@ -2451,7 +2470,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   console.log(`  ${hintOk.json?.ok === true ? '✅' : '❌'} 新对话页：会话还没落盘、但客户端报了对的工作区 → **放行**`)
   const hintAbs = await callMc2('GET', '/api/mc/config?sessionId=sess-UNKNOWN&cwd=' + encodeURIComponent('relative/dir'))
   console.log(`  ${hintAbs.json?.ok === true && hintAbs.json?.hasWorkspace === false ? '✅' : '❌'} 报的不是绝对路径 → 不认（当没工作区，全局项照常）`)
-  const hintGone = await callMc2('GET', '/api/mc/config?sessionId=sess-UNKNOWN&cwd=' + encodeURIComponent(jnTop(tdTop(), 'definitely-not-here-xyz')))
+  const hintGone = await callMc2('GET', '/api/mc/config?sessionId=sess-UNKNOWN&cwd=' + encodeURIComponent((await import('node:path')).join((await import('node:os')).tmpdir(), 'definitely-not-here-xyz')))
   console.log(`  ${hintGone.json?.ok === true && hintGone.json?.hasWorkspace === false ? '✅' : '❌'} 报的目录不存在 → 不认（当没工作区）`)
 
   // 无工作区模式（从插件菜单打开设置）：提示词只读回默认；发布区仍拒绝

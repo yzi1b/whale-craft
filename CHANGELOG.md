@@ -11,6 +11,7 @@
 
 - 【变更】移除旧宿主的目录式 preset 自动创建、修复和跨版本 persona 适配；MC / MC+ 模式只使用包内声明式 preset
 - 【变更】宿主事件与 `profileContext` 固定按 DSH 0.2.2 契约使用，不再静默兼容缺失服务或旧事件形态
+- 【修复】通过公网地址（反向代理）或局域网 IP 访问 DSH 时，「MC设置」无法使用（设置接口一律 403）。根因是信任栅栏仍在读取 DSH 0.2.1 起已删除的 `webRuntime` 服务；现改读宿主的 `connection.trustedHosts`（即 `--trusted-host`），并放行监听绑定地址
 - 【迁移】旧全局配置中的 `ensureMcPreset` 字段会在加载时自动删除
 - 【保留】DSH `ResolutionRouter` 的 CJS 解析规避仍保留；该宿主缺陷在 0.2.2-rc.1 中仍可能触发
 

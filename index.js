@@ -63,8 +63,12 @@ const PLUGIN_VERSION = (() => {
 })()
 
 /* ============================ HTTP 工具与信任栅栏 ============================ */
-/* 与 @deepseek-ai/dsh-client-connection 的 /api 同款栅栏（DNS-rebinding + 跨站），
- * 非认证层。照抄 dsh-serve 的实现，保持同源插件行为一致。 */
+/* 与宿主 `@deepseek-ai/dsh-client-connection` 的 /api 同款栅栏（DNS-rebinding + 跨站），
+ * 非认证层。判据必须与宿主保持一致：回环 / listener 绑定地址 / trustedHosts → 放行，
+ * 再挡 cross-site 与不同源 Origin。
+ * 🔴 2026-11-07：DSH 0.2.2 起 `webRuntime` 服务已删除，可信主机改由 `connection` 服务持有
+ * （值来自 `webStartup.trustedHosts`，即 `--trusted-host`）；本插件曾仍在读 `webRuntime`，
+ * 导致公网 / 局域网部署下所有 `/api/mc/*` 恒 403。 */
 
 function isLoopbackHostname(hostname) {
   if (hostname === 'localhost' || hostname === '[::1]') return true
@@ -73,32 +77,57 @@ function isLoopbackHostname(hostname) {
     && parts[0] === '127'
 }
 
-function parseAuthority(authority) {
-  try { return new URL(`http://${authority}`) } catch { return undefined }
+function parseAuthority(authority, scheme = 'http:') {
+  try { return new URL(`${scheme}//${authority}`) } catch { return undefined }
 }
 
-function isTrustedAuthority(hostUrl, trustedHosts) {
+/** 权威值的规范形：没写端口 → hostname；写了端口 → hostname:port（默认端口也算写了）。 */
+function canonicalAuthority(entry, entryUrl) {
+  const port = entryUrl.port !== '' ? entryUrl.port : new URL(`${entryUrl.protocol === 'http:' ? 'https:' : 'http:'}//${entry}`).port
+  return port === '' ? entryUrl.hostname : `${entryUrl.hostname}:${port}`
+}
+
+function isTrustedAuthority(hostUrl, trustedHosts, protocol) {
   return trustedHosts.some((entry) => {
-    const entryUrl = parseAuthority(entry)
+    const entryUrl = parseAuthority(entry, protocol)
     if (entryUrl === undefined) return false
-    const port = entryUrl.port !== '' ? entryUrl.port : new URL(`https://${entry}`).port
-    const canonical = port === '' ? entryUrl.hostname : `${entryUrl.hostname}:${port}`
-    return canonical === entryUrl.hostname
+    return canonicalAuthority(entry, entryUrl) === entryUrl.hostname
       ? entryUrl.hostname === hostUrl.hostname
       : entryUrl.host === hostUrl.host
   })
 }
 
-function isTrustedRequest(headers, trustedHosts) {
+/** 监听器的绑定地址也算"我们自己"：浏览器直连它时 Host 就是这个 IP 字面量（忽略端口与 zone）。 */
+function isBindAddressAuthority(hostUrl, bindHost) {
+  if (typeof bindHost !== 'string') return false
+  const zoneAt = bindHost.indexOf('%')
+  const address = zoneAt === -1 ? bindHost : bindHost.slice(0, zoneAt)
+  const bindUrl = parseAuthority(address.includes(':') ? `[${address}]` : address)
+  return bindUrl !== undefined && bindUrl.hostname === hostUrl.hostname
+}
+
+/** Origin 按它自己的 http(s) 协议解析 Host，默认端口才能一致地归一化（传输层可能仍是 HTTP）。 */
+function isSameAuthorityOrigin(origin, host) {
+  let originUrl = null
+  try { originUrl = new URL(origin) } catch { return false }
+  const scheme = originUrl.protocol === 'https:' ? 'https:' : originUrl.protocol === 'http:' ? 'http:' : undefined
+  if (scheme === undefined) return false
+  const hostUrl = parseAuthority(host, scheme)
+  return hostUrl !== undefined && originUrl.host === hostUrl.host
+}
+
+function isTrustedRequest(headers, trustedHosts, bindHost, protocol = 'http:') {
   const host = headers.host
   if (typeof host !== 'string') return false
-  const hostUrl = parseAuthority(host)
+  const hostUrl = parseAuthority(host, protocol)
   if (hostUrl === undefined) return false
-  if (!isLoopbackHostname(hostUrl.hostname) && !isTrustedAuthority(hostUrl, trustedHosts)) return false
+  if (!isLoopbackHostname(hostUrl.hostname)
+    && !isTrustedAuthority(hostUrl, trustedHosts, protocol)
+    && !isBindAddressAuthority(hostUrl, bindHost)) return false
   if (headers['sec-fetch-site'] === 'cross-site') return false
   const origin = headers.origin
   if (origin === undefined) return true
-  try { return new URL(origin).host === hostUrl.host } catch { return false }
+  return isSameAuthorityOrigin(origin, host)
 }
 
 function sendJson(res, status, body) {
@@ -725,11 +754,20 @@ export function apply(ctx, rawConfig) {
 
   /* ─────────── HTTP API：状态条 UI 用（状态查询 / 强制停止 / 普通停止）─────────── */
 
-  /** 运行期信任列表（--trusted-host 等） */
+  /**
+   * 运行期信任列表：宿主 `connection` 服务持有与本插件相同的 Host/Origin 栅栏
+   * （值来自 `webStartup.trustedHosts`，即 `--trusted-host`）。惰性读取 —— apply 时
+   * `connection` 可能尚未就绪；它是权威来源，`webStartup` 只作就绪前的兜底。
+   */
   const liveTrustedHosts = () => {
-    const runtime = ctx.get('webRuntime')
-    return runtime !== undefined && Array.isArray(runtime.trustedHosts) ? runtime.trustedHosts : []
+    const connection = ctx.get('connection')
+    if (connection !== undefined && Array.isArray(connection.trustedHosts)) return connection.trustedHosts
+    const startup = ctx.get('webStartup')
+    return startup !== undefined && Array.isArray(startup.trustedHosts) ? startup.trustedHosts : []
   }
+  /** listener 绑定地址（宿主栅栏也放行它；浏览器直连局域网 IP 时 Host 就是它）。 */
+  const liveBindHost = () => ctx.webServer?.host
+  const liveProtocol = () => ctx.webServer?.protocol ?? 'http:'
 
   /**
    * **强制停止**某个会话的 MC —— 用户 2026-09-16 定的语义与顺序：
@@ -1669,7 +1707,7 @@ export function apply(ctx, rawConfig) {
     kind: 'prefix',
     path: '/api/mc',
     handler: async (req, res) => {
-      if (!isTrustedRequest(req.headers, liveTrustedHosts())) {
+      if (!isTrustedRequest(req.headers, liveTrustedHosts(), liveBindHost(), liveProtocol())) {
         res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
         res.end('forbidden')
         return
@@ -1697,7 +1735,7 @@ export function apply(ctx, rawConfig) {
     kind: 'prefix',
     path: '/api/whale-craft',
     handler: async (req, res) => {
-      if (!isTrustedRequest(req.headers, liveTrustedHosts())) {
+      if (!isTrustedRequest(req.headers, liveTrustedHosts(), liveBindHost(), liveProtocol())) {
         res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
         res.end('forbidden')
         return

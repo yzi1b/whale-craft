@@ -153,7 +153,8 @@ kind 变化先 release 再套新）：
 
 ## 9. HTTP 面与安全
 
-**信任栅栏**（`isTrustedRequest`，照抄 dsh-serve 的同款）：Host 必须回环或 ∈ `webRuntime.trustedHosts`；`Sec-Fetch-Site: cross-site` 拒；带 Origin 时 host 必须一致。非信任一律 403。两条顶层前缀路由各自独立过栅栏：`/api/mc/*` 与 `/api/whale-craft/express/*`（后者**只在 web 模式且文件分享开启时**服务；desktop 模式走自己的独立端口，见 §10）。
+**信任栅栏**（`isTrustedRequest`，与宿主 `@deepseek-ai/dsh-client-connection` 的同款）：Host 必须回环、等于 `webServer.host`（listener 绑定地址）、或 ∈ `connection.trustedHosts`（值来自 `webStartup.trustedHosts`，即 `--trusted-host`）；`Sec-Fetch-Site: cross-site` 拒；带 Origin 时按 Origin 自己的协议归一化后必须同权威。非信任一律 403。两条顶层前缀路由各自独立过栅栏：`/api/mc/*` 与 `/api/whale-craft/express/*`（后者**只在 web 模式且文件分享开启时**服务；desktop 模式走自己的独立端口，见 §10）。
+> 🔴 2026-11-07：`webRuntime` 服务只存在于 DSH 0.2.0-rc.2；0.2.1 起可信主机移到 `connection`。插件曾仍读 `webRuntime` ⇒ 公网/局域网访问下所有 `/api/mc/*` 恒 403（MC 设置整页不可用）。
 
 | 方法 + 路径 | 用途 |
 | --- | --- |
@@ -244,7 +245,7 @@ kind 变化先 release 再套新）：
 5. preset persona 键名（`text` → `prefix`）；`complete` / `includeRuntimeContext` 的压制关系。
 6. `@deepseek-ai/dsh-llm` 的 `createUserMessage` 可用性（缺失时走自带兜底，但**依赖声明不能少**）。
 7. `sessionController.prompt` 是 @Remote（必传 signal）；`agent.steer` 在 step 边界的消费语义。
-8. `hosts`/`trustedHosts`、`webServer` 最长前缀路由。
+8. **信任栅栏来源**：`connection.trustedHosts`（← `webStartup.trustedHosts` / `--trusted-host`）+ `webServer.host` 绑定地址；`webRuntime` 已在 0.2.1 删除。另核对 `hosts`/`trustedHosts`、`webServer` 最长前缀路由。
 9. jobs 服务的 `owner`/`caller` 语义：**只认会话 id 字符串**（`resolveOwner()` 拿它查 agents 注册表、`assertAccess()` 按 `job.owner.id === caller` 比对）；`stopSession` 只杀自己名下的（无主 job 对所有会话可见，别碰）。
 10. 会话消息 `source.kind`：**v4 格式拒绝裸露的 `'plugin'`**，规范值是 `plugin:<插件名>`（= 宿主 v3→v4 迁移的产出，`plugin` 字段随之去掉）；宿主 `createUserMessage` 对传进来的 source **原样透传**、不会替我们修正。
 11. **「创建MC+分支」的改模式**（2026-10-05）：`sessionController.fork`（会**继承父 preset**）、`agentPresets.recompose(ctx, id)`（返回 `{id}`；文档说"caller owns the blank-session check"，即它自己**不**拦已开聊）、`agent.session.append('agent-preset/selected', {agentPreset})`（宿主唯一会**拦** preset 变更的是 `select` 里的 `agent-preset/locked`，`append` 本身不拦）。三者任一改名/改语义就要跟。`AgentPresetRegistry` 的 preset 投影/事件仍是 `agent-preset/selected`。
