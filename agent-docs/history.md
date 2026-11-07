@@ -108,7 +108,7 @@
 | `mc_sequence` 上限 64 步 | 让模型做"连串动作"比让它写脚本稳；步数上限防失控 |
 | 事件队列与看门狗留档**分家** | `sess.events`（AI 拉）/`watchdog.log`（唤醒留档）语义不同；双写曾是 bug，"唯一写入方"写进注释与断言 |
 | 按工作区设置统一收进 `<工作区>/.whale-craft/config.json`（2026-10-03） | 提示词三开关原来存**全局**，而「MC设置」弹窗本身按工作区门控、RULES.md 也按工作区 —— 语义错位；版本标记原来是独立 `.rules-version` 文件。合并成一个文件后：保护语义统一为**可读不可写**（与 RULES.md 一致；散落的 `isAgentsMdPath`/PLUGIN_FILES 判定收编进 `src/protected.mjs`）、写入原子（tmp+rename）、坏文件只读不写、未知键保留；旧数据（`.rules-version`、全局旧值）在建档时一次性迁移，**写后回读校验通过才删**旧标记 |
-| 「MC模式」「MC+模式」改为包内**声明式 preset**（`presets/*.patch.yml`，经 `dsh.bundle.patch` **数组**挂载） | DSH 0.2.0-rc.2+ 有 preset 注册表：装好即出现在模式列表、用户可用 Web 编辑器按行 id 覆盖组成。工具暴露按 `mcModePresets`/`mcPlusPresets` 判**三档**（其他模式用 `restrict({deny})` 摘掉 `mc_*`/`mc_kit_*` + guard 硬拒双保险，`mc_admin_*` 保留）。旧宿主的目录式自举 `ensureMcPreset` 原样保留（新宿主上 `svc.copy` 不存在 → no-op） |
+| 「MC模式」「MC+模式」改为包内**声明式 preset**（`presets/*.patch.yml`，经 `dsh.bundle.patch` **数组**挂载） | DSH 0.2.0-rc.2+ 有 preset 注册表：装好即出现在模式列表、用户可用 Web 编辑器按行 id 覆盖组成。工具暴露按 `mcModePresets`/`mcPlusPresets` 判**三档**（其他模式用 `restrict({deny})` 摘掉 `mc_*`/`mc_kit_*` + guard 硬拒双保险，`mc_admin_*` 保留）。旧宿主的目录式自举曾暂留；0.2.0-beta.4 将最低版本提高到 DSH 0.2.2-rc.1 后已删除，仅迁移清理旧 `ensureMcPreset` 配置键 |
 | `mc_ping` **不用**上游 `mc.ping()`，自己走一遍包序 | 上游 `ping()` ① **不暴露 client**：想在超时时真掐掉连接就得覆盖 `options.connect`，而 `ping.js` 结尾正是 `options.connect(client)` —— 覆盖掉它 = 谁都不建 socket（四种场景全只能干等硬超时）；② 它的超时是 `closeTimeout`，默认 **120 秒**，对一次工具调用太长。改法：用同一套底层（`Client` + `states` + `tcpDns`）自己发握手 + `ping_start`，**超时与清理自控**（默认 5 秒、上限 30；无论成功/失败/超时都 `end()` + `destroy()`） |
 | 心跳默认**关**（300s） | 防睡死是可选需求；默认关省 token。开启才走心跳文案 |
 | 唤醒矩阵多数"被动"事件默认关（pushed/捡物/上下线） | 太频繁，只留档不唤醒（`mc_watch log` 可看） |

@@ -13,13 +13,13 @@
 - 🔒 **账户安全**：支持离线账户、第三方皮肤站账户。凭据写在宿主配置中，AI不会直接拿到，使用类似“凭据管理器”的机制进行操作
 - 📢 **提示词调优**：插件内置提示词，教会AI如何与AI交互，如何存储记忆等，也提供“建出好建筑”的建议、引导。部分提示词还可自由修改
 
-> ⚠️ **当前为预览版 `0.2.0-beta.3`**
+> ⚠️ **当前为预览版 `0.2.0-beta.4`**
 >
-> 预览版，面向 DSH **0.2.0-rc.2 及以上**（含 0.2.1-rc.2）。0.2.0 正式版功能尚未全部完成，本版本先行发布已完成功能，以及支持 DSH 0.2.0-rc.2 / 0.2.1-rc.2 和 DSH Desktop。**预览版可能存在未知问题，如遇到请向我们反馈。**
+> 预览版，要求 DSH **0.2.2-rc.1 及以上**。低版本不再兼容，仅保留用户数据迁移。**预览版可能存在未知问题，如遇到请向我们反馈。**
 >
 > ⚠️ **相对于 0.1 的破坏性变更**
 >
-> 1. 插件现要求DSH最低版本为 0.2.0-rc.2，不再支持更低版本。*解决方案：将你的DSH升级至 0.2.0-rc.2 及以上版本。*
+> 1. 插件现要求 DSH 最低版本为 0.2.2-rc.1，不再支持更低版本。*解决方案：将你的 DSH 升级至 0.2.2-rc.1 及以上版本。*
 > 2. 除了MC和MC+模式外，其余模式无法再调用MC游戏相关工具。*解决方案：将需要使用MC工具的会话迁移到MC+模式，找到助手的最后一个回答，点击“方块”图案的“创建MC+分支”按钮。*
 > 3. 此前对Minecraft 26.2的临时支持已移除。*解决方案：等待后续版本。MineFlayer支持Minecraft 26.2后，我们会及时跟进。*
 
@@ -38,8 +38,8 @@
 
 | 项   | 要求                                                                    |
 | ---- | ----------------------------------------------------------------------- |
-| DSH  | 版本`>=0.2.0-rc.2 <0.3.0`                                               |
-| Node | ≥ 22（与 DSH  要求一致）                                               |
+| DSH  | 版本 `>=0.2.2-rc.1 <0.3.0`                                              |
+| Node | ≥ 24.9.0（与 DSH 要求一致）                                             |
 | 可选 | npm `sharp`（SVG→PNG 光栅化）用于 `mc_kit_image` 的渲染，不影响其它功能 |
 
 ---
@@ -50,11 +50,11 @@
 >
 > 无论你从何种方式安装本插件，安装完成后，为保证所有功能正常，务必完全重启DSH实例。
 
-对你的 AI 说：`帮我安装插件 npm:whale_craft@^0.2.0-beta.3`
+对你的 AI 说：`帮我安装插件 npm:whale_craft@^0.2.0-beta.4`
 
 ### DSH 插件管理
 
-在 DSH 主界面找到“插件”，点击打开插件页面，点击“添加插件”按钮，在输入框中输入 `whale_craft@^0.2.0-beta.3`，点击安装。
+在 DSH 主界面找到“插件”，点击打开插件页面，点击“添加插件”按钮，在输入框中输入 `whale_craft@^0.2.0-beta.4`，点击安装。
 
 ### 手动安装
 
@@ -73,7 +73,7 @@ dsh plugin --profile web add github:yzi1b/whale-craft
 从 npm 安装：
 
 ```bash
-dsh plugin --profile web add whale_craft@^0.2.0-beta.3
+dsh plugin --profile web add whale_craft@^0.2.0-beta.4
 ```
 
 别忘了重启DSH。
@@ -139,7 +139,7 @@ CI 跑的就是这两条（`.github/workflows/ci.yml`）：**ubuntu（Node 22 / 
   名字必须是 `NPM_TOKEN`，值是 npm 的 Automation token。
 - 也可以**在本机手动发**（不依赖任何 secret）：`npm login` 后跑 `npm run publish:npm`
   —— 前置校验、失败即停、默认要确认，细则见 `agent-docs/release.md`。
-- **每个版本改了什么**见 [`CHANGELOG.md`](CHANGELOG.md)（`0.2.0-beta.3`：新增联网搜索 / 网页抓取 / 规则查看 / 文件系统工具、
+- **每个版本改了什么**见 [`CHANGELOG.md`](CHANGELOG.md)（`0.2.0-beta.4`：要求 DSH 0.2.2、移除旧宿主兼容层；`0.2.0-beta.3`：新增联网搜索 / 网页抓取 / 规则查看 / 文件系统工具、
   MC 模式工具面调整，修 DSH 0.2.1-rc.2 上新建会话报错；`0.2.0-beta.2`：修新 DSH 上装不上 / 跑不起来、
   新增 MC+模式、连接类工具收口；`0.1.7`：修 1.21/1.21.1 进服掉线、断线状态不同步、`mc_events` 等待堵住唤醒；
   `0.1.6`：修皮肤站登录 400；`0.1.5`：修"连不存在的服把整个 DSH 搞崩"、`mc_lan` 只留局域网公告、新增 `mc_ping`）。
@@ -198,16 +198,15 @@ players through tool calls to build, survive and finish tasks.
 - 🔒 **Account safety** — offline and third-party (Yggdrasil) accounts. Credentials live in the host config and are never handed to the model directly, via a credential-manager-style flow.
 - 📢 **Tuned prompts** — built-in prompts teach the agent how to interact with the world and how to keep memory, and give advice that guides good builds. Some prompts are freely editable.
 
-> ⚠️ **Preview release `0.2.0-beta.3`**
+> ⚠️ **Preview release `0.2.0-beta.4`**
 >
-> For DSH **0.2.0-rc.2 and above** (including 0.2.1-rc.2). Not all 0.2.0 features are finished; this
-> release ships what is done, plus support for DSH 0.2.0-rc.2 / 0.2.1-rc.2 and DSH Desktop. **A preview
-> may have unknown issues — please report them if you hit any.**
+> Requires DSH **0.2.2-rc.1 or newer**. Older hosts are no longer supported; only user-data migration
+> remains. **A preview may have unknown issues — please report them if you hit any.**
 >
 > ⚠️ **Breaking changes from 0.1**
 >
-> 1. The plugin now requires DSH 0.2.0-rc.2 or newer; older versions are no longer supported.
->    *Fix: upgrade DSH to 0.2.0-rc.2 or above.*
+> 1. The plugin now requires DSH 0.2.2-rc.1 or newer; older versions are no longer supported.
+>    *Fix: upgrade DSH to 0.2.2-rc.1 or above.*
 > 2. Outside MC and MC+ mode, other modes can no longer call MC game tools. *Fix: move the session
 >    that needs them to MC+ mode — find the last assistant reply and click the "box"-icon "Create MC+
 >    branch" button.*
@@ -230,8 +229,8 @@ players through tool calls to build, survive and finish tasks.
 
 | Item     | Requirement                                                                                  |
 | -------- | -------------------------------------------------------------------------------------------- |
-| DSH      | version `>=0.2.0-rc.2 <0.3.0`                                                                |
-| Node     | ≥ 22 (same as DSH)                                                                           |
+| DSH      | version `>=0.2.2-rc.1 <0.3.0`                                                                |
+| Node     | ≥ 24.9.0 (same as DSH)                                                                       |
 | Optional | npm `sharp` (SVG→PNG rasteriser) for `mc_kit_image` rendering; nothing else is affected      |
 
 ---
@@ -242,11 +241,11 @@ players through tool calls to build, survive and finish tasks.
 >
 > However you install the plugin, fully restart the DSH instance afterwards so every feature works.
 
-Tell your agent: *"install the plugin `npm:whale_craft@^0.2.0-beta.3`"*
+Tell your agent: *"install the plugin `npm:whale_craft@^0.2.0-beta.4`"*
 
 ### DSH plugin manager
 
-Open **Plugins** from the DSH main UI, click **Add plugin**, enter `whale_craft@^0.2.0-beta.3`, and
+Open **Plugins** from the DSH main UI, click **Add plugin**, enter `whale_craft@^0.2.0-beta.4`, and
 install.
 
 ### Manual install
@@ -266,7 +265,7 @@ dsh plugin --profile web add github:yzi1b/whale-craft
 Install from npm:
 
 ```bash
-dsh plugin --profile web add whale_craft@^0.2.0-beta.3
+dsh plugin --profile web add whale_craft@^0.2.0-beta.4
 ```
 
 Don't forget to restart DSH.
@@ -340,7 +339,7 @@ first (`prepublishOnly`) — **a broken tree cannot be published**.
 - You can also **publish from your own machine** (no secret needed): `npm login`, then
   `npm run publish:npm` — pre-flight checks, stops on failure, asks for confirmation by default;
   details in `agent-docs/release.md`.
-- **What changed in each version** — see [`CHANGELOG.md`](CHANGELOG.md) (`0.2.0-beta.3`: web search,
+- **What changed in each version** — see [`CHANGELOG.md`](CHANGELOG.md) (`0.2.0-beta.4`: requires DSH 0.2.2 and removes legacy-host compatibility; `0.2.0-beta.3`: web search,
   web fetch, rules inspection and filesystem tools, MC-mode toolset changes, fix for session creation
   errors on DSH 0.2.1-rc.2; `0.2.0-beta.2`: fixes so it installs / runs on the new DSH, new MC+ mode,
   connection tools consolidated; `0.1.7`: 1.21/1.21.1 disconnect, connection state out of sync,

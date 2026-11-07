@@ -36,7 +36,6 @@ DSH host 进程
    ├─ ExpressShareServer                desktop 模式：自起只监听 localhost 的独立端口托管发布区
    ├─ agent/pre-step 监听   提示词注入（改写 decision.messages）+ MC 模式策略对账
    ├─ presets/*.patch.yml   包内声明「MC模式」「MC+模式」两个 preset（dsh.bundle.patch 数组）
-   ├─ ensureMcPreset        旧宿主遗留：目录式自举（新宿主上 no-op）
    ├─ installArchiveGuard   包装 workspaceRegistry.archiveSession
    └─ extensions/*.mjs      自动加载（apply(api)）
 
@@ -131,9 +130,9 @@ kind 变化先 release 再套新）：
 - 模式切换触发点：`agent/created`、`agent/session-start`、`agent-preset/selected` 三个钩子里双向对账（`touch` → apply/lift）；`liftMcModePolicy` 撤回提示行 + 切到 `other` 档（漏撤回曾是"标准模式没 pwsh"的事故）。
 - 看门狗闸门 `watchdogGate` 现场判 `isMcModeAgent`（两档都放行，切出闭嘴）。
 
-## 8. MC模式 / MC+模式 的 preset（0.2.0-rc.2+：包内声明）
+## 8. MC模式 / MC+模式 的 preset（DSH 0.2.2：包内声明）
 
-宿主 0.2.0-rc.2 起 preset 是**声明式注册表**：一条 `@deepseek-ai/dsh-agent-preset` 插件行 = 一个 preset
+宿主 preset 使用**声明式注册表**：一条 `@deepseek-ai/dsh-agent-preset` 插件行 = 一个 preset
 （config `{id, name, description, order, plugins[]}`）；注册表**不扫目录**、也没有 `copy`/authoring 接口。
 本包经 `package.json → dsh.bundle.patch` **数组**携带两个声明补丁：
 
@@ -149,10 +148,8 @@ kind 变化先 release 再套新）：
 - 用户自定义：Web 编辑器（或 profile 的 `cordis.patch.yml`）按**行 id**（`preset-minecraft` /
   `preset-minecraft-plus`）覆盖 `config.plugins`；不要直接改包内文件（包更新会覆盖）。
 
-**遗留（旧宿主）**：`ensureMcPreset` 那套（`svc.copy` 整目录复制 + 改 `agent.cordis.yml` +
-`.whale-craft.json` 自建标记 + `MC_PRESET_SPEC` 重建 + persona 键名 `prefix/text` 自检）只对
-**有目录式 preset / authoring copy 的旧宿主**有意义 —— 在新宿主上 `svc.copy` 不存在，整段 no-op。
-相关纯函数（`planPresetAction`/`pickPresetTarget`/…）与测试都还在，见 history.md / src-modules.md。
+旧宿主的目录式 `ensureMcPreset` 自举、composition 改写和 `prefix/text` 跨版本适配已在
+`0.2.0-beta.4` 删除；旧全局配置中的 `ensureMcPreset` 键只在 `PluginConfig.migrate()` 中一次性清理。
 
 ## 9. HTTP 面与安全
 
@@ -193,7 +190,7 @@ kind 变化先 release 再套新）：
   把刚建的分支收走（DSH **没有**"删会话"接口，UI 也只有归档；可 unarchive 找回），回 `{ok:false, error, hint, rolledBack}`；
   前端据此弹错误、**不打开**该会话。源会话全程不受影响。
 - **设置两类模式（2026-10-04）**：`resolveWorkspaceCwd` 解析 sessionId → 工作区（或 client 报的 cwd），**可空、不建档**；`settingsGate` = 它 + 查不到就 400 + `ensureMemoryRootForCwd`（"点开 MC设置"是仅有的两个建记忆目录时机之一）。**accounts / authservers 是全局数据、不走闸门**；`/api/mc/config` 与 `agents-md` GET **可无工作区**（前者只回全局键、工作区键为 `null`；后者只读回内置默认）。`/api/mc/express` 仍必须有工作区。
-  🔴 无工作区时**绝不能**把 `null` 喂给 `wsCfgValues` / `memoryRootFor` —— `memoryRootFor(null)` 会兜底到 `stateDir(/memory)` 这个**全局**目录。
+  🔴 无工作区时 `wsCfgValues(null)` 只返回空配置、`memoryRootFor(null)` 返回 `null`；调用方必须显式走无工作区响应，不能创建目录。
 - **express 路由安全**：uuid 是 DSH 工作区注册表的**稳定 id**（查不到就 404，**不退回目录名**）；路径**逐段**白名单拼接（`..`/`.`/空段/段内分隔符/盘符/`~`/控制字符一律拒）→ 拼完 `realpath` 复查仍在发布区内（**符号链接也出不去**）；不列目录；单文件 ≤32MB；svg/html 加 `Content-Security-Policy: sandbox`。
 - **base 推导链**（online 模式"获取当前"）：浏览器 `location.origin` → `Origin` 头 → 同源 `Referer` → `X-Forwarded-Proto`+`Host` → `Host`。
 
@@ -205,7 +202,7 @@ kind 变化先 release 再套新）：
 | `<工作区>/.whale-craft/.express/` | 取决于文件分享开关 | 发布区（**目录即白名单**，支持子目录） |
 
 - **配置按宿主模式拆成两套键、相互独立**（2026-10-07 用户定）：从哪种模式（宿主 profile）进来就只认哪套。
-  设 `mode` = `ctx.get('profileContext')?.name === 'desktop' ? 'desktop' : 'web'`（取不到/老宿主按 web 兜底）。
+  DSH 0.2.2 的 `profileContext` 是必需注入；`name === 'desktop'` 时为 desktop，其余当前合法 profile 为 web，服务缺失或形状错误直接拒绝加载。
   - **web 模式**（`expressWebEnabled` + `expressWebBase`）：回 `base + /api/whale-craft/express/<uuid>/<rel>` 完整 URL；
     缺 base 回 `EXPRESS_NEED_BASE_TEXT`（报错不抛异常）。文件走**宿主 webServer** 的那条路由。
   - **desktop 模式**（`expressDesktopEnabled` + `expressDesktopPort`，默认 16049）：插件**自起一个只监听
@@ -243,7 +240,7 @@ kind 变化先 release 再套新）：
 1. `agent/pre-step` waterfall **必须 `next()`**（不交棒 = 全崩，0.1.4 P0）。
 2. `tools.restrict` 的**黏性**语义与 disposer；`agent-preset/locked`。
 3. `workspaceRegistry.archiveSession` 内部方法（归档保护包装点）。
-4. preset 体系：0.2.0-rc.2+ 是**声明式注册表**（`@deepseek-ai/dsh-agent-preset` 行 + `dsh.bundle.patch` **数组**；注册表不扫目录、无 copy）——两个 preset 靠包内 `presets/*.patch.yml` 声明。旧宿主遗留：`agentPresets.copy` authoring 契约（整目录复制）、`svc.roots` 同步 vs `list()` async（issue #1）。
+4. preset 体系：DSH 0.2.2 使用**声明式注册表**（`@deepseek-ai/dsh-agent-preset` 行 + `dsh.bundle.patch` **数组**；注册表不扫目录、无 copy）——两个 preset 只靠包内 `presets/*.patch.yml` 声明。
 5. preset persona 键名（`text` → `prefix`）；`complete` / `includeRuntimeContext` 的压制关系。
 6. `@deepseek-ai/dsh-llm` 的 `createUserMessage` 可用性（缺失时走自带兜底，但**依赖声明不能少**）。
 7. `sessionController.prompt` 是 @Remote（必传 signal）；`agent.steer` 在 step 边界的消费语义。

@@ -115,7 +115,6 @@
 | `mcMode.hideAdminTools` | `true` | 隐藏 `mc_admin_*`（仅 MC 模式；MC+ 可见；另有 guard 硬拒） |
 | `allowAllCommands` | `false` | 指令白名单总开关 |
 | （提示词三开关 `injectWhaleCraftAgentsMd` / `injectWorkspaceAgentsMd` / `rulesFollowVersion` **已下放为按工作区**，存 `<工作区>/.whale-craft/config.json`，见 [§14 wsconfig](#14-srcwsconfigmjs--按工作区的配置)） | | |
-| `ensureMcPreset` | `true` | 旧宿主遗留：目录式自举「MC模式」（0.2.0-rc.2+ 由 `presets/*.patch.yml` 声明提供，此键 no-op） |
 | `expressWebEnabled` | `false` | **web 模式**文件分享开关 |
 | `expressWebBase` | `''` | **web 模式**的访问 base（如 https://example.com） |
 | `expressDesktopEnabled` | `false` | **desktop 模式**文件分享开关 |
@@ -128,17 +127,9 @@
 | `webFetchAllowHtml` / `webFetchAllowText` / `webFetchAllowImage` | 都 `true` | 「允许的内容类型」三开关（工作区无关）：HTML / 文本由宿主区分（只到这两档，响应里只有 `body.kind`）；**图片走插件自己的公网下载器**，格式是**内置名单**（`WEB_IMAGE_FORMATS` = png/jpeg/gif/webp，即宿主附件服务认的那四种），**不可配置** |
 
 - `PluginConfig`：`load`（坏配置不崩、记 `lastError` 按默认跑；**顺带跑 `migrate()`**）、`set` 只认 `TOP_KEYS`（= DEFAULT_CONFIG 键）且过 `validate`、`values()` 深合并（数组整体覆盖）；语义 getter（`mcModePresets/mcPlusPresets/expressWebEnabled/expressWebBase/expressDesktopEnabled/expressDesktopPort/commandAllowed/isMcModePreset/isMcPlusPreset`…）每次现读 ⇒ **改完热生效**。
-- `migrate()`：文件分享键逐档搬（都**删旧键**、只在真改动时落盘）——① 老 `expressMode: 'off'|'online'`（曾含 `'local'`）→ `expressWebEnabled`（`online`→`true`，其余→`false`）；② 2026-10-07 拆键：`expressEnabled`→`expressWebEnabled`、`expressBase`→`expressWebBase`。
+- `migrate()`：删除废弃的 `ensureMcPreset`；文件分享键逐档搬（都**删旧键**、只在真改动时落盘）——① 老 `expressMode: 'off'|'online'`（曾含 `'local'`）→ `expressWebEnabled`（`online`→`true`，其余→`false`）；② 2026-10-07 拆键：`expressEnabled`→`expressWebEnabled`、`expressBase`→`expressWebBase`。
 - `legacyPromptSwitches()`：从**文件原值**里取旧版全局存过的三个提示词开关（只取显式设过且类型合法的）—— 只作工作区建档时的一次性 seed 来源（消费方 index.js → `wsconfig.migrate`）。
 - `resolveStateDir`：`WHALE_CRAFT_STATE_DIR` → `WHALE_CRAFT_DIR`+whaleDir → `$DSH_HOME/whale_craft` → `~/.dsh/whale_craft`。
-
-### preset 规划（纯函数；**遗留** —— 只服务旧宿主的目录式自举；0.2.0-rc.2+ 由包内 `presets/*.patch.yml` 声明，见 architecture §8）
-
-- `PRESET_ID_RE=/^[a-z0-9][a-z0-9-]*$/`（与宿主同名规则；下划线非法 ⇒ 目标 id 不能叫 whale_craft）。
-- `MC_PRESET_SPEC=7`：规格版本，**改动 = 下次启动重建自建 preset**；`planPresetAction` 判定序：不存在→`create`；非本插件建的→只在简介是复制残留时 `meta` 否则 `leave`；无 compositionHash→只敢 `meta/leave`；spec 变→`rebuild`；组成被用户改过（hash 不符）→`leave`；官方源变了（源 hash 变）→`rebuild`；显示文本不对→`meta`。
-- `pickPresetTarget`（取 `mcModePresets` 里第一个合法的）/ `PREFERRED_PRESET_SOURCES=['minimal','standard','ptc']` / `pickPresetSource` / `isCopiedPresetDescription`。
-- `PERSONA_TEXT_KEYS=['prefix','text']` + `personaTextKeyOf`：跨 DSH 版本探测 persona 键名。
-- `patchPersonaInComposition`（换 persona 正文；`complete:true→false`、`includeRuntimeContext:false→true`，后者会压掉其它提示段）、`disableShellInComposition`（persistent-shell `disabled:true`）、`patchToolGroupsIntoComposition`（`MC_PRESET_TOOL_GROUPS`：`tool-fs`/`tool-jobs`/`present`/`compaction`）。
 
 ## 9. `src/accounts.mjs` —— 账户与凭据
 

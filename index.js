@@ -25,12 +25,10 @@
 // 🔴 必须**排在 core.mjs 之前**（ESM 按 import 顺序求值）：此处包一层宿主解析器，兜住 DSH rc.2
 //    「非 link 插件里 readable-stream 的 require('process/') 把 ResolutionRouter 搞崩」的 bug。
 import './src/resolver-shim.mjs'
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync, statSync, renameSync, realpathSync, rmSync } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync, statSync, realpathSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { resolve, sep, join, isAbsolute, dirname, basename } from 'node:path'
-import { homedir } from 'node:os'
 import { McBot, lossless, logLine, libraryInfo } from './src/core.mjs'
 import { defineTool, toolDefKind } from './src/tool-def.mjs'
 import { versionPromptText, versionPromptTitle, versionPromptSource } from './src/version-prompt.mjs'
@@ -38,7 +36,7 @@ import { EXPRESS_DIR, OUT_DIR, expressRootOf, outRootOf, parseExpressPath, parse
 import { ExpressShareServer, portAvailable } from './src/express-server.mjs'
 import { Watchdog, WATCH_DEFAULTS } from './src/watchdog.mjs'
 import { MemoryStore } from './src/memory.mjs'
-import { PluginConfig, DEFAULT_CONFIG, resolveStateDir, pickPresetTarget, pickPresetSource, isCopiedPresetDescription, PREFERRED_PRESET_SOURCES, MC_PRESET_SPEC, planPresetAction, patchPersonaInComposition, personaTextKeyOf, disableShellInComposition, patchToolGroupsIntoComposition, MC_PRESET_TOOL_GROUPS } from './src/config.mjs'
+import { PluginConfig, DEFAULT_CONFIG, resolveStateDir } from './src/config.mjs'
 import { renderFetchText, WEB_FETCH_MAX_OUTPUT_CHARS } from './src/webfetch.mjs'
 import { fetchUrl, decodeBodyText, contentTypeAllowed, WEB_IMAGE_FORMATS } from './src/webget.mjs'
 import { AccountStore, parseAuthlibCard, normalizeServerUrl, dashUuid } from './src/accounts.mjs'
@@ -57,7 +55,7 @@ import { buildConnectPrompt } from './src/connect-prompt.mjs'
 import { waitForEvents } from './src/wait.mjs'
 
 export const name = 'whale_craft'
-export const inject = ['webServer', 'tools']
+export const inject = ['webServer', 'tools', 'profileContext', 'agentPresets']
 
 /** 插件版本（`mc_capabilities` 会报给 Master；读不到就 unknown） */
 const PLUGIN_VERSION = (() => {
@@ -474,14 +472,17 @@ export function apply(ctx, rawConfig) {
     + `｜工具定义 ${toolDefKind() === 'host' ? '宿主 @deepseek-ai/dsh-tools' : '自带兜底'}`
     + `｜Config ${Config ? 'schema（宿主 schemastery）' : '无（宿主 schemastery 不可用）'}`)
 
-  /* ─────────── 宿主模式（web / desktop）：文件分享配置按模式各认一套（用户 2026-10-07）───────────
-   * 判据 = 宿主提供服务的 `profileContext.name`（`dsh/lib/profile-boot-*.js` 里 `hostCtx.provide`），
-   * 宿主自己也用 `ctx.get('profileContext')?.name === 'desktop'` 判桌面端。取不到（老宿主）按 web 兜底。
-   * ------------------------------------------------------------------------ */
-  const hostMode = () => {
-    try { if (String(ctx.get('profileContext')?.name ?? '').toLowerCase() === 'desktop') return 'desktop' } catch { /* 老宿主没有这个服务 */ }
-    return 'web'
+  /* ─────────── 宿主模式（web / desktop）：DSH 0.2.2 必须提供 profileContext ─────────── */
+  const profileContext = ctx.get('profileContext')
+  if (!profileContext || typeof profileContext.name !== 'string') {
+    throw new Error('whale_craft 需要 DSH 0.2.2 的 profileContext 服务')
   }
+  const agentPresetsSvc = ctx.get('agentPresets')
+  if (!agentPresetsSvc || typeof agentPresetsSvc.composedPreset !== 'function') {
+    throw new Error('whale_craft 需要 DSH 0.2.2 的 agentPresets 服务')
+  }
+  const lastPresetSeen = new WeakMap()
+  const hostMode = () => String(profileContext.name).toLowerCase() === 'desktop' ? 'desktop' : 'web'
 
   /* ─────────── 发布区（`.whale-craft/.express/`）：地址用**工作区 uuid** ───────────
    * 用户 2026-09-17 定稿：`<base>/api/whale-craft/express/<工作区 uuid>/<剩余路径>`。
@@ -1436,7 +1437,7 @@ export function apply(ctx, rawConfig) {
     let presetError = null
     try {
       const child = agents?.get?.(childId)
-      const presets = (child && child.ctx?.get?.('agentPresets')) ?? agentPresetsSvc ?? ctx.get('agentPresets')
+      const presets = agentPresetsSvc
       if (child && typeof presets?.recompose === 'function' && typeof child.session?.append === 'function') {
         const preset = await presets.recompose(child.ctx, target)
         const resolved = String(preset?.id ?? target)
@@ -1567,7 +1568,6 @@ export function apply(ctx, rawConfig) {
             workspace: cwd,
             presetId: (agent && lastPresetSeen.get(agent)) ?? null,
             agentFound: Boolean(agent),
-            serviceReady: Boolean(agentPresetsSvc) || (() => { try { return Boolean(ctx.get('agentPresets')) } catch { return false } })(),
             memoryRoot: root,
             agentsMd: { path: cur.path, exists: cur.path ? existsSync(cur.path) : false, source: cur.source, bytes: Buffer.byteLength(cur.text) },
             // **实际投出去的**插件提示行（不是"我们打算投"）：投递是唯一通道，这里就是判据
@@ -3557,46 +3557,6 @@ export function apply(ctx, rawConfig) {
   }
 
   /**
-   * 「MC模式」那个 preset 的**人设压制**诊断（每次现读，便宜）。
-   *
-   * 为什么需要：宿主 `system-prompt/src/index.ts:606` 写着
-   * `contexts: runtimeContextSuppressed ? [] : […]` —— persona 只要写了 `includeRuntimeContext: false`，
-   * **我们注入的段（全是 context）会在组装时被整个丢掉**；`complete: true` 再压掉别的 section。
-   * 复制官方 `minimal` 恰好带这两个开关 → "设置页显示一切正常、AI 却什么都没收到"（2026-09-16 真机）。
-   */
-  let mcPresetDiag = null
-  /**
-   * @param agent - 可选：优先诊断**这个会话自己**的 preset（两个 preset 在名单里时，
-   *   不能永远只报第一个）。读不到组成文件（如新宿主的声明式 preset 没有磁盘目录）→
-   *   返回上次结果/`null`；声明式 preset 的 persona 由本包声明掌控、不存在压制开关，
-   *   所以新宿主上这里是空转，只对旧宿主（目录式 preset）有诊断意义。
-   */
-  const refreshMcPresetDiag = (agent) => {
-    try {
-      const svc = agentPresetsSvc
-      if (!svc) return mcPresetDiag
-      const prefer = agent ? lastPresetSeen.get(agent) : null
-      const list = pluginConfig.mcModePresets
-      const ids = prefer && list.includes(prefer) ? [prefer, ...list.filter((x) => x !== prefer)] : list
-      for (const id of ids) {
-        const dir = mcPresetDir(svc, id)
-        const p = dir ? join(dir, 'agent.cordis.yml') : null
-        if (!p || !existsSync(p)) continue
-        const comp = readFileSync(p, 'utf8')
-        mcPresetDiag = {
-          id,
-          path: p,
-          complete: /complete:\s*true/.test(comp),
-          runtimeContextSuppressed: /includeRuntimeContext:\s*false/.test(comp),
-          personaIsOurs: /Minecraft Java 版服务器里扮演一名玩家/.test(comp),
-        }
-        return mcPresetDiag
-      }
-    } catch { /* 读不到就当没有 */ }
-    return mcPresetDiag
-  }
-
-  /**
    * 这个会话**已经投出去**的提示行文件名（诊断/UI 用）。
    *
    * 来源两处，缺一不可：① 进程内台账（`ledgerOf`，按 preset 记账）；
@@ -3637,12 +3597,6 @@ export function apply(ctx, rawConfig) {
     const injectWs = wsSw.injectWorkspaceAgentsMd === true
     const wsExists = Boolean(wsAgents) && existsSync(wsAgents)
     const presetId = (agent && lastPresetSeen.get(agent)) ?? null
-    // 🔴 宿主的硬规则（system-prompt/src/index.ts:606）：persona 若写了 `includeRuntimeContext: false`，
-    //    组装时 `contexts` 直接变成 `[]`；写了 `complete: true` 则"人设即全部系统提示"。
-    //    复制官方 minimal 就会带这两个开关（2026-09-16 真机事故的根因）。
-    //    ⚠️ 现在我们的提示词走**插件提示行**（inbox.nextStep），**不受它影响** —— 这条只作为
-    //    "preset 还没被修好"的提示留着（它仍会压掉宿主自己的运行期上下文）。
-    const personaSuppresses = Boolean(refreshMcPresetDiag(agent)?.complete || mcPresetDiag?.runtimeContextSuppressed)
     const sent = sentNoticeRels(agent)
     return {
       mcMode,
@@ -3656,7 +3610,6 @@ export function apply(ctx, rawConfig) {
           : null,
         workspaceAgentsMd: wsAgents ? { path: wsAgents, exists: wsExists } : null,
       },
-      preset: mcPresetDiag ?? null,
       // **实际投出去的文件名**（投递是唯一通道，这就是判据本身）
       notices: sent,
       // 版本硬提示词（随版本发布、无开关）：界面上只读展示（正文也带上，方便用户看它到底说了什么）
@@ -3686,7 +3639,6 @@ export function apply(ctx, rawConfig) {
         ...(agent && !cwd ? ['这个会话没有选中工作区 → 提示词没地方放，插件不会投递'] : []),
         ...(agent && cwd && !mcMode ? [`这个会话不是 MC 模式（preset=${presetId ?? '未知'} 不在 mcModePresets 里）→ 不投递`] : []),
         ...(mcMode && injectWs && !wsExists ? ['工作区根目录里没有 AGENTS.md 这个文件'] : []),
-        ...(personaSuppresses ? ['⚠️ preset 的 persona 还带着 complete / includeRuntimeContext:false（会压掉宿主自己的运行期上下文；我们的提示走插件提示行不受影响。重启 DSH 后本插件会自动修这个 preset）'] : []),
       ],
     }
   }
@@ -3742,407 +3694,11 @@ export function apply(ctx, rawConfig) {
    *   ③ 提示词：注入 whale_craft 专属指导（宿主的 AGENTS.md 注入之外，另加这一段）
    * ------------------------------------------------------------------------ */
 
-  /** 自动创建 preset 时的显示名（preset.yml 里的 `name:`） */
-  const MC_PRESET_NAME = 'MC模式'
-  /**
-   * 自动建出来的 preset 的简介。
-   * 🔴 用户 2026-09-16 报："MC 模式的简介变成了和极简模式一样"——
-   *    因为官方 `copy()` **只改 name、保留源 preset 的 description**（`copyComposition` 里的注释写得很清楚）。
-   *    所以复制完必须把**元数据**改回来（`preset.yml` 是显示文本，不是 composition，可以自己写）。
-   */
-  const MC_PRESET_DESCRIPTION = '可以加入Minecraft Java版服务器，模拟玩家进行交互。'
-
-  /** `~` 开头的 preset 根展开成绝对路径（宿主的 root 配置允许写 `~`） */
-  /**
-   * MC模式 preset 的**人设**（persona 的 `prefix`）。
-   *
-   * 🔴 只服务**旧宿主**的目录式自举（`ensureMcPreset` 复制 preset 时把 persona 换成这句）。
-   *    新宿主（0.2.0-rc.2+）的人设由 `presets/minecraft.patch.yml` 的 `persona.config` 声明 ——
-   *    那句才是权威，这里必须逐字对齐（改一处要一起改；可读版见 dev-docs/prompt/mc_mode_persona.md）。
-   *
-   * 只写**身份 + 能力**；规矩全在 `.whale-craft/RULES.md`，不重复。
-   * 系统提示词**由宿主按 preset 自动注入**，插件不往 systemPrompt 里塞（用户要求）。
-   */
-  const MC_PERSONA_TEXT = '你是一个 Minecraft Java 版游戏助理，由模型 {{model}} 驱动。你可以通过工具调用，使用无头机器人进入 MC 服务器中与世界和玩家互动。你应当专注于 MC 游戏，不过问交互原理和插件代码，除非收到明确调试指令。'
-
-  const expandHome = (p) => {
-    const s = String(p ?? '')
-    return s.startsWith('~') ? join(homedir(), s.slice(1).replace(/^[/\\]+/, '')) : s
-  }
-
-  /** 只有**我们建的**那份才修：persona 键名对不对（以"本版本源 preset"为标尺） */
-  const repairPersonaKeyIfNeeded = (svc, id, { composition, sourceKey, mine, stillComplete }) => {
-    const mineKey = personaTextKeyOf(composition)
-    if (!mine || composition === null) return false
-    if (!((sourceKey && mineKey !== sourceKey) || stillComplete)) return false
-    const fixed = patchMcPresetComposition(svc, id, { key: sourceKey ?? null })
-    logLine(fixed
-      ? `MC 模式 preset「${id}」persona 键名与本版本不符（${mineKey ?? '认不出'} → ${sourceKey ?? '跟随文件'}${stillComplete ? '，且 complete 还是 true' : ''}）→ 已自动修正`
-      : `MC 模式 preset「${id}」persona 键名需要修正，但这次没改成（下次启动再试；必要时手动编辑 agent.cordis.yml）`)
-    return fixed
-  }
-
-  /**
-   * 复制完官方 preset 之后，把**我们自己的几处**覆盖上去：
-   *   ① persona（官方那句 "You are a helpful software engineer assistant." + `complete: true` 都不要）
-   *   ② 关掉那个持久 shell（MC 模式的指导写着"本模式没有 shell"，两边必须一致）
-   *   ③ 补齐 MC 模式需要的工具组（tool-fs / tool-fs-search / tool-jobs / tool-goal / tool-todo / compaction）—— 官方 `minimal` 里一个都没有
-   * @param {string} id 目标 preset
-   * @param {{key?: 'prefix'|'text'|null}} [opts] `key` = **本版本源 preset 用的那个键**（新版 prefix / 老版 text）
-   * @returns {boolean} 是否改动过（false = 结构不认识 / 无需改动，日志里说明）
-   */
-  const patchMcPresetComposition = (svc, id, opts = {}) => {
-    try {
-      const dir = mcPresetDir(svc, id)
-      if (!dir) return false
-      const p = join(dir, 'agent.cordis.yml')
-      if (!existsSync(p)) return false
-      const cur = readFileSync(p, 'utf8')
-      const withPersona = patchPersonaInComposition(cur, MC_PERSONA_TEXT, opts)
-      if (withPersona === null) { logLine('MC 模式 preset：composition 里没找到可用的 persona 段 → 保持原样（人设还是官方那句）'); return false }
-      let finalText = disableShellInComposition(withPersona) ?? withPersona
-      finalText = patchToolGroupsIntoComposition(finalText, availableToolGroups()) ?? finalText
-      if (finalText === cur) return false
-      writeFileSync(p, finalText, 'utf8')
-      return true
-    } catch (e) { logLine(`改 preset 的 persona/shell/工具组失败（不影响挂载）：${e.message}`); return false }
-  }
-
-  /**
-   * 这份部署里**能加载哪些** MC 模式需要的工具组？
-   *
-   * 为什么要探：这些包是按 preset 挂载的，"在不在"取决于 DSH 版本与随附 bundle。
-   * 给一份**装不到某个包**的 preset 加组 = 让那份 preset 直接挂不起来（MC 模式整个坏掉）——
-   * 比"少一个工具"糟得多。判据很直接：**随附的 preset 里有没有人引用它**
-   * （随附 Web 的 standard/ptc/cordis 有 tool-fs/tool-jobs/present/压缩组，minimal 一个都没有）。
-   *
-   * 🔴 2026-09-24（GitHub issue #1，用户 huohai2 报）：**这里绝对不能用 `agentPresets.list()`**。
-   *    宿主那个方法是 **`async list()`**（`agent-presets/src/index.ts`：`async list(): Promise<AgentPreset[]>`），
-   *    在同步 `for...of` 里迭代一个 Promise 会抛 `TypeError: ... is not iterable`，
-   *    被 `catch` 吞掉 ⇒ `shipped` 恒空 ⇒ **每一组都被判成"本部署没人引用"**，
-   *    于是自动建出来的「MC模式」preset 一组工具都补不上（缺 tool-fs/tool-jobs/present
-   *    与压缩组），而且**不报错**（只留一行看着很合理的日志）。
-   *    这里改用**同步**的 `svc.roots`（宿主是同步 getter）自己扫：
-   *    每个根下 `<root>/<presetId>/agent.cordis.yml`。
-   */
-  let availableGroups = null
-  const availableToolGroups = () => {
-    if (availableGroups) return availableGroups
-    const shipped = []
-    let scanned = 0
-    try {
-      const roots = Array.isArray(agentPresetsSvc?.roots) ? agentPresetsSvc.roots : []
-      for (const root of roots) {
-        const dir = root?.path ? expandHome(String(root.path)) : ''
-        if (!dir) continue
-        let entries = []
-        try { entries = readdirSync(dir, { withFileTypes: true }) } catch { continue }   // 根不存在/不可读：跳过这个根
-        for (const ent of entries) {
-          if (!ent?.isDirectory?.()) continue
-          const p = join(dir, ent.name, 'agent.cordis.yml')
-          try {
-            if (!existsSync(p)) continue          // 目录占着 id 但组成缺失（宿主也认它是坏的）
-            shipped.push(readFileSync(p, 'utf8'))
-            scanned++
-          } catch { /* 单个 preset 读不了不影响别的 */ }
-        }
-      }
-    } catch (e) {
-      // 探针自己坏了必须留痕：静默会让"判据失效"伪装成"确实没有"
-      logLine(`探"本部署有哪些 preset 工具包"失败（按没有处理）：${e?.message ?? e}`)
-    }
-    if (!scanned) logLine('一个随附 preset 的组成都没扫到（roots 为空或不可读）→ 保守起见不往 MC 模式 preset 里加工具组')
-    const all = shipped.join('\n')
-    availableGroups = MC_PRESET_TOOL_GROUPS.filter((g) => all.includes(g.pkg))
-    const missing = MC_PRESET_TOOL_GROUPS.filter((g) => !all.includes(g.pkg)).map((g) => g.pkg)
-    if (missing.length) logLine(`这些工具包在本部署的 preset 里没人引用 → 不往 MC 模式 preset 里加：${missing.join(', ')}`)
-    return availableGroups
-  }
-
-  /**
-   * 给**已存在**的 preset 补工具组（用 `leave`/`meta` 分支时用；不动别的行）。
-   *
-   * 🔴 2026-09-24：这条路会动**用户自己写的** composition（本机那份 `minecraft` 就是用户手写的），
-   *    所以：
-   *      ① 动之前**留一份原始副本**（`agent.cordis.yml.bak-whale-craft`，只留第一次那一份，
-   *         之后不覆盖 ⇒ 那份永远是"插件碰它之前"的样子，随时能翻回去）；
-   *      ② 隔离实例里**一律不写**（`WHALE_CRAFT_NO_PRESET_WRITE`）—— 隔离实例的 preset 根目录
-   *         跟生产是**同一个**（`~/.dsh/.agent-presets`，redirect 不了），写下去就是改生产文件。
-   *         2026-09-24 实测踩到：隔离实例第一次跑就把压缩组加进了用户手写的那份。
-   */
-  const ensureToolGroupsInPreset = (svc, id) => {
-    try {
-      const groups = availableToolGroups()
-      if (!groups.length) return false
-      const dir = mcPresetDir(svc, id)
-      if (!dir) return false
-      const p = join(dir, 'agent.cordis.yml')
-      if (!existsSync(p)) return false
-      const cur = readFileSync(p, 'utf8')
-      const next = patchToolGroupsIntoComposition(cur, groups)
-      if (next === null) return false
-      if (process.env.WHALE_CRAFT_NO_PRESET_WRITE) {
-        logLine(`隔离模式（WHALE_CRAFT_NO_PRESET_WRITE）：跳过改 preset「${id}」的 composition（本该补：${groups.filter((g) => !cur.includes(g.pkg)).map((g) => g.pkg).join(', ')}）`)
-        return false
-      }
-      try {
-        const bak = join(dir, 'agent.cordis.yml.bak-whale-craft')
-        if (!existsSync(bak)) copyFileSync(p, bak)
-      } catch { /* 备份失败不拦着修，但下面日志里会说 */ }
-      writeFileSync(p, next, 'utf8')
-      logLine(`已给 MC 模式 preset（${id}）补上工具组：${groups.filter((g) => !cur.includes(g.pkg)).map((g) => g.pkg).join(', ')}（原始副本：agent.cordis.yml.bak-whale-craft）`)
-      return true
-    } catch (e) { logLine(`补 preset 工具组失败（不影响挂载）：${e.message}`); return false }
-  }
-
-  /** preset 目录（用户可写根下那个），拿不到就 null */
-  const mcPresetDir = (svc, id) => {
-    try {
-      const roots = Array.isArray(svc?.roots) ? svc.roots : []
-      const userRoot = roots.find((r) => r?.trust === 'user')?.path
-      return userRoot ? join(expandHome(userRoot), id) : null
-    } catch { return null }
-  }
-
-  /** 读组成文本（`list()` 给的行里有 path = composition 文件） */
-  const compositionOf = (row) => {
-    try {
-      const p = row?.path
-      return p && existsSync(p) ? readFileSync(p, 'utf8') : null
-    } catch { return null }
-  }
-  const hash16 = (s) => (s == null ? null : createHash('sha256').update(String(s)).digest('hex').slice(0, 16))
-
-  /**
-   * 把 `preset.yml`（显示名 / 简介 / 排序）写回去。
-   * ⚠️ 只写**元数据**：composition（`agent.cordis.yml`）一根手指都不碰 ——
-   *    官方 authoring 只允许"整目录复制"，但显示文本本来就是给人改的。
-   */
-  const writeMcPresetMetadata = (svc, id) => {
-    try {
-      const dir = mcPresetDir(svc, id)
-      if (!dir || !existsSync(dir)) return false
-      const body = [
-        `name: ${JSON.stringify(MC_PRESET_NAME)}`,
-        `description: ${JSON.stringify(MC_PRESET_DESCRIPTION)}`,
-        'order: 5',
-        '',
-      ].join('\n')
-      writeFileSync(join(dir, 'preset.yml'), body, 'utf8')
-      return true
-    } catch (e) { logLine(`写 preset 简介失败（不影响使用）：${e.message}`); return false }
-  }
-
-  /**
-   * 我们的"自建标记"：写在 preset 目录里（dot 文件，宿主不认它是 preset 内容）。
-   * 作用：**下次启动能认出自建的那份**，从而"检查不对就重建"；用户改过的一律不碰。
-   * 文件名故意带 `.json` 与点前缀 —— preset id 规则 `/^[a-z0-9][a-z0-9-]*$/` 不含点，
-   * 所以它在 discovery 眼里根本不是 preset 槽位。
-   */
-  const MC_PRESET_MARKER = '.whale-craft.json'
-  const writeMcPresetMarker = (svc, id, { source, composition }) => {
-    try {
-      const dir = mcPresetDir(svc, id)
-      if (!dir || !existsSync(dir)) return false
-      writeFileSync(join(dir, MC_PRESET_MARKER), JSON.stringify({
-        createdBy: 'whale_craft',
-        spec: MC_PRESET_SPEC,
-        at: new Date().toISOString(),
-        source: source ?? null,
-        compositionHash: hash16(composition),
-        name: MC_PRESET_NAME,
-        description: MC_PRESET_DESCRIPTION,
-      }, null, 2) + '\n', 'utf8')
-      return true
-    } catch { return false }
-  }
-  const readMcPresetMarker = (svc, id) => {
-    try {
-      const dir = mcPresetDir(svc, id)
-      if (!dir) return null
-      const p = join(dir, MC_PRESET_MARKER)
-      return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null
-    } catch { return null }
-  }
-
-  /** 宿主 agentPresets 服务（可能晚就绪 → 必须走 inject 等，别用 apply 时的 ctx.get） */
-  let agentPresetsSvc = null
-  ctx.inject(['agentPresets'], (scope) => {
-    agentPresetsSvc = scope.get('agentPresets') ?? null
-    // 🔴 同上：preset 自检/自建失败只能记日志，不能让 rejection 漏出去（fail-loud → exit(1)）
-    void ensureMcPreset().catch((e) => logLine(`MC 模式 preset 自检失败（不影响启动）：${e?.message ?? e}`))
-  })
-
-  /**
-   * **MC 模式 preset 的初始化自检**（用户 2026-09-16 定，两次追加要求）：
-   *   ① 没有 → 自动建一个（复制官方 preset）
-   *   ② 有 → **检查对不对**：显示名/简介/排序、以及"组成是否还等于我们当初复制的那份"
-   *      · 我们自己建的 + 用户没改过 + 规格/官方源变了 → **重建**（先备份成 `<id>.bak-<时间>`）
-   *      · 我们自己建的但**组成被改过** → **绝不动**（用户改的就是用户的）
-   *      · 不是我们建的，只有"简介明显是复制残留"才修显示文本
-   *
-   * 🔴 **只能用宿主官方接口 `agentPresets.copy/remove`**：官方 authoring 明令
-   *    "只允许整目录复制已有 preset，调用方不得提供 composition 文本"
-   *    （`agent-presets/src/authoring.ts` 头注释）。
-   * 🔴 `ensureMcPreset:false` 可关；没有可写根（`authorable:false`）就跳过并说明。
-   */
-  let presetEnsureTried = false
-  const ensureMcPreset = async () => {
-    if (presetEnsureTried) return
-    if (pluginConfig.get('ensureMcPreset') !== true) return
-    const svc = agentPresetsSvc
-    if (!svc || typeof svc.list !== 'function' || typeof svc.copy !== 'function') return
-    presetEnsureTried = true
-    try {
-      if (svc.authorable === false) {
-        logLine('MC 模式 preset 需要"用户可写的 preset 根"，但这份部署没有 → 跳过自动创建（请手动建一个）')
-        return
-      }
-      const list = await svc.list()
-      const rows = new Map((list ?? []).map((p) => [String(p?.id ?? ''), p]))
-      const ids = [...rows.keys()].filter(Boolean)
-      const wanted = pluginConfig.mcModePresets
-      const existingId = wanted.find((id) => rows.has(id))
-      const source = pickPresetSource(ids, svc.defaultId)
-
-      if (existingId) {
-        const row = rows.get(existingId)
-        const dir = mcPresetDir(svc, existingId)
-        const marker = readMcPresetMarker(svc, existingId)
-        const composition = compositionOf(row)
-        const shippedDescs = PREFERRED_PRESET_SOURCES.map((sid) => rows.get(sid)?.description)
-        const plan = planPresetAction({
-          exists: true,
-          marker,
-          compositionHash: hash16(composition),
-          // 源变了才重建：拿**我们当初记的源**（marker.source）当前的组成来比
-          sourceHash: hash16(compositionOf(rows.get(String(marker?.source ?? source ?? '')))),
-          metaOk: String(row?.name ?? '') === MC_PRESET_NAME && String(row?.description ?? '') === MC_PRESET_DESCRIPTION,
-          shippedDescriptionMatch: isCopiedPresetDescription(row?.description, shippedDescs),
-        })
-        if (plan.action === 'leave') {
-          logLine(`MC 模式 preset「${existingId}」检查通过，不动它（${plan.reason}）`)
-          // 只有一件例外：**按 MC_PRESET_TOOL_GROUPS 补缺的工具组**（文件/检索/任务/目标/待办/压缩）——
-          // 官方 minimal 里一个都没有；只做"没有才加"，不动别的行。
-          ensureToolGroupsInPreset(svc, existingId)
-          /* 🔴 启动自检之二（用户 2026-09-17）：**persona 的键名必须跟本版本的源 preset 一致** ——
-           * 新版 DSH 要 `prefix`、老版要 `text`（我们曾写死 prefix，把老环境的 preset 建坏了：
-           * 加载即 `$text missing required value`，MC 模式直接切不进去）。 */
-          try {
-            const sourceKey = personaTextKeyOf(compositionOf(rows.get(String(marker?.source ?? source ?? ''))))
-            repairPersonaKeyIfNeeded(svc, existingId, {
-              composition,
-              sourceKey,
-              mine: marker !== null || isCopiedPresetDescription(row?.description, shippedDescs),
-              stillComplete: /^\s{2,}complete\s*:\s*true\s*$/m.test(String(composition ?? '')),
-            })
-          } catch (e) { logLine(`persona 键名自检失败（不影响启动）：${e?.message ?? e}`) }
-          return
-        }
-        if (plan.action === 'meta') {
-          const fixed = writeMcPresetMetadata(svc, existingId)
-          // 旧版（没有自建标记）建的那份：**只在组成与某个官方源逐字相同**时才动 persona/shell ——
-          // 「简介是复制残留」+「组成没被改过」两条同时成立，才敢认它是我们早期复制出来的。
-          let fixedComp = false
-          if (marker === null && composition !== null) {
-            // 🔴 判据不看"和官方源逐字相同"（DSH 一升级就比不上了），而看**那句官方 persona 还在不在**
-            //    —— 这才是真正有害的状态（它带着 complete:true / includeRuntimeContext:false，
-            //    会把我们注入的 context 段整个压掉）。用户改过人设的 preset 不会被碰。
-            const stillShippedPersona = /You are a helpful software engineer assistant\./.test(composition)
-              && /complete:\s*true/.test(composition)
-            if (stillShippedPersona) fixedComp = patchMcPresetComposition(svc, existingId, { key: personaTextKeyOf(compositionOf(rows.get(source))) })
-          }
-          logLine(`MC 模式 preset「${existingId}」${plan.reason} → 已修好显示名/简介`
-            + `${fixedComp ? '，并把 persona 换成 MC 的、关掉了 shell' : ''}`
-            + `${fixed ? '' : '（⚠️ 写入失败，请手动编辑 preset.yml）'}`)
-          // 旧版建的那份没有标记 → 修完补一个（hash 取**修完**之后的组成），下次才算"我们的"
-          if (marker === null) {
-            writeMcPresetMarker(svc, existingId, {
-              source: marker?.source ?? source,
-              composition: compositionOf(rows.get(existingId)) ?? composition,
-            })
-          }
-          ensureToolGroupsInPreset(svc, existingId)
-          // 同一件事也在这条路上做一遍：显示名/简介要修的那份，persona 键名可能也是坏的
-          try {
-            repairPersonaKeyIfNeeded(svc, existingId, {
-              composition,
-              sourceKey: personaTextKeyOf(compositionOf(rows.get(String(marker?.source ?? source ?? '')))),
-              mine: marker !== null || isCopiedPresetDescription(row?.description, shippedDescs),
-              stillComplete: /^\s{2,}complete\s*:\s*true\s*$/m.test(String(composition ?? '')),
-            })
-          } catch (e) { logLine(`persona 键名自检失败（不影响启动）：${e?.message ?? e}`) }
-          return
-        }
-        // plan.action === 'rebuild'：先备份整个目录，再用官方接口重新复制一遍
-        let backup = null
-        try {
-          if (dir && existsSync(dir)) {
-            backup = `${dir}.bak-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}`
-            renameSync(dir, backup)
-          }
-          await svc.copy(String(marker?.source ?? source), existingId, MC_PRESET_NAME)
-          patchMcPresetComposition(svc, existingId, { key: personaTextKeyOf(compositionOf(rows.get(String(marker?.source ?? source)))) })
-          writeMcPresetMetadata(svc, existingId)
-          writeMcPresetMarker(svc, existingId, { source: marker?.source ?? source, composition: compositionOf(rows.get(String(marker?.source ?? source ?? ''))) })
-          logLine(`MC 模式 preset「${existingId}」${plan.reason} → 已重建${backup ? `（旧的备份在 ${backup}）` : ''}`)
-        } catch (e) {
-          // 重建失败：把备份放回去，别把用户坑在"什么都没有"的状态
-          try { if (backup && !existsSync(dir)) renameSync(backup, dir) } catch { /* 尽力而为 */ }
-          logLine(`MC 模式 preset 重建失败（已回滚）：${e?.message ?? e}`)
-        }
-        return
-      }
-
-      // preset id 必须是目录名（宿主 `PRESET_ID = /^[a-z0-9][a-z0-9-]*$/`）——
-      // 所以默认名单里的 `whale_craft`（下划线）**永远不可能是 preset id**，只能建 `minecraft` 这种。
-      const target = pickPresetTarget(wanted)
-      if (!target) {
-        logLine(`没找到 MC 模式 preset，而 mcModePresets 里没有**合法**的 preset id（${wanted.join(' / ')}）→ 跳过`)
-        return
-      }
-      if (!source) {
-        logLine(`没找到 MC 模式 preset，且找不到可复制的官方 preset 源（现有：${ids.join(' / ') || '（空）'}）→ 跳过`)
-        return
-      }
-      await svc.copy(source, target, MC_PRESET_NAME)
-      // 复制完立刻打我们的补丁：persona 换成 MC 的、关掉那个 shell（否则就是"软件助手"+一个 pwsh）
-      const patched = patchMcPresetComposition(svc, target, { key: personaTextKeyOf(compositionOf(rows.get(source))) })
-      // copy() 会**保留源 preset 的简介**（官方只改 name）→ 必须把元数据改回来，否则简介跟极简模式一样
-      const meta = writeMcPresetMetadata(svc, target)
-      // 留个"这是我们建的"标记（含规格版本 + 组成 hash）→ 下次启动才能"检查不对就重建"
-      const marked = writeMcPresetMarker(svc, target, {
-        source,
-        composition: compositionOf((await svc.list())?.find?.((p) => String(p?.id ?? '') === target)),
-      })
-      logLine(`已自动创建「${MC_PRESET_NAME}」preset：复制官方 ${source} → ${target}`
-        + `${meta ? '（简介已改）' : '（⚠️ 简介没改成，请手动编辑 preset.yml）'}`
-        + `${patched ? '（persona 已换成 MC 的、shell 已关）' : '（⚠️ persona/shell 没改成，请手动看一眼 agent.cordis.yml）'}`
-        + `${marked ? '' : '（⚠️ 没留下自建标记，下次不会自动维护它）'}`
-        + `；想改就编辑 ${expandHome(String(svc.roots?.find?.((r) => r?.trust === 'user')?.path ?? '$DSH_HOME/.agent-presets'))}/${target}/`
-        + `，想关掉自动创建设 ensureMcPreset=false`)
-    } catch (e) {
-      logLine(`自动创建 MC 模式 preset 失败（不影响其它功能）：${e?.message ?? e}`)
-    }
-  }
-
-  /** 诊断用：每个 agent 最近一次看到的 preset id（`/api/mc/mode` 会报出来） */
-  const lastPresetSeen = new WeakMap()
-
-  /**
-   * 现场问出这个 agent 的 preset id（拿不到 → null）。
-   *
-   * 🔴 以前只认 inject 抓到的那个引用：一旦它还是 null，判据就永远 false，
-   *    表现就是"按钮有、提示词没有、隔离也不生效"（2026-09-16 真机事故的同一家族）——
-   *    所以服务可能晚就绪 / `ctx.inject` 没跑到时**现场再拿一次**。
-   */
+  /** 现场问出这个 agent 的声明式 preset id（拿不到 → null）。 */
   const mcPresetIdOf = (agent) => {
     if (!agent?.ctx) return null
     try {
-      let svc = agentPresetsSvc
-      if (!svc) { try { svc = agent.ctx.get('agentPresets') } catch { svc = null } }
-      if (!svc) { try { svc = ctx.get('agentPresets') } catch { svc = null } }
-      const id = svc?.composedPreset?.(agent.ctx)
+      const id = agentPresetsSvc.composedPreset(agent.ctx)
       if (typeof id === 'string' && id) { lastPresetSeen.set(agent, id); return id }
       return null
     } catch { return null }
@@ -4568,19 +4124,17 @@ export function apply(ctx, rawConfig) {
       } catch (e) { logLine(`MC 模式策略失败：${e.message}`) }
     }
     for (const ev of ['agent/created', 'agent/session-start']) {
-      try { handlers.push(ctx.on(ev, ({ agent } = {}) => touch(agent))) } catch { /* 宿主没有这个事件就跳过 */ }
+      handlers.push(ctx.on(ev, ({ agent } = {}) => touch(agent)))
     }
     // 模式被选上/切换：两个位置参数，agent 要自己找回来
-    try {
-      handlers.push(ctx.on('agent-preset/selected', (sessionId, presetId) => {
-        // 🔴 两个方向都记：切到 MC模式（含 MC+）才进兜底名单，切走要**移出去**（否则前端入口判据会残留）
-        if (pluginConfig.isMcModePreset(presetId)) mcModeAgentIds.add(String(sessionId))
-        else mcModeAgentIds.delete(String(sessionId))
-        if (pluginConfig.isMcPlusPreset(presetId)) mcPlusAgentIds.add(String(sessionId))
-        else mcPlusAgentIds.delete(String(sessionId))
-        touch(safeAgentById(sessionId))
-      }))
-    } catch { /* 老宿主没有这个事件 */ }
+    handlers.push(ctx.on('agent-preset/selected', (sessionId, presetId) => {
+      // 🔴 两个方向都记：切到 MC模式（含 MC+）才进兜底名单，切走要**移出去**（否则前端入口判据会残留）
+      if (pluginConfig.isMcModePreset(presetId)) mcModeAgentIds.add(String(sessionId))
+      else mcModeAgentIds.delete(String(sessionId))
+      if (pluginConfig.isMcPlusPreset(presetId)) mcPlusAgentIds.add(String(sessionId))
+      else mcPlusAgentIds.delete(String(sessionId))
+      touch(safeAgentById(sessionId))
+    }))
 
     /* 🔴🔴 2026-09-18 **提示词的挂载点**（用户："应该切换到正确的挂载点……而是在对话开始后设置
      *    工具/注入提示词"）。宿主给的时序是：`agent/created`（setup 完成 = preset 已 mount）
@@ -4610,21 +4164,14 @@ export function apply(ctx, rawConfig) {
      *    然后**用交棒拿回的结果做改写**（见下面 `enterWithNotices`）。
      *    且**无论对账成功与否都必须交棒**：抛错也不能否决整条链。
      * 教训：挂到 waterfall 之前，先读那个 dispatch 模式的契约，别只看事件签名。 */
-    try {
-      handlers.push(ctx.on('agent/pre-step', ({ agent } = {}, next) => {
-        if (typeof next !== 'function') {
-          // 万一宿主把这条改成普通 emit（不该发生）：别抛，记一行就走，绝不能带崩这一轮。
-          try { reconcileNotices(agent) } catch (e) { logLine(`提示词对账失败（不打断本轮）：${e?.message ?? e}`) }
-          return undefined
-        }
-        const inner = next()
-        // 交棒一定发生；拿回内层 decision 后把提示行塞进**本步消息的最前面**（与用户那句同批送出）。
-        if (inner && typeof inner.then === 'function') {
-          return inner.then((decision) => enterWithNotices(agent, decision))
-        }
-        return enterWithNotices(agent, inner)
-      }))
-    } catch { /* 老宿主没有这条瀑布 */ }
+    handlers.push(ctx.on('agent/pre-step', ({ agent } = {}, next) => {
+      const inner = next()
+      // 交棒一定发生；拿回内层 decision 后把提示行塞进**本步消息的最前面**（与用户那句同批送出）。
+      if (inner && typeof inner.then === 'function') {
+        return inner.then((decision) => enterWithNotices(agent, decision))
+      }
+      return enterWithNotices(agent, inner)
+    }))
     return () => { for (const off of handlers) { try { off?.() } catch {} } }
   }, 'whale_craft: mc-mode policy')
 

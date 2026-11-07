@@ -84,9 +84,9 @@ npm run dev:stop              # 按 pidfile 停实例
 
 ## 7. DSH 升级敏感清单（升级后逐项自查）
 
-完整清单见 [architecture.md §13](architecture.md)。最常踩的：`agent/pre-step` 必须 `next()`；`tools.restrict` 黏性；`archiveSession` 内部方法包装；`agentPresets` 的 `copy` 契约与同步 `roots`（async `list()` 静默失效）；persona 键名 `text/prefix`；`@deepseek-ai/dsh-llm` 的 `createUserMessage`；`sessionController.prompt` 是 @Remote。
+完整清单见 [architecture.md §13](architecture.md)。最常踩的：`agent/pre-step` 必须 `next()`；`tools.restrict` 黏性；`archiveSession` 内部方法包装；声明式 preset 的行 id / composition 与 `agentPresets.recompose()` 契约；`@deepseek-ai/dsh-llm` 的 `createUserMessage`；`sessionController.prompt` 是 @Remote。
 
-另外，插件在 `package.json` 里声明了受支持的 DSH 运行时范围（`engines.dsh` + dsh peer 均为 `>=0.2.0-rc.1 <0.3.0`）：**DSH 升到范围外时，新安装会被拒、已装的会在启动时被跳过**（stderr 一行 `skipping profile bundle`）——这是有意为之的围栏，不是 bug；处理方式见 [release.md §7](release.md)（豁免命令或改范围发新版）。
+另外，插件在 `package.json` 里声明了受支持的 DSH 运行时范围（`engines.dsh` + dsh peer 均为 `>=0.2.2-rc.1 <0.3.0`）：**DSH 升到范围外时，新安装会被拒、已装的会在启动时被跳过**（stderr 一行 `skipping profile bundle`）——这是有意为之的围栏，不是 bug；处理方式见 [release.md §7](release.md)（豁免命令或改范围发新版）。
 
 ## 8. 仓库约定
 
