@@ -1653,6 +1653,11 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     console.log(`  ${/name: '@deepseek-ai\/dsh-tool-web'\n\s+config:\n\s+fetch: false/.test(mcSrc) ? '✅' : '❌'} 🔴 MC模式只挂 search、不挂 fetch（tool-web 的 fetch: false）`)
     const plusNeeds = ['@deepseek-ai/dsh-persona', '@deepseek-ai/dsh-agent-instructions', '@deepseek-ai/dsh-tool-pwsh', '@deepseek-ai/dsh-tool-bash', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-skill-filesystem', '@deepseek-ai/dsh-plan-mode', '@deepseek-ai/dsh-tool-subagent', '@deepseek-ai/dsh-tool-web', '@deepseek-ai/dsh-plugin-manager/tools']
     console.log(`  ${plusNeeds.every((n) => plusSrc.includes(n)) ? '✅' : '❌'} MC+模式组成 = 标准模式全表（persona 除外）：${plusNeeds.filter((n) => !plusSrc.includes(n)).join(', ') || '无缺'}`)
+    // 🔴 2026-11-08 真事故：0.2.2-rc.1 删除了 `dsh-tool-subagent-control/list-agents` 行；
+    //    MC+ 的手抄副本仍引用它 ⇒ 整份 preset 挂载失败（broken: never started）⇒ 模式识别不到。
+    console.log(`  ${!/name:\s*'@deepseek-ai\/dsh-tool-subagent-control\/list-agents'/.test(plusSrc) ? '✅' : '❌'} 🔴 MC+ 不再引用宿主已删除的 list-agents 子行（否则整份 preset 挂载失败）`)
+    const plusNewRows = ['@deepseek-ai/dsh-time-context', '@deepseek-ai/dsh-tool-schedule', '@deepseek-ai/dsh-plugin-market/tools']
+    console.log(`  ${plusNewRows.every((n) => plusSrc.includes(n)) ? '✅' : '❌'} MC+ 已对齐 0.2.2-rc.1 标准组成（time-context / tool-schedule / plugin-market）：${plusNewRows.filter((n) => !plusSrc.includes(n)).join(', ') || '无缺'}`)
     const mountsSelf = /\bname:\s*whale_craft\b/.test(mcSrc) || /\bname:\s*whale_craft\b/.test(plusSrc)
     console.log(`  ${!mcSrc.includes('@deepseek-ai/dsh-tool-pwsh') && !mountsSelf ? '✅' : '❌'} 🔴 MC模式**不挂**标准工具（唯一例外 = tool-web，只为 web_search）、preset 里**不挂**插件自己（工具走全局注册 + restrict/guard；persona 正文里出现 "whale_craft" 不算）`)
     console.log(`  ${pkg.files?.includes('presets') ? '✅' : '❌'} files 里列了 presets/（发布包才带得上声明）`)

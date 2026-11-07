@@ -142,9 +142,12 @@ kind 变化先 release 再套新）：
   （运行时白名单再收一道，见 §7）；⚠️ `tool-web` 是唯一"标准工具"例外，且 host 平面那一行被
   `dsh-web-app` 禁掉、必须由 preset 自己组合，否则 MC 模式没有 `web_search`。
 - `presets/minecraft-plus.patch.yml` → 「MC+模式」（id `minecraft-plus`，order 6）：官方
-  `dsh-web-app/presets/standard.patch.yml` 的**手抄副本**（persona 换成 MC 的；含 agent-instructions /
-  pwsh / 子代理 / 计划 / 网络 / skills / 压缩等全表）。⚠️ 声明式 preset 没有继承机制 —— 宿主更新
-  standard 组成**不会**自动并入，升级宿主后需人工对照刷新（文件头注释有注记）。
+  `dsh-web-app/presets/standard.patch.yml` 的**手抄副本**（最近一次对照：**0.2.2-rc.1，2026-11-08**；
+  persona 换成 MC 的；含 agent-instructions / time-context / pwsh / 子代理 / 计划 / 网络 / schedule /
+  skills / 压缩等全表）。⚠️ 声明式 preset 没有继承机制 —— 宿主更新 standard 组成**不会**自动并入，
+  **升级宿主后必须人工对照刷新**。引用已删除的行会让**整份 preset 挂载失败**，插件侧只表现成
+  "识别不到该模式"（2026-11-07 真事故：0.2.2-rc.1 删掉了 `dsh-tool-subagent-control/list-agents` 行）。
+  `apply()` 启动 3s 后会查一次宿主 roster，遇到 `broken` 写日志（见 §13 第 4 条）。
 - 用户自定义：Web 编辑器（或 profile 的 `cordis.patch.yml`）按**行 id**（`preset-minecraft` /
   `preset-minecraft-plus`）覆盖 `config.plugins`；不要直接改包内文件（包更新会覆盖）。
 
@@ -242,7 +245,7 @@ kind 变化先 release 再套新）：
 1. `agent/pre-step` waterfall **必须 `next()`**（不交棒 = 全崩，0.1.4 P0）。
 2. `tools.restrict` 的**黏性**语义与 disposer；`agent-preset/locked`。
 3. `workspaceRegistry.archiveSession` 内部方法（归档保护包装点）。
-4. preset 体系：DSH 0.2.2 使用**声明式注册表**（`@deepseek-ai/dsh-agent-preset` 行 + `dsh.bundle.patch` **数组**；注册表不扫目录、无 copy）——两个 preset 只靠包内 `presets/*.patch.yml` 声明。
+4. preset 体系：DSH 0.2.2 使用**声明式注册表**（`@deepseek-ai/dsh-agent-preset` 行 + `dsh.bundle.patch` **数组**；注册表不扫目录、无 copy）——两个 preset 只靠包内 `presets/*.patch.yml` 声明。**每次升宿主**都要拿 `dsh-web-app/presets/standard.patch.yml` 对照刷新 `minecraft-plus.patch.yml`（手抄无继承）；`agentPresets.list()` 的 `broken` 字段会指出挂载失败的行，插件启动日志也会报。
 5. preset persona 键名（`text` → `prefix`）；`complete` / `includeRuntimeContext` 的压制关系。
 6. `@deepseek-ai/dsh-llm` 的 `createUserMessage` 可用性（缺失时走自带兜底，但**依赖声明不能少**）。
 7. `sessionController.prompt` 是 @Remote（必传 signal）；`agent.steer` 在 step 边界的消费语义。

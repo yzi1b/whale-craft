@@ -1,9 +1,14 @@
 # Whale Craft「MC+模式」preset 声明（DSH 0.2.2 声明式 preset 注册表）。
 #
 # 组成 = 官方 `@deepseek-ai/dsh-web-app` 的 standard preset 全表（手抄副本，
-# 2026-10-04 取自 dsh-web-app@0.2.0-rc.2 的 presets/standard.patch.yml），
-# 仅把 persona 换成 MC 的。宿主更新标准组成时**不会**自动并入这里（官方声明式
-# preset 没有继承机制）——升级宿主后需要人工对照刷新。
+# 2026-11-08 取自 dsh-web-app@0.2.2-rc.1 的 presets/standard.patch.yml），
+# 仅把 persona 换成 MC 的，并补上本 preset 的 name / description / order。
+# 宿主更新标准组成时**不会**自动并入这里（官方声明式 preset 没有继承机制）——
+# 升级宿主后必须重新对照刷新，否则可能引用已删除的行、导致**整份 preset 挂载失败**。
+# 🔴 2026-11-07 真事故：0.2.2-rc.1 删除了 `dsh-tool-subagent-control/list-agents` 行，
+#    旧副本仍引用它 ⇒《MC+模式》在宿主 preset 列表里带
+#    `broken: "tool-subagent-list-agents (…/list-agents): never started"`，
+#    选中后挂载失败、composedPreset 为空 ⇒ 插件识别不到 MC+ 模式。
 # 用户想自定义组成，用 Web 编辑器（或 profile 的 cordis.patch.yml）按行 id
 # （`preset-minecraft-plus`）覆盖 `config.plugins`。
 #
@@ -25,12 +30,14 @@
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
-              suffix: '工作区中的文件你都有权限操作。而与 MC 游戏相关的记忆等文件应当存在 `.whale-craft` 子目录下。`.whale-craft` 子目录也是其他只专注于 MC 游戏的 agent（如存在）主要活动的目录。'
               prefix: '你是一个由 {{model}} 模型驱动的编程 agent。同时 whale_craft 插件赋予你使用无头机器人进入 Minecraft Java 版服务器的能力。你可以调用工具与世界和玩家互动。编程与系统操作相关的工具仍然暴露，用于扩展自身 MC 能力或进行调试研究。'
+              suffix: '工作区中的文件你都有权限操作。而与 MC 游戏相关的记忆等文件应当存在 `.whale-craft` 子目录下。`.whale-craft` 子目录也是其他只专注于 MC 游戏的 agent（如存在）主要活动的目录。'
           - id: agent-instructions
             name: '@deepseek-ai/dsh-agent-instructions'
             config:
               maxBytes: 65536
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
           - id: tool-bash
             name: '@deepseek-ai/dsh-tool-bash'
             disabled: !!js process.platform === 'win32'
@@ -39,12 +46,17 @@
             disabled: !!js process.platform !== 'win32'
           - id: tool-fs
             name: '@deepseek-ai/dsh-tool-fs'
+            config:
+              # Set false to drop the apply_patch tool beside edit.
+              applyPatch: false
           - id: tool-fs-search
             name: '@deepseek-ai/dsh-tool-fs-search'
             config:
               sampleOverCapGlobResults: false
           - id: tool-jobs
             name: '@deepseek-ai/dsh-tool-jobs'
+          - id: tool-schedule
+            name: '@deepseek-ai/dsh-tool-schedule'
           - id: skill-filesystem
             name: '@deepseek-ai/dsh-skill-filesystem'
           - id: tool-skill
@@ -63,7 +75,7 @@
                 name: '@deepseek-ai/dsh-plan-mode'
                 config:
                   section: |
-                    You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+                    You are in plan mode. Stay in plan mode until the user approves your plan through exit_plan_mode or switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
 
                     Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
 
@@ -99,49 +111,24 @@
             config:
               - id: tool-subagent-control
                 name: '@deepseek-ai/dsh-tool-subagent-control'
-              - id: tool-subagent-list-agents
-                name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
               - id: tool-subagent
                 name: '@deepseek-ai/dsh-tool-subagent'
                 config:
                   provider: spawn
                   toolName: subagent
-                  modelSelectionSettings: true
-                  backgroundMode: continuable
+                  modelSelection: true
+                  modelDiscovery: true
               - id: tool-subagent-fork
                 name: '@deepseek-ai/dsh-tool-subagent'
                 config:
                   provider: fork
                   toolName: subagent_fork
-                  backgroundMode: continuable
-              - id: tool-subagent-codex
-                name: '@deepseek-ai/dsh-tool-subagent'
-                disabled: true
-                config:
-                  provider: codex
-                  toolName: subagent_codex
-                  backgroundMode: one-shot
-                  maxDepth: provider-managed
-              - id: tool-subagent-claude-code
-                name: '@deepseek-ai/dsh-tool-subagent'
-                disabled: true
-                config:
-                  provider: claude-code
-                  toolName: subagent_claude_code
-                  backgroundMode: one-shot
-                  maxDepth: provider-managed
               - id: workflow-ptc
                 name: '@deepseek-ai/dsh-workflow-ptc'
                 config:
                   provider: spawn
               - id: tool-workflow
                 name: '@deepseek-ai/dsh-tool-workflow'
-              - id: tool-ralph
-                name: '@deepseek-ai/dsh-tool-ralph'
-                disabled: true
-                config:
-                  subagentProvider: spawn
-                  maxRounds: 64
           - id: tool-ask-user
             name: '@deepseek-ai/dsh-tool-ask-user'
           - id: tool-todo
@@ -157,4 +144,7 @@
             name: '@deepseek-ai/dsh-tool-present'
           - id: tool-plugin-manager
             name: '@deepseek-ai/dsh-plugin-manager/tools'
+            disabled: !!js "!ctx.get('profileContext')"
+          - id: tool-plugin-market
+            name: '@deepseek-ai/dsh-plugin-market/tools'
             disabled: true

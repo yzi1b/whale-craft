@@ -510,6 +510,26 @@ export function apply(ctx, rawConfig) {
   if (!agentPresetsSvc || typeof agentPresetsSvc.composedPreset !== 'function') {
     throw new Error('whale_craft 需要 DSH 0.2.2 的 agentPresets 服务')
   }
+  /**
+   * 宿主 preset 健康检查：MC / MC+ 的组成由本包**手抄声明**，宿主升级删改行之后，
+   * 整份 preset 会在挂载时失败；对外只表现成该模式"识别不到"（很隐蔽）。
+   * 启动后异步查一次宿主 roster，有 `broken` 就写日志。延迟到 Host 行激活之后，
+   * 避免在 apply 里等 loader 结算（宿主明示会死锁）。
+   */
+  ctx.effect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        if (typeof agentPresetsSvc.list !== 'function') return
+        const rows = await agentPresetsSvc.list()
+        for (const row of Array.isArray(rows) ? rows : []) {
+          if ((row?.id === 'minecraft' || row?.id === 'minecraft-plus') && row.broken) {
+            logLine(`🔴 preset ${row.id} 挂载失败（该模式将无法识别）：${row.broken}`)
+          }
+        }
+      } catch (e) { logLine(`preset 健康检查跳过：${e?.message ?? e}`) }
+    }, 3000)
+    return () => clearTimeout(timer)
+  }, 'whale_craft: preset health check')
   const lastPresetSeen = new WeakMap()
   const hostMode = () => String(profileContext.name).toLowerCase() === 'desktop' ? 'desktop' : 'web'
 
