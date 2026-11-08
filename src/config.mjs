@@ -22,7 +22,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
-import { normalizeExpressBase, normalizeExpressPort, DEFAULT_EXPRESS_PORT } from './express.mjs'
 
 /** 插件在 `$DSH_HOME` 下的目录名 */
 export const STATE_DIR_NAME = 'whale_craft'
@@ -99,29 +98,6 @@ export const DEFAULT_CONFIG = {
    * 开关 2026-10-03 起**按工作区**存（`<记忆根>/config.json`，见 src/wsconfig.mjs），不再在这里。
    * 旧全局值只作迁移 seed 用一次 —— 见 `PluginConfig.legacyPromptSwitches()`。 */
   /**
-   * 「文件分享」——**按宿主模式拆成两套键、相互独立**（2026-10-07 用户定）。
-   * 从哪种模式（宿主 profile）进来，就只认哪种模式的那套键；设置页也只显示那一套。
-   *
-   *   · **web 模式**（`expressWebEnabled` + `expressWebBase`）：沿用老方案——回
-   *     `base + /api/whale-craft/express/<工作区uuid>/<rel>` 完整 URL，文件走**宿主 webServer** 的那条路由；
-   *   · **desktop 模式**（`expressDesktopEnabled` + `expressDesktopPort`）：不要 base，改配端口，
-   *     插件**自起一个只监听 localhost 的 http 服务**，地址 `http://localhost:<port>/<工作区uuid>/<rel>`，
-   *     **直接托管**发布区文件。默认端口 {@link DEFAULT_EXPRESS_PORT}。
-   *
-   * 共同语义：关 → `mc_kit_express` 恒回 {@link EXPRESS_OFF_TEXT}（让 AI 把**绝对路径**给用户）；
-   * 开但地址/端口没配好 → 回"请去设置"/"端口不可用"那句话（**不抛错**）。
-   * 🔴 两种模式都仍然**只认发布区**（`.whale-craft/.express/`）。
-   * 历史：更早是 `expressMode: 'off' | 'online'`（曾含 `local`），2026-10-04 降成一个开关
-   * `expressEnabled`，2026-10-07 再拆成上面这四键（老键由 {@link PluginConfig.migrate} 搬到 web 那套）。
-   */
-  expressWebEnabled: false,
-  /** web 模式的 base（如 `https://dsh.example.com`，可带路径前缀）；空 = 还没配 */
-  expressWebBase: '',
-  /** desktop 模式的分享开关（默认关） */
-  expressDesktopEnabled: false,
-  /** desktop 模式的托管端口（只监听 localhost）；默认 {@link DEFAULT_EXPRESS_PORT} */
-  expressDesktopPort: DEFAULT_EXPRESS_PORT,
-  /**
    * 「MC设置 → 调试」页的「开放助手调试工具」开关（默认关）：是否向助手暴露**调试用途的工具**供其调用。
    * **工作区无关**（全局 config.json）。
    */
@@ -197,38 +173,23 @@ export class PluginConfig {
   }
 
   /**
-   * 配置迁移（幂等；加载时跑一次，只为把**旧格式**搬到新格式）。
+   * 配置迁移（幂等；加载时跑一次，只为清理**已删除功能**留下的旧键）。
    *
-   * 文件分享的键搬两档（都删旧键，免得两套语义并存）；同时删除已废弃的
-   * `ensureMcPreset`（DSH 0.2.2 只使用包内声明式 preset）：
-   *   ① 最老的 `expressMode`（`'off' | 'online'`，还一度有 `'local'`）→ `expressWebEnabled` 布尔
-   *      （用户 2026-10-04："以后只有在线这一种方式"）：`'online'` → `true`，其余 → `false`；
-   *   ② 2026-10-07 拆键：老 `expressEnabled` → `expressWebEnabled`、`expressBase` → `expressWebBase`
-   *      （老单套键本就是 web 语义）——已写过新键就不动新键、只清旧键。
+   * 文件分享已移除：所有 express 旧键（`expressMode` / `expressEnabled` / `expressBase` /
+   * `expressWebEnabled` / `expressWebBase` / `expressDesktopEnabled` / `expressDesktopPort`）
+   * 一律删除，避免遗留配置误导用户。同时删除已废弃的 `ensureMcPreset`。
    * 只在真改动了才落盘；落盘失败只记一条 `lastError`（**不让插件起不来**）。
    */
   migrate () {
     if (!this.data || typeof this.data !== 'object') return
-    const has = (k) => Object.prototype.hasOwnProperty.call(this.data, k)
     let changed = false
-    if (has('ensureMcPreset')) {
-      delete this.data.ensureMcPreset
-      changed = true
-    }
-    if (has('expressMode')) {
-      const online = String(this.data.expressMode ?? '').trim().toLowerCase() === 'online'
-      if (!has('expressWebEnabled')) this.data.expressWebEnabled = online
-      delete this.data.expressMode
-      changed = true
-    }
-    if (has('expressEnabled')) {
-      if (!has('expressWebEnabled')) this.data.expressWebEnabled = this.data.expressEnabled === true
-      delete this.data.expressEnabled
-      changed = true
-    }
-    if (has('expressBase')) {
-      if (!has('expressWebBase')) this.data.expressWebBase = String(this.data.expressBase ?? '')
-      delete this.data.expressBase
+    for (const k of [
+      'ensureMcPreset',
+      'expressMode', 'expressEnabled', 'expressBase',
+      'expressWebEnabled', 'expressWebBase', 'expressDesktopEnabled', 'expressDesktopPort',
+    ]) {
+      if (!Object.prototype.hasOwnProperty.call(this.data, k)) continue
+      delete this.data[k]
       changed = true
     }
     if (!changed) return
@@ -264,9 +225,6 @@ export class PluginConfig {
     }
     if (SECRET_KEYS.has(top)) throw new Error('这一项不允许通过工具修改')
     validate(top, rest, value)
-    // 落盘前归一化（存的永远是规范形态：base 去尾斜杠；端口存整数）
-    if (top === 'expressWebBase') value = normalizeExpressBase(value) ?? ''
-    if (top === 'expressDesktopPort') value = normalizeExpressPort(value)
     writePath(this.data, p.split('.'), value)
     this.save()
     return { path: p, value: this.get(p), file: this.file }
@@ -321,26 +279,6 @@ export class PluginConfig {
       allowOtherTools: Array.isArray(v?.allowOtherTools) ? v.allowOtherTools.map(String) : [],
       hideAdminTools: v?.hideAdminTools !== false,
     }
-  }
-
-  /** 「文件分享」web 模式开关（默认关） */
-  get expressWebEnabled () {
-    return this.get('expressWebEnabled') === true
-  }
-
-  /** web 模式分享的 base（归一化：去尾斜杠；非法/空 = `''`） */
-  get expressWebBase () {
-    return normalizeExpressBase(this.get('expressWebBase')) ?? ''
-  }
-
-  /** 「文件分享」desktop 模式开关（默认关） */
-  get expressDesktopEnabled () {
-    return this.get('expressDesktopEnabled') === true
-  }
-
-  /** desktop 模式托管端口（归一化成正整数；非法 = 默认端口） */
-  get expressDesktopPort () {
-    return normalizeExpressPort(this.get('expressDesktopPort')) ?? DEFAULT_EXPRESS_PORT
   }
 
   /** 「开放助手调试工具」开关（默认关）——是否向助手暴露调试用途的工具 */
@@ -495,7 +433,7 @@ function validate (top, rest, value) {
     return
   }
   if (top === 'allowAllCommands' || top === 'exposeDebugTools'
-    || top === 'allowWebSearch' || top === 'expressWebEnabled' || top === 'expressDesktopEnabled'
+    || top === 'allowWebSearch'
     || top === 'webFetchEnabled' || top === 'allowAllFetchDomains'
     || top === 'webFetchAllowHtml' || top === 'webFetchAllowText' || top === 'webFetchAllowImage') {
     if (typeof value !== 'boolean') throw new Error(`${top} 必须是 true/false`)
@@ -503,17 +441,6 @@ function validate (top, rest, value) {
   }
   if (top === 'webFetchDomains') {
     if (!isStrArray) throw new Error('webFetchDomains 必须是字符串数组（如 ["minecraft.wiki","*.minecraft.wiki","/^.+\\\\.wiki$/"]）')
-    return
-  }
-  if (top === 'expressWebBase') {
-    if (typeof value !== 'string') throw new Error('expressWebBase 必须是字符串（如 https://example.com；空 = 未设置）')
-    if (value.trim() && normalizeExpressBase(value) === null) {
-      throw new Error('expressWebBase 必须是 http(s) 开头的完整地址（如 https://example.com，可带路径前缀）')
-    }
-    return
-  }
-  if (top === 'expressDesktopPort') {
-    if (normalizeExpressPort(value) === null) throw new Error('expressDesktopPort 必须是 1–65535 的整数端口')
     return
   }
   if (top === 'mcMode') {

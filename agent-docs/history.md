@@ -94,6 +94,7 @@
 | F22 | 公网 / 局域网部署下「MC设置」整页不可用（2026-11-07） | 信任栅栏仍在读 DSH **0.2.0-rc.2 的 `webRuntime` 服务**（0.2.1 起已删除）⇒ `liveTrustedHosts()` 恒为 `[]`，`/api/mc/*` 只认回环 Host。反代保留公网域名时所有请求 403（首屏 `accounts` 失败 ⇒ 整页报错）；反代改写 Host 时 GET 能过，但带 Origin 的 POST/PATCH 仍因 host 不一致 403。修法：改读宿主 `connection.trustedHosts`（权威来源，`webStartup` 只作就绪前兜底），并按宿主语义放行 `webServer.host` 绑定地址、按 Origin 协议归一化默认端口。自检新增四条真路由断言：可信主机 / 同源 Origin / 跨源 Origin / 绑定地址 |
 | F23 | `--public-url` 子路径部署下 MC 设置仍不可用（2026-11-07，紧随 F22） | 客户端所有 API 请求写死根绝对路径 `/api/...`；DSH 0.2.2 的前缀部署（`document.baseURI` = `https://host/prefix/`）下会绕过前缀、打到域名根。修法：新增 `apiUrl()` 把路径按 `document.baseURI` 解析（`apiFetch` + 5 处直接 `fetch` 全部覆盖）；「当前地址」改报 `clientBase`（应用根**含前缀**，旧客户端的 `clientOrigin` 仍兼容）。自检：静态断言“无根绝对 `/api` fetch / apiUrl 用 baseURI”，以及 clientBase 前缀保留、旧别名、跨 host 拒绝 |
 | F24 | DSH 0.2.2-rc.1 上「MC+模式」**无法识别**（2026-11-08） | `presets/minecraft-plus.patch.yml` 是 standard 的手抄副本（取自 0.2.0-rc.2）。0.2.2-rc.1 删除了 `dsh-tool-subagent-control/list-agents` 行（还改了 subagent 配置、新增 time-context/tool-schedule/tool-plugin-market）；旧副本仍引用它 ⇒ 宿主 `agentPresets.list()` 回 `broken: "tool-subagent-list-agents (…/list-agents): never started"` ⇒ 整份 preset 挂载失败，`composedPreset()` 为空，插件的 `isMcPlusAgent` 永远 false。修法：照 0.2.2-rc.1 的 `standard.patch.yml` 重抄组成（保留 MC persona 与本 preset 元数据）；`apply()` 启动 3s 后查一次 roster，遇到本插件的 preset `broken` 写日志，避免再次静默。真机验收：重查 `agentPresets/list`，`minecraft-plus` 不再带 `broken` |
+| F25 | **文件分享整体移除**（2026-11-08，用户定） | 用户确认回复里 `![说明](.whale-craft/.out/x.png)` 的原生内嵌效果很好，且 DSH 自带固定系统提示 `@deepseek-ai/dsh-deliverable-file-references`（web/SDK/桌面均挂载）本来就引导 `![Description](<path>)` + `present`，与插件的 `.express` + `mc_kit_express` 引导冲突。决定**彻底撤下**：删 `mc_kit_express`、`.express/` 发布区、`/api/whale-craft/express/*` 路由、桌面独立端口服务（`src/express.mjs` / `src/express-server.mjs`）、四套 express 配置与 MC设置「文件分享」页；`PluginConfig.migrate()` 清理旧键。替代：图片写工作区（默认 `.out/`）并在回复内嵌；非图片/文件卡片用宿主 `present`（MC 模式重新放行，guard 限本会话工作区）。代价：不再提供"外部可访问链接"。自检改为断言分享路由/工具/页面已删干净、`present` 在 MC 白名单、preset 含 `dsh-tool-present` |
 
 ## 3. 设计决策记录（"为什么这么设计"）
 
@@ -103,8 +104,8 @@
 | 看门狗挂宿主 **job**（`kind:'mc-watch'`，整局存活） | 宿主任务条可见、可被"强制停止"；宿主 kill job → `cancel` → disarm 兜底 teardown，不会留孤儿 |
 | 行事准则叫 `RULES.md` 而不是 `AGENTS.md` | 避开宿主对 `AGENTS.md`/`CLAUDE.md` 的自动注入（不受插件开关控制）；改名后注入只剩插件一条、且只对 MC 模式生效 |
 | **连接参数全在 `mc_connect` 工具里**，Config 只留行为配置 | AI 按用户指令/记忆决定连哪；Config 无凭据可泄露；旧字段保留为 deprecated fallback |
-| 发布区地址用**工作区 uuid** 指代 | 不同父目录下的同名工作区不会撞；目录改名链接不失效；查不到就 404（**不退回目录名**，防猜测） |
-| `.out/` 与 `.express/` 分离 | "目录即白名单"：草稿永不对外；要分享必须显式放进发布区 |
+| ~~发布区地址用**工作区 uuid** 指代~~ | 该设计随文件分享于 2026-11-08 移除（见 F25） |
+| ~~`.out/` 与 `.express/` 分离~~ | 该设计随文件分享于 2026-11-08 移除（见 F25）；`.out/` 仍是默认出图目录 |
 | 分享模式砍到只剩 `off`/`online`（砍 `local`） | 前端只认绝对 http(s) 地址，本地路径既点不开也内联不了——留着只会误导 |
 | 记忆目录 `create:false`，只在两个时机建 | 不在用户没玩 MC 的普通会话里乱建 `.whale-craft/` |
 | `mc_give` 走协议级 `set_creative_slot` | 创造模式即可用，**不需要 OP**；也绕过指令白名单 |

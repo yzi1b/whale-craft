@@ -104,7 +104,6 @@ dsh plugin --profile web add whale_craft@^0.2.0-beta.4
 | 会话锁（连服期间） | `$DSH_HOME/whale_craft/.instance.<会话>.json`                                                                 |
 | 记忆 / 提示词      | **`<会话工作区>/.whale-craft/`**：`README.md`（AI 维护的总索引）+ `RULES.md`（行事准则）+ 任意文档/图片等文件 |
 | 按工作区的配置     | `<会话工作区>/.whale-craft/config.json`（提示词三个开关 + 版本标记；对 MC模式 AI **只读**，MC+ 按宿主默认）   |
-| 分享               | `<会话工作区>/.whale-craft/.express/`                                                                         |
 
 > 记忆是**按会话工作区**的，与插件装在哪、DSH 装在哪都无关。
 
@@ -112,15 +111,15 @@ dsh plugin --profile web add whale_craft@^0.2.0-beta.4
 
 ```bash
 node tools/check-core.mjs     # 全树语法 + 动态 import + 私有字段一致性（改 core.mjs 必跑）
-node selfcheck.mjs            # 1044 条离线断言（假 ctx，不需要 MC 服务器、不连网）
+node selfcheck.mjs            # 800+ 条离线断言（假 ctx，不需要 MC 服务器、不连网）
 node tools/check-standalone-import.mjs   # 干净环境回归：pack → 独立目录 install → import 必须成功（慢，CI 跑）
 # 起一个隔离 DSH 实例验证"整树加载"（需要一份 DSH checkout）：
 DSH_ROOT=/path/to/deepseek-harness node tools/isolate.mjs start
 ```
 
 `selfcheck.mjs` 覆盖：工具面与参数、每会话实例隔离、超时/中断、放置判据（与 `minecraft-data` 真值表比对）、
-看门狗唤醒投递与 job 结算、未签名/系统位置聊天的识别、记忆树读写与路径穿越防护、**发布区的防穿透与真路由**、
-**「文件分享」按宿主模式拆键（web=base / 桌面=独立端口）**、base 推导（含反代 `Referer` 一档）、账户库与凭据隔离、配置校验、
+看门狗唤醒投递与 job 结算、未签名/系统位置聊天的识别、记忆树读写与路径穿越防护、**设置 HTTP 真路由与信任栅栏**、
+账户库与凭据隔离、配置校验、
 提示词注入去重与版本提示、preset 自检与重建、**强制停止的四步顺序**、
 依赖面（含"`vec3` 与 `mineflayer` 必须是同一份"这类运行时断言），以及客户端 bundle 的静态检查。
 
@@ -149,13 +148,7 @@ CI 跑的就是这两条（`.github/workflows/ci.yml`）：**ubuntu（Node 22 / 
 ## 已知限制
 
 - **微软正版登录未实现**（只有离线 / Yggdrasil 皮肤站）。
-- **文件分享默认是关的**：AI 画了图只会把**绝对路径**给你，要让它直接在对话里显示，
-  得在「MC设置 → 文件分享」里**打开开关**。**配置按宿主模式分两套**（从哪种模式进来就只认哪种）：
-  - **web 模式**（`expressWebBase`）：填你访问这台 DSH 用的 `base`（如 `https://example.com`）；
-  - **桌面模式**（`expressDesktopPort`，默认 `16049`）：插件自起一个**只监听本机**的独立端口直接托管分享文件，
-    地址形如 `http://localhost:16049/<工作区>/<文件名>`；端口被占用时设置页会红字提示，可改端口或恢复默认。
-  前端只认绝对 http(s) 图片地址，所以关闭时的本地路径**不会**内联成图（这是设计如此，不是 bug）。
-- 文件分享的 `base`（web）/ 端口（桌面）**不做连通性自检**：web 的 base 填错了只有你自己能发现（AI 拿到的 URL 打不开）；桌面端口占用会在设置页红字提示。
+- **图片直接在对话里显示**：助手把图片写到工作区（默认 `.whale-craft/.out/`），回复里用 `![说明](.whale-craft/.out/x.png)` 即可内嵌（宿主原生文件渲染，web / 桌面 / 反代子路径都适用）。**不再提供对外分享链接**；非图片文件需要单独交付时用宿主的 `present`。
 - **网页抓取默认是关的**：MC 模式的助手默认**不能抓网页**（MC+ 模式本身就有抓取工具；联网搜索另见「MC设置 → 联网搜索」，默认开）。
   要开放，去「MC设置 → 联网搜索 → 网页抓取」打开「允许网页抓取」，并按需填写**允许抓取的域名表**
   （一行一条，支持精确名 / `*.example.com` 通配 / `/正则/` / `*` 全部；默认放行 `minecraft.wiki` 及其子域），
@@ -296,7 +289,6 @@ Outside these two modes, other modes no longer expose MC-play tools (MC admin to
 | Session lock (while connected) | `$DSH_HOME/whale_craft/.instance.<session>.json`                                                   |
 | Memory / prompts   | **`<workspace>/.whale-craft/`**: `README.md` (the agent's index) + `RULES.md` (conduct) + any docs/images     |
 | Per-workspace settings | `<workspace>/.whale-craft/config.json` (prompt toggles + version marker; **read-only** to the MC-mode agent, host default in MC+) |
-| Sharing            | `<workspace>/.whale-craft/.express/`                                                                          |
 
 > Memory is **per workspace** — independent of where the plugin or DSH is installed.
 
@@ -304,7 +296,7 @@ Outside these two modes, other modes no longer expose MC-play tools (MC admin to
 
 ```bash
 node tools/check-core.mjs     # whole-tree syntax + dynamic import + private-field consistency
-node selfcheck.mjs            # 1044 offline assertions (fake ctx; no MC server, no network)
+node selfcheck.mjs            # 800+ offline assertions (fake ctx; no MC server, no network)
 node tools/check-standalone-import.mjs   # clean-env regression: pack → install → import must succeed (slow; CI)
 # run an isolated DSH instance to check whole-tree loading (needs a DSH checkout):
 DSH_ROOT=/path/to/deepseek-harness node tools/isolate.mjs start
@@ -313,8 +305,7 @@ DSH_ROOT=/path/to/deepseek-harness node tools/isolate.mjs start
 `selfcheck.mjs` covers: the tool surface and parameters, per-session instance isolation,
 timeouts/interruption, placement rules (checked against the real `minecraft-data` table), watchdog
 wake-up delivery and job settlement, recognition of unsigned / system-slot chat, memory-tree
-read/write and path-traversal protection, **the publish area's traversal defences and real route**,
-**the two file-sharing modes and `base` derivation** (including the reverse-proxy `Referer` case),
+read/write and path-traversal protection, **the settings HTTP real route and trust fence**,
 the account store and credential isolation, config validation, prompt-injection de-duplication and
 version notes, preset self-check and rebuild, **the four-step stop sequence**, the dependency surface
 (including runtime assertions like "`vec3` and `mineflayer` must be the same copy"), and a static
@@ -351,16 +342,10 @@ first (`prepublishOnly`) — **a broken tree cannot be published**.
 ## Known limitations
 
 - **Microsoft (Mojang) login is not implemented** (offline / Yggdrasil only).
-- **File sharing is off by default**: the agent only gives you an **absolute path**; to render inline in
-  the chat, turn on the switch under **MC Settings → File sharing**. Settings come in **two sets, one per
-  host mode** (only the current mode's set is used):
-  - **web mode** (`expressWebBase`): set the `base` you use to reach this DSH (e.g. `https://example.com`);
-  - **desktop mode** (`expressDesktopPort`, default `16049`): the plugin starts its own **loopback-only**
-    port to serve shared files directly, e.g. `http://localhost:16049/<workspace>/<file>`; if the port is
-    taken the settings page shows a red hint — change the port or restore the default.
-  The frontend only accepts absolute http(s) image URLs, so a local path is **not** inlined (by design).
-- File sharing's `base` (web) / port (desktop) has **no connectivity check**: a typo'd web base is only
-  noticeable by you (the URL the agent gets won't open); a busy desktop port is flagged in the settings page.
+- **Images render inline in the chat**: the agent writes the image into the workspace (default
+  `.whale-craft/.out/`) and replies with `![description](.whale-craft/.out/x.png)`, which the host renders
+  natively (web / desktop / reverse-proxy prefix all work). **There is no external sharing link**; use the
+  host's `present` tool for separate non-image deliverables.
 - 🔴 **Why the conduct file is `RULES.md`**: `AGENTS.md` is picked up by DSH as a workspace instruction
   file and injected into any session that touched that directory, MC or not — so the name is deliberate.
 - Tool descriptions and docs are currently in **Chinese**.

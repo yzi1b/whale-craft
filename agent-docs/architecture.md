@@ -31,9 +31,7 @@ DSH host 进程
    │       └─ McBot         src/core.mjs：mineflayer 实例（一个游戏角色）
    ├─ 工具注册（33 个）      mc_* 26 / mc_kit_* 4 / mc_admin_* 1 / mc_debug_* 2，全部经 asTool()
    ├─ HTTP（webServer）
-   │   ├─ /api/mc/*                     状态/停止/设置（账户/配置/提示词/分享/preset 名单）
-   │   └─ /api/whale-craft/express/*    发布区文件（**仅 web 模式且分享开启**时服务）
-   ├─ ExpressShareServer                desktop 模式：自起只监听 localhost 的独立端口托管发布区
+   │   └─ /api/mc/*                     状态/停止/设置（账户/配置/提示词/preset 名单）
    ├─ agent/pre-step 监听   提示词注入（改写 decision.messages）+ MC 模式策略对账
    ├─ presets/*.patch.yml   包内声明「MC模式」「MC+模式」两个 preset（dsh.bundle.patch 数组）
    ├─ installArchiveGuard   包装 workspaceRegistry.archiveSession
@@ -42,7 +40,7 @@ DSH host 进程
 浏览器
 └─ client.js
    ├─ McStatusBar           会话标题条状态 + 「强制停止」
-   ├─ McSettingsModal       账户 / 指令白名单 / 提示词 / 文件分享 / 联网搜索 / 调试 标签页
+   ├─ McSettingsModal       账户 / 指令白名单 / 提示词 / 联网搜索 / 调试 标签页
    └─ McSettingsDockEntry   新会话页（hero 区）的入口按钮
 ```
 
@@ -121,7 +119,7 @@ kind 变化先 release 再套新）：
 
 | 档 | preset | 可见性（`applyMcModePolicy`） | guard（每次调用现场判，切模式自愈） |
 | --- | --- | --- | --- |
-| `mc` | minecraft | `restrict({allow})` 白名单：mc_*（按 `hideAdminTools` 去 / 留 `mc_admin_*`）+ mc_kit_* + 文件工具（`MC_FILE_TOOLS`）+ **后台任务/目标/待办**（`job_*` / `get_goal` / `create_goal` / `update_goal` / `todo_write`，`MC_EXTRA_HOST_TOOLS`）+ **联网搜索**（宿主 `web_search`，`MC_WEB_SEARCH_TOOL`，按 `allowWebSearch`，默认开）+ `mcMode.allowOtherTools`；`mc_debug_*` 仅当 `exposeDebugTools` 开时才进；`mc_kit_web_fetch` 仅当 `webFetchEnabled` 开时才进（**不含** `present`：MC 模式不暴露文件交付，走 `mc_kit_express`） | ① admin 硬拒 ② `exposeDebugTools` 关时拒 `mc_debug_*` ③ `allowWebSearch` 关时拒 `web_search` ④ **`webFetchEnabled` 关 / 域名不在表里时拒 `mc_kit_web_fetch`**（两档 MC 都过）⑤ 凭据/secrets 硬拒 ⑥ 受保护文件只读 ⑦ 文件 jailed `.whale-craft/`（空路径也算越界）⑧ present 限会话工作区（若经 allowOtherTools 放行） |
+| `mc` | minecraft | `restrict({allow})` 白名单：mc_*（按 `hideAdminTools` 去 / 留 `mc_admin_*`）+ mc_kit_* + 文件工具（`MC_FILE_TOOLS`）+ **后台任务/目标/待办**（`job_*` / `get_goal` / `create_goal` / `update_goal` / `todo_write`，`MC_EXTRA_HOST_TOOLS`）+ **联网搜索**（宿主 `web_search`，`MC_WEB_SEARCH_TOOL`，按 `allowWebSearch`，默认开）+ 文件交付 `present` + `mcMode.allowOtherTools`；`mc_debug_*` 仅当 `exposeDebugTools` 开时才进；`mc_kit_web_fetch` 仅当 `webFetchEnabled` 开时才进 | ① admin 硬拒 ② `exposeDebugTools` 关时拒 `mc_debug_*` ③ `allowWebSearch` 关时拒 `web_search` ④ **`webFetchEnabled` 关 / 域名不在表里时拒 `mc_kit_web_fetch`**（两档 MC 都过）⑤ 凭据/secrets 硬拒 ⑥ 受保护文件只读 ⑦ 文件 jailed `.whale-craft/`（空路径也算越界）⑧ `present` 限会话工作区 |
 | `mc-plus` | minecraft-plus | **不套白名单**（组成=标准全表，mc/mckit 走全局注册直接可见；`mc_admin_*` 也可见）；仅当 `exposeDebugTools` 关时 `restrict({deny})` 掉 `mc_debug_*`。**联网搜索不受 `allowWebSearch` 影响**（全表里本来就有 tool-web） | 仅凭据/secrets 硬拒（文件全工作区；受保护文件按宿主默认） |
 | `other` | 其余 | `restrict({deny})`：`mc_*`（mc_admin_* 除外）+ `mc_kit_*` 从可见面摘掉 | **拒调** mc_* / mc_kit_*（mc_admin_* 除外）—— "不再给其他模式暴露"的第二道锁 |
 
@@ -156,7 +154,7 @@ kind 变化先 release 再套新）：
 
 ## 9. HTTP 面与安全
 
-**信任栅栏**（`isTrustedRequest`，与宿主 `@deepseek-ai/dsh-client-connection` 的同款）：Host 必须回环、等于 `webServer.host`（listener 绑定地址）、或 ∈ `connection.trustedHosts`（值来自 `webStartup.trustedHosts`，即 `--trusted-host`）；`Sec-Fetch-Site: cross-site` 拒；带 Origin 时按 Origin 自己的协议归一化后必须同权威。非信任一律 403。两条顶层前缀路由各自独立过栅栏：`/api/mc/*` 与 `/api/whale-craft/express/*`（后者**只在 web 模式且文件分享开启时**服务；desktop 模式走自己的独立端口，见 §10）。
+**信任栅栏**（`isTrustedRequest`，与宿主 `@deepseek-ai/dsh-client-connection` 的同款）：Host 必须回环、等于 `webServer.host`（listener 绑定地址）、或 ∈ `connection.trustedHosts`（值来自 `webStartup.trustedHosts`，即 `--trusted-host`）；`Sec-Fetch-Site: cross-site` 拒；带 Origin 时按 Origin 自己的协议归一化后必须同权威。非信任一律 403。本插件只剩一条顶层前缀路由 `/api/mc/*`（文件分享已移除）。
 > 🔴 2026-11-07：`webRuntime` 服务只存在于 DSH 0.2.0-rc.2；0.2.1 起可信主机移到 `connection`。插件曾仍读 `webRuntime` ⇒ 公网/局域网访问下所有 `/api/mc/*` 恒 403（MC 设置整页不可用）。
 
 | 方法 + 路径 | 用途 |
@@ -170,13 +168,10 @@ kind 变化先 release 再套新）：
 | `/api/mc/authservers`（POST/DELETE） | 认证服务器增删（`parseAuthlibCard` 解析卡片）。同样**不绑工作区** |
 | `/api/mc/config`（GET/PATCH） | 配置读写（**分流**：全局键 → PluginConfig；提示词三开关 → 该工作区的 config.json）。**可无工作区**：工作区键回 `null` / PATCH 丢弃工作区键 |
 | `/api/mc/agents-md`（GET/PUT/DELETE） | RULES.md 读/写/恢复默认。**GET 可无工作区**（只读回内置默认 `DEFAULT_AGENTS_MD`）；PUT/DELETE 必须有工作区 |
-| `/api/mc/express`（GET/DELETE） | 分享状态 / 「清除分享数据」 |
 | `/api/mc/servers`（GET/POST/DELETE） | 「连接到MC」的**服务器历史**（全局 `<状态目录>/servers.json`，只存地址字符串；**不走闸门**） |
 | POST `/api/mc/lan` | 「连接到MC」的**局域网探测**（后端多播监听 + 逐个 `statusPing` 拿在线人数；**不走闸门**） |
 | POST `/api/mc/connect` | 「连接到MC」点连接：**注入 + `agent.steer` 让该会话跑一轮**（**不自己连**，由 LLM 调 `mc_connect`）；**手动**连接才记历史。`asUser:true`（新对话页）→ 投**玩家消息**（`kind:'user'`，正文前 `[system] `）；否则走插件提示行 |
 | POST `/api/mc/branch-plus` | 「创建MC+分支」：**fork 一条分支 + 把新会话改成 MC+**（`{sessionId, messageId}`；`messageId` 反查 `atSeq` 对齐原生落点）。见下 |
-| GET/HEAD `/api/whale-craft/express/<工作区uuid>/<相对路径>` | 发布区文件（**仅 web 模式且分享开启**） |
-| GET `/api/mc/express/port?port=` | desktop 设置页的端口占用自检（临时 bind 探测；当前已监听端口算"可用"） |
 
 - **设置类 API 的错误形态统一 200 + `{ok:false, error, needUserAction?, hint?}`**（前端 `apiFetch` 要求 `payload.ok===true`）。
 - **「连接到MC」的注入时机（2026-10-04）**：`/api/mc/connect` 只**注入 + 唤醒**——`sess.interruptWait('connect')` → `agent.steer(message)`（空闲起一轮、运行中插话）。正文由 `src/connect-prompt.mjs` 组装（追加插槽 `CONNECT_PROMPT_APPENDERS`）。历史只记 `via!=='lan'` 的地址（`src/serverhistory.mjs`，全局 `servers.json`）。
@@ -193,32 +188,24 @@ kind 变化先 release 再套新）：
   否则视为失败（只 `try/catch` 不够——这套绕锁法可能悄悄不生效）。失败则**回撤**：用 `workspaceRegistry.archiveSession(childId)`
   把刚建的分支收走（DSH **没有**"删会话"接口，UI 也只有归档；可 unarchive 找回），回 `{ok:false, error, hint, rolledBack}`；
   前端据此弹错误、**不打开**该会话。源会话全程不受影响。
-- **设置两类模式（2026-10-04）**：`resolveWorkspaceCwd` 解析 sessionId → 工作区（或 client 报的 cwd），**可空、不建档**；`settingsGate` = 它 + 查不到就 400 + `ensureMemoryRootForCwd`（"点开 MC设置"是仅有的两个建记忆目录时机之一）。**accounts / authservers 是全局数据、不走闸门**；`/api/mc/config` 与 `agents-md` GET **可无工作区**（前者只回全局键、工作区键为 `null`；后者只读回内置默认）。`/api/mc/express` 仍必须有工作区。
+- **设置两类模式（2026-10-04）**：`resolveWorkspaceCwd` 解析 sessionId → 工作区（或 client 报的 cwd），**可空、不建档**；`settingsGate` = 它 + 查不到就 400 + `ensureMemoryRootForCwd`（"点开 MC设置"是仅有的两个建记忆目录时机之一）。**accounts / authservers 是全局数据、不走闸门**；`/api/mc/config` 与 `agents-md` GET **可无工作区**（前者只回全局键、工作区键为 `null`；后者只读回内置默认）。
   🔴 无工作区时 `wsCfgValues(null)` 只返回空配置、`memoryRootFor(null)` 返回 `null`；调用方必须显式走无工作区响应，不能创建目录。
-- **express 路由安全**：uuid 是 DSH 工作区注册表的**稳定 id**（查不到就 404，**不退回目录名**）；路径**逐段**白名单拼接（`..`/`.`/空段/段内分隔符/盘符/`~`/控制字符一律拒）→ 拼完 `realpath` 复查仍在发布区内（**符号链接也出不去**）；不列目录；单文件 ≤32MB；svg/html 加 `Content-Security-Policy: sandbox`。
-- **base 推导链**（online 模式"获取当前"）：浏览器应用根 `clientBase`（`document.baseURI`，**含反代前缀**；旧客户端的 `clientOrigin` 仍兼容）→ `Origin` 头 → 同源 `Referer` → `X-Forwarded-Proto`+`Host` → `Host`。
 - **浏览器端所有插件请求都过 `apiUrl()`**：去掉前导 `/` 后按 `document.baseURI` 解析（宿主自己的客户端也这样），支持 `--public-url https://host/prefix/` 的前缀部署；写死 `/api/...` 会打到域名根。
 
-## 10. 发布区与文件分享（.out vs .express）
+## 10. 文件交付（原生路线；文件分享已移除）
 
-| 目录 | 谁能拿 | 用途 |
-| --- | --- | --- |
-| `<工作区>/.whale-craft/.out/` | 谁都拿不到 | 默认输出（`mc_map image`、`mc_kit_image` 落盘） |
-| `<工作区>/.whale-craft/.express/` | 取决于文件分享开关 | 发布区（**目录即白名单**，支持子目录） |
+**插件不再托管/分享任何文件**（`mc_kit_express`、`.express/` 发布区、Web 路由与桌面独立端口均已删除）。
+交付全部走宿主原生能力：
 
-- **配置按宿主模式拆成两套键、相互独立**（2026-10-07 用户定）：从哪种模式（宿主 profile）进来就只认哪套。
-  DSH 0.2.2 的 `profileContext` 是必需注入；`name === 'desktop'` 时为 desktop，其余当前合法 profile 为 web，服务缺失或形状错误直接拒绝加载。
-  - **web 模式**（`expressWebEnabled` + `expressWebBase`）：回 `base + /api/whale-craft/express/<uuid>/<rel>` 完整 URL；
-    缺 base 回 `EXPRESS_NEED_BASE_TEXT`（报错不抛异常）。文件走**宿主 webServer** 的那条路由。
-  - **desktop 模式**（`expressDesktopEnabled` + `expressDesktopPort`，默认 16049）：插件**自起一个只监听
-    localhost 的 http 服务**（`ExpressShareServer`，`src/express-server.mjs`；宿主 `webServer` 那条路由在 desktop 下不服务），
-    地址 `http://localhost:<port>/<uuid>/<rel>`（**无** `/api/whale-craft/express` 前缀）；端口起不来（占用/失败）
-    回 `EXPRESS_PORT_BUSY_TEXT(port)`。仅"启用且服务在监听"才真正开放。
-- 关（默认）→ `mc_kit_express` 恒回 `EXPRESS_OFF_TEXT`（让 AI 把绝对路径给用户），服务不开（访问即 404）。
-- `syncExpressServer`：desktop 期望态 = 启用 ? 端口 : 关闭；PATCH 或启动时对齐（换端口/开关即重启），串行化避免并发 bind；卸载 `stop()`。
-- 🔴 历史：2026-10-04 前是 `expressMode: 'off' | 'online'`（还一度有 `local`）→ 降级成开关 `expressEnabled`；
-  2026-10-07 再拆成上面四键。`PluginConfig.migrate` 逐档搬（`online`→`expressWebEnabled`，`expressEnabled`/`expressBase`→ web 那套，删旧键）。
-- 前端渲染只认**绝对 http(s)** 图片地址 ⇒ 只有开启分享的 URL 能内联成图。
+| 需求 | 做法 |
+| --- | --- |
+| 在对话里显示图片 | 图片写到工作区（默认 `<工作区>/.whale-craft/.out/`），回复里写 `![说明](相对工作区路径)`。宿主聊天 UI 用 `document.baseURI` + 认证 `/api/file?path=…` 内嵌显示，web / desktop / 反代前缀都适用 |
+| 非图片文件 / 需要文件卡片 | 宿主 `present` 工具（MC 模式已放行）：只声明路径，UI 渲染交付卡片；guard 把交付路径限制在本会话工作区 |
+| 外部可访问链接 | **不再提供**（原分享机制的代价）；需要时由用户自行用其他方式托管 |
+
+- `.out/` 与工作区其他路径没有"对外/不对外"之分：能读它的只有已登录的 DSH 浏览器；文件不会因为放在某处而变成公开 URL。
+- `/api/file` 是**宿主** `@deepseek-ai/dsh-api-session-controller` 的认证路由（connection 认证 + MIME + 版本缓存），不是本插件实现；升级宿主时复核。
+- 旧的 express 配置键（`expressMode` / `expressEnabled` / `expressBase` / `expressWeb*` / `expressDesktop*`）由 `PluginConfig.migrate()` 在加载时**直接删除**。
 
 ## 11. 停止、归档与保护
 
@@ -231,7 +218,7 @@ kind 变化先 release 再套新）：
 | --- | --- |
 | 全局配置 / 账户元数据 / 日志 / 会话锁 | `$DSH_HOME/whale_craft/`（`config.json` / `accounts.json` / `logs/whale-craft.log` / `.instance.<会话>.json`） |
 | 凭据（password/token） | 宿主凭据服务 `$DSH_HOME/.credentials.yaml`（key=`whale-craft/<innerID>`；**绝不降级写明文**） |
-| 记忆 / 行事准则 / 输出 / 发布区 | `<会话工作区>/.whale-craft/`（`README.md` / `RULES.md` / `config.json` / `.out/` / `.express/`） |
+| 记忆 / 行事准则 / 输出 | `<会话工作区>/.whale-craft/`（`README.md` / `RULES.md` / `config.json` / `.out/`） |
 | 按工作区的配置（提示词三开关 + 版本标记） | `<会话工作区>/.whale-craft/config.json`（旧版单独的 `.rules-version` 标记会迁入并删除） |
 | 调试实例的一切 | `.dev/home/`（隔离 DSH_HOME，gitignored） |
 

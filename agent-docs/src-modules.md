@@ -1,6 +1,6 @@
 # src/ 模块参考
 
-> 快照：**0.2.0**（开发中，未发布）。所有模块都是纯 ESM，**只有 config.mjs 引了 express.mjs 一处模块间依赖**，其余全部由 `index.js` 组装。
+> 快照：**0.2.0**（开发中，未发布）。所有模块都是纯 ESM，**除 `agentsmd.mjs → wsconfig.mjs` / `memory.mjs → protected.mjs` 外没有模块间依赖**，其余全部由 `index.js` 组装。
 > 通用规矩：任何可能永不 settle 的 await 套 `withTimeout`/`raceAbort`；日志走 `logLine()`。
 
 ---
@@ -77,7 +77,7 @@
 - 常量：单文件文本 256KB、图片 16MB、最多 2000 文件、深度 ≤5、段名 `^[\w.\-一-龥 ]+$`。
 - **`safePath(rel)` 是路径安全关口**：拒空/绝对路径/盘符/`.`/`..`/深层/超长/非法段，`resolve` 后必须仍在 root 内。**不再做文件名封锁** —— 根级的受保护文件（RULES.md/AGENTS.md/config.json，见 src/protected.mjs）在这里**放行（读允许）**，结果带 `protected:true`，由写类方法显式拒绝（用户 2026-10-03：可读不可写）。
 - 方法：`ensureRoot/ensureReadme`（骨架只建一次）· `pathFor({topic,server})`（server 缺省 `_global/`；无扩展名补 `.md`）· `list()`（根级 README 与受保护文件不算记忆；解析标题/条目数/摘要）· `renderTree()`/`indexText()`（5s 缓存；注入用 = README 正文 + 目录树）· `read()`（文本→content；**图片→附件**（工具层 `attachments.saveImage`）；二进制→元信息）· `put()`（**把工作区任意文件复制进记忆**，16MB，name 清洗）· `append({text,key})`（单条 ≤4000 字；同 key 正则替换旧 bullet）· `write()`（整文件覆盖，拒图片）· `delete()` · `search()`（跨文本文件逐行，limit ≤100）· `overview()`。
-- `append/write/delete/put` 对 `protected` 目标一律抛"只读"（`protectedWriteError`）。写后清 `_textCache`（投递的索引恒新）。⚠️ `list()` 只跳过**根级**的 README 与受保护文件，`.out/`/`.express/` 会被遍历进去（未专门跳过）。
+- `append/write/delete/put` 对 `protected` 目标一律抛"只读"（`protectedWriteError`）。写后清 `_textCache`（投递的索引恒新）。⚠️ `list()` 只跳过**根级**的 README 与受保护文件，`.out/` 会被遍历进去（未专门跳过）。
 - 🔴 **工具 `mc_kit_memory` 已于 2026-10-07 移除**（同日又去掉 README 索引的**自动注入**）：agent 改用宿主受限文件工具（read/write/edit/glob/grep/read_image）直接读写 `.whale-craft/`。本模块**保留为库**——`put/append/write/delete/search/overview/read` 与读侧的 `indexText/renderTree/list` 均不再有生产消费方，仍由自检单元测试直接覆盖；`read()` 的图片附件化接线随工具移除（看图改由宿主 `read_image` 承担）。
 
 ## 5. `src/agentsmd.mjs` —— RULES.md 行事准则
@@ -115,10 +115,6 @@
 | `mcMode.hideAdminTools` | `true` | 隐藏 `mc_admin_*`（仅 MC 模式；MC+ 可见；另有 guard 硬拒） |
 | `allowAllCommands` | `false` | 指令白名单总开关 |
 | （提示词三开关 `injectWhaleCraftAgentsMd` / `injectWorkspaceAgentsMd` / `rulesFollowVersion` **已下放为按工作区**，存 `<工作区>/.whale-craft/config.json`，见 [§14 wsconfig](#14-srcwsconfigmjs--按工作区的配置)） | | |
-| `expressWebEnabled` | `false` | **web 模式**文件分享开关 |
-| `expressWebBase` | `''` | **web 模式**的访问 base（如 https://example.com） |
-| `expressDesktopEnabled` | `false` | **desktop 模式**文件分享开关 |
-| `expressDesktopPort` | `16049` | **desktop 模式**的独立托管端口（只监听 localhost） |
 | `exposeDebugTools` | `false` | 「MC设置 → 调试」页的「开放助手调试工具」开关（工作区无关）：是否向助手暴露调试用途的工具 |
 | `allowWebSearch` | `true` | 「MC设置 → 联网搜索」页的「允许联网搜索」开关（工作区无关）：MC 模式下是否暴露宿主 `web_search`；**MC+ 不受影响** |
 | `webFetchEnabled` | `false` | 「MC设置 → 联网搜索 → 网页抓取」的「允许网页抓取」开关（工作区无关）：是否暴露 `mc_kit_web_fetch`（**MC 与 MC+ 都受此门控**） |
@@ -126,8 +122,8 @@
 | `allowAllFetchDomains` | `false` | 抓取的「允许所有域名」开关（打开后不看域名表） |
 | `webFetchAllowHtml` / `webFetchAllowText` / `webFetchAllowImage` | 都 `true` | 「允许的内容类型」三开关（工作区无关）：HTML / 文本由宿主区分（只到这两档，响应里只有 `body.kind`）；**图片走插件自己的公网下载器**，格式是**内置名单**（`WEB_IMAGE_FORMATS` = png/jpeg/gif/webp，即宿主附件服务认的那四种），**不可配置** |
 
-- `PluginConfig`：`load`（坏配置不崩、记 `lastError` 按默认跑；**顺带跑 `migrate()`**）、`set` 只认 `TOP_KEYS`（= DEFAULT_CONFIG 键）且过 `validate`、`values()` 深合并（数组整体覆盖）；语义 getter（`mcModePresets/mcPlusPresets/expressWebEnabled/expressWebBase/expressDesktopEnabled/expressDesktopPort/commandAllowed/isMcModePreset/isMcPlusPreset`…）每次现读 ⇒ **改完热生效**。
-- `migrate()`：删除废弃的 `ensureMcPreset`；文件分享键逐档搬（都**删旧键**、只在真改动时落盘）——① 老 `expressMode: 'off'|'online'`（曾含 `'local'`）→ `expressWebEnabled`（`online`→`true`，其余→`false`）；② 2026-10-07 拆键：`expressEnabled`→`expressWebEnabled`、`expressBase`→`expressWebBase`。
+- `PluginConfig`：`load`（坏配置不崩、记 `lastError` 按默认跑；**顺带跑 `migrate()`**）、`set` 只认 `TOP_KEYS`（= DEFAULT_CONFIG 键）且过 `validate`、`values()` 深合并（数组整体覆盖）；语义 getter（`mcModePresets/mcPlusPresets/commandAllowed/isMcModePreset/isMcPlusPreset`…）每次现读 ⇒ **改完热生效**。
+- `migrate()`：删除废弃的 `ensureMcPreset` 与全部文件分享旧键（`expressMode` / `expressEnabled` / `expressBase` / `expressWeb*` / `expressDesktop*`，只在真改动时落盘）。
 - `legacyPromptSwitches()`：从**文件原值**里取旧版全局存过的三个提示词开关（只取显式设过且类型合法的）—— 只作工作区建档时的一次性 seed 来源（消费方 index.js → `wsconfig.migrate`）。
 - `resolveStateDir`：`WHALE_CRAFT_STATE_DIR` → `WHALE_CRAFT_DIR`+whaleDir → `$DSH_HOME/whale_craft` → `~/.dsh/whale_craft`。
 
@@ -140,20 +136,12 @@
 - 凭据方法：`setCredential`（`kind:'grant'` payload）/`getCredential`（**仅内部登录流程**）/`deleteCredential`/`refreshCredentialIndex`（宿主 credentials `listRecords` 是同步的）。
 - 认证服务器：`listAuthServers/addAuthServer/renameAuthServer`（id 永不变）/`removeAuthServer`（被账户占用拒删）。网络登录本身在 core.mjs（yggdrasil 流程），本模块只承载元数据/凭据脚手架。
 
-## 10. `src/express.mjs` —— 发布区（纯函数，不碰 fs）
+## 10. 文件交付（原生）
 
-- 常量：`EXPRESS_DIR='.express'`、`OUT_DIR='.out'`、`EXPRESS_URL_PREFIX=/api/whale-craft/express`、`WORKSPACE_ID_RE`。
-- `parseExpressPath`：要求**已解码**的 pathname（`%2e%2e` 先还原成 `..` 才可判）；首段 workspaceId 过正则，其后 ≥1 段。
-- `safeExpressTarget(root, segments)` 逐段拒：空段/`.`/`..`/含 `/` 或 `\`/盘符/`~` 开头/控制字符/段 >255；拼完复查仍在 root 内（纵深防御，真正兜底是路由层 `realpath`）。
-- `mimeOf`（全扩展名放行，未知 octet-stream）、`SANDBOX_TYPES`（svg/html/xml/js → CSP sandbox 头）。
-- `normalizeExpressBase`（必须 http(s)、去尾斜杠、非法 null）、`onlineUrlOf`、`expressRefFor`（abs 必须落在 `.express/` 下，`.out` 文件返回 null；产出 `{rel, url, localPath, markdown}`——`url`=含 `EXPRESS_URL_PREFIX` 的 web 形态，`localPath`=`/<uuid>/<rel>` 供 desktop 拼 `http://localhost:<port>`）、文案常量 `EXPRESS_OFF_TEXT` / `EXPRESS_NEED_BASE_TEXT` / `EXPRESS_PORT_BUSY_TEXT(port)`（逐字：自检断言原文）。
-- **桌面独立端口**：`DEFAULT_EXPRESS_PORT=16049`、`EXPRESS_HOST='127.0.0.1'`、`isExpressPort` / `normalizeExpressPort`、`parseExpressLocalPath(pathname)`（解析 `/<uuid>/<seg…>`，**无** `/api/…` 前缀）。
-
-## 10b. `src/express-server.mjs` —— 桌面模式的发布区独立端口
-
-- `ExpressShareServer`：`start(port)`（先 `stop()` 再绑 `127.0.0.1`，**尽力**再补 `::1`；**只绑回环**）、`stop()`、`status`=`{listening, port, wantPort, error}`。出错（EADDRINUSE/EACCES…）**不抛**，落 `error`。
-- `hostIsLoopback(host)`：最小 Host 回环栅栏（防 DNS-rebinding，外部域名解析到 127.0.0.1 也拒）→ 403。
-- `portAvailable(port)`：一次性 bind+close 探测（`/api/mc/express/port` 用；当前已监听端口由调用方特判为可用）。
+- `src/express.mjs` / `src/express-server.mjs` **已删除**（文件分享整体撤下）。`OUT_DIR='.out'` 与 `outRootOf()` 现在定义在 `index.js` 顶部（`mc_kit_image` 默认输出用）。
+- 图片：写到工作区（默认 `.whale-craft/.out/`），回复里用 `![说明](相对工作区路径)`；宿主聊天 UI 通过认证 `/api/file` 内嵌显示。
+- 非图片/文件卡片：宿主 `present`（MC 模式白名单已放行；guard 限制交付路径在本会话工作区）。
+- 没有"发布区/对外 URL"概念；旧的 `.express/` 用户文件不主动删除，也不再被插件读取或服务。
 
 ## 11. `src/image.mjs` + `src/png.mjs` —— 图像
 
@@ -268,6 +256,6 @@
 
 ## 17. 模块依赖与不变式
 
-- 模块间 import：`config.mjs → express.mjs`（`EXPRESS_MODES/normalizeExpressBase/resolveExpressMode`）；`agentsmd.mjs → wsconfig.mjs`（版本读写）；`memory.mjs → protected.mjs`（保护判定）；`webfetch.mjs` / `webget.mjs` **不依赖任何模块**（纯文本转换 / 自带公网抓取，index.js 组装）；`tool-def.mjs` 自解析宿主包（可缺省）；index.js 组装其余；`resolver-shim.mjs` 无导出、纯副作用（index.js 首条 import，必须早于其余全部）。
+- 模块间 import：`agentsmd.mjs → wsconfig.mjs`（版本读写）；`memory.mjs → protected.mjs`（保护判定）；`webfetch.mjs` / `webget.mjs` **不依赖任何模块**（纯文本转换 / 自带公网抓取，index.js 组装）；`tool-def.mjs` 自解析宿主包（可缺省）；index.js 组装其余；`resolver-shim.mjs` 无导出、纯副作用（index.js 首条 import，必须早于其余全部）。
 - 记忆根定位（index.js `memoryRootFor`）：**就是** `<会话 cwd>/.whale-craft`；没有会话工作区 → `null`（无兜底目录、无 env/config 重定向 —— 2026-10-08 删掉旧的 `WHALE_CRAFT_MEMORY_DIR` 与 `config.memoryDir`）。
-- 跨模块不变式：① 记忆路径全过 `safePath`，受保护文件（RULES/AGENTS/config.json）**可读不可写**（写类方法拒绝）；② 凭据只进宿主凭据服务，`view()`/工具返回/HTTP 永不见；③ 发布区只服务 `.express/`，`.out/` 永不对外；④ LAN 只被动听；⑤ ping 永不 reject；⑥ 一切写给模型的注入都是"提示行"。
+- 跨模块不变式：① 记忆路径全过 `safePath`，受保护文件（RULES/AGENTS/config.json）**可读不可写**（写类方法拒绝）；② 凭据只进宿主凭据服务，`view()`/工具返回/HTTP 永不见；③ 插件不再自建文件服务（图片/文件交付走宿主原生 `/api/file` + `present`）；④ LAN 只被动听；⑤ ping 永不 reject；⑥ 一切写给模型的注入都是"提示行"。

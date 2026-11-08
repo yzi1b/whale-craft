@@ -171,10 +171,11 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   const { readFileSync } = await import('node:fs')
   const idx = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
   console.log(`  ${!tools.has('mc_kit_share') ? '✅' : '❌'} 🔴 mc_kit_share 已移除（它只是在调宿主**另装**的 dsh-file-host，插件本身没有文件服务器）`)
-  console.log(`  ${tools.size === 34 ? '✅' : '❌'} 工具数 34（实际 ${tools.size}）：mc_* 26 + mc_kit_* 5 + mc_admin_* 1 + mc_debug_* 2`)
+  console.log(`  ${!tools.has('mc_kit_express') ? '✅' : '❌'} 🔴 mc_kit_express 已移除（文件分享整体撤下，图片走回复内嵌）`)
+  console.log(`  ${tools.size === 33 ? '✅' : '❌'} 工具数 33（实际 ${tools.size}）：mc_* 26 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 2`)
   // 只看**代码**，不看注释：注释里留着"为什么删"的说明（那是要留的）
   const codeOnly = idx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
-  console.log(`  ${!/uploadToFileHost|dsh-file-host|\/serve\/file-host|mc_kit_share/.test(codeOnly) ? '✅' : '❌'} 源码里没有上传/文件服务器残留（注释里保留"为什么删"的说明）`)
+  console.log(`  ${!/uploadToFileHost|dsh-file-host|\/serve\/file-host/.test(codeOnly) ? '✅' : '❌'} 源码里没有上传/文件服务器残留（注释里保留"为什么删"的说明）`)
   console.log(`  ${tools.has('mc_kit_image') ? '✅' : '❌'} mc_kit_image 仍在（渲染 PNG）`)
   console.log(`  ${tools.has('mc_kit_fs') ? '✅' : '❌'} mc_kit_fs 新增（文件系统：copy/move/delete/make_dir，保留符号链接）`)
   // 2026-10-12：mc_kit_rules（规则只读查询；MC 模式看不见 mc_admin_config，但要知道放行了什么）
@@ -204,24 +205,22 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   console.log(`  ${/startsWith\('mc_debug_'\)/.test(codeOnly) && /exposeDebugTools/.test(codeOnly) ? '✅' : '❌'} 🔴 调试工具受 exposeDebugTools 门控（白名单 / MC+ deny / guard 三处）`)
   // 2026-10-08：「允许联网搜索」开关（默认开）—— 白名单 + guard 两处按 allowWebSearch 收放 web_search
   console.log(`  ${/MC_WEB_SEARCH_TOOL = 'web_search'/.test(codeOnly) && /allowWebSearch \? \[MC_WEB_SEARCH_TOOL\] : \[\]/.test(codeOnly) && /name === MC_WEB_SEARCH_TOOL && !pluginConfig\.allowWebSearch/.test(codeOnly) ? '✅' : '❌'} 🔴 web_search 受 allowWebSearch 门控（白名单 + guard 两处；MC+ 不套白名单故不受影响）`)
-  console.log(`  ${/MC_PRESENT_TOOL = 'present'/.test(idx) && !/^\s+MC_PRESENT_TOOL,$/m.test(idx) ? '✅' : '❌'} 🔴 present **不再**进 MC 模式白名单（交付走 mc_kit_express；判定保留供 guard 兜底）`)
+  console.log(`  ${/MC_PRESENT_TOOL = 'present'/.test(idx) && /^\s+MC_PRESENT_TOOL,$/m.test(idx) ? '✅' : '❌'} 🔴 present 已进 MC 模式白名单（非图片交付；图片默认回复内嵌）`)
   console.log(`  ${!/ensureMcPreset|\.copy\(source, target, MC_PRESET_NAME\)|MC_PRESET_SPEC/.test(idx) ? '✅' : '❌'} 旧目录式 preset 自举已移除（只保留声明式 preset）`)
   console.log(`  ${!/agent\.cordis\.yml|\.whale-craft\.json|svc\.roots|svc\.copy/.test(idx) ? '✅' : '❌'} 不再扫描、复制或改写宿主 preset 目录`)
-  // 发布区（用户 2026-09-17 定稿：`/api/whale-craft/express/<工作区 uuid>/…`，自己一条前缀路由）
-  console.log(`  ${/const outDir = outRootOf\(memoryRootFor/.test(idx) ? '✅' : '❌'} mc_kit_image 默认输出 .whale-craft/.out/（**不对外**）`)
+  // 文件分享整体移除（2026-11-08）：图片走回复内嵌（宿主 /api/file 渲染），非图片走 present
+  console.log(`  ${/const outDir = outRootOf\(memoryRootFor/.test(idx) ? '✅' : '❌'} mc_kit_image 默认输出 .whale-craft/.out/`)
   // 2026-10-05：mc_map/mc_height 改用 reply/dist（不再默认落 .out/；相对路径以工作区根为基准）
   console.log(`  ${/const outputPathFor = \(raw, agent\)/.test(idx) && /const modelAcceptsVision = async/.test(idx) ? '✅' : '❌'} mc_map/mc_height 输出布局（dist/reply + 视觉检查）就位`)
-  console.log(`  ${/const serveSharedFile = \(req, res, hit\)/.test(idx) && /path: '\/api\/whale-craft'/.test(idx) && /isTrustedRequest\(req\.headers/.test(idx) ? '✅' : '❌'} 🔴 发布区有自己的前缀路由 /api/whale-craft（自己过信任栅栏）`)
-  console.log(`  ${/const workspaceIdOfCwd = \(cwd\)/.test(idx) && /workspaceCwdById/.test(idx) ? '✅' : '❌'} 🔴 地址用**工作区 uuid**（查宿主 workspaceRegistry，不再用目录名）`)
-  console.log(`  ${!/serveExpressFile/.test(idx) && !/knownWorkspaces/.test(idx) ? '✅' : '❌'} 🔴 旧的"目录名 + 进程内见过的工作区集合"那套已删干净`)
-  console.log(`  ${/realpathSync\(target\)/.test(idx) && /拒绝越界（符号链接）/.test(idx) ? '✅' : '❌'} 🔴 防穿透：段级校验 + realpath 复查（符号链接也跳不出去）`)
+  console.log(`  ${!/\/api\/whale-craft|serveSharedFile|expressRootOf|workspaceIdOfCwd|workspaceCwdById/.test(codeOnly) ? '✅' : '❌'} 🔴 文件分享路由/服务/uuid 分享逻辑已删干净`)
+  console.log(`  ${/!\[说明\]\(\.whale-craft\/\.out\/x\.png\)/.test(idx) ? '✅' : '❌'} 🔴 图片交付改为回复内嵌本地路径（mc_map / mc_kit_image 描述）`)
   // 「随版本更新」（用户 2026-09-17）：在"备好记忆目录"那两个时机执行，版本变了才替换
   console.log(`  ${/syncRulesVersion\(root, PLUGIN_VERSION, \{ follow: workspaceConfigValues\(root\)\.rulesFollowVersion !== false \}\)/.test(idx) ? '✅' : '❌'} 🔴 「随版本更新」挂在"备好记忆目录"时机上（follow 来自**本工作区** config.json，默认开）`)
   console.log(`  ${/migrateWorkspaceConfig\(root, \{ seed: pluginConfig\.legacyPromptSwitches\(\) \}\)/.test(idx) ? '✅' : '❌'} 🔴 建档/迁移（旧 .rules-version 并入 config.json）**先于**版本同步（否则旧值这轮看不到）`)
   console.log(`  ${/行事准则已替换为新版本默认内容/.test(idx) ? '✅' : '❌'} 真替换时会写一行日志（便于排查"我的准则怎么变了"）`)
-  console.log(`  ${!/read_image \{file_path/.test(codeOnly) && !/present \{files/.test(codeOnly) ? '✅' : '❌'} 🔴 旧的"用 read_image / present 发图"提示已清干净（注释里的历史说明不算）`)
+  console.log(`  ${!/read_image \{file_path/.test(codeOnly) ? '✅' : '❌'} 🔴 旧的"用 read_image 发图"提示已清干净（注释里的历史说明不算）`)
   const vp = readFileSync(new URL('./src/version-prompt.mjs', import.meta.url), 'utf8')
-  console.log(`  ${/mc_move/.test(vp) && /本版本对于生存、冒险能力的支持极弱/.test(vp) ? '✅' : '❌'} 版本提示写本版本的时效性事实（工具成熟度 + 能力短板；不再写交付流程——那归 mc_kit_express 工具说明）`)
+  console.log(`  ${/mc_move/.test(vp) && /本版本对于生存、冒险能力的支持极弱/.test(vp) ? '✅' : '❌'} 版本提示写本版本的时效性事实（工具成熟度 + 能力短板）`)
   const cli = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
   console.log(`  ${/data-wc-verprompt/.test(cli) && /本版本内置提示/.test(cli) ? '✅' : '❌'} 「提示词」页只读展示版本内置提示（用户有权知道它说了什么）`)
 }
@@ -798,81 +797,14 @@ console.log('\n--- 会话锁文件落点 ---')
   console.log(`  ${/new McSession\(agentId, this\.config, this\.lockDir\)/.test(src) && /registry\.lockDir = stateDir/.test(src) ? '✅' : '❌'} index.js 把状态目录传下去了（不写插件包目录）`)
 }
 
-// ── 发布区（`.whale-craft/.express/`）：纯函数 + 真路由（用户 2026-09-16 的形态）──
-console.log('\n--- 发布区：目录即白名单 / 不用 token / 必须防穿透 ---')
+// ── 设置 HTTP：信任栅栏（真路由；2026-11 文件分享移除后只留 /api/mc）──
+console.log('\n--- 设置 HTTP：真路由 / 信任栅栏 ---')
 {
-  const E = await import('./src/express.mjs')
-  const { mkdtempSync, mkdirSync, writeFileSync, existsSync } = await import('node:fs')
-  const { tmpdir } = await import('node:os')
-  const { join, sep } = await import('node:path')
   const { EventEmitter } = await import('node:events')
-
-  console.log(`  ${E.EXPRESS_DIR === '.express' && E.OUT_DIR === '.out' ? '✅' : '❌'} 目录名：发布区 .express / 默认输出 .out（都以点开头）`)
-  const cwd = join(mkdtempSync(join(tmpdir(), 'whale-express-')), 'myproj')
-  mkdirSync(cwd, { recursive: true })        // 工作区目录本身得存在（闸门会 statSync 它）
-  // 记忆根 = <会话工作区>/.whale-craft（2026-10-08 起无 env 重定向）→ 发布区跟着它
-  const memRoot = join(cwd, '.whale-craft')
-  const exRoot = E.expressRootOf(memRoot)
-  mkdirSync(join(exRoot, 'world1'), { recursive: true })
-  writeFileSync(join(exRoot, 'world1', 'example.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
-  writeFileSync(join(exRoot, 'note.svg'), '<svg/>')
-
-  // ① URL 形态（用户 2026-09-17 定稿：`<base>/api/whale-craft/express/<工作区 uuid>/<剩余路径>`）
-  const WS_UUID = '11111111-2222-3333-4444-555555555555'
-  const ref = E.expressRefFor(join(exRoot, 'world1', 'example.png'), memRoot, WS_UUID)
-  const WANT_URL = `/api/whale-craft/express/${WS_UUID}/world1/example.png`
-  console.log(`  ${ref?.url === WANT_URL ? '✅' : '❌'} URL 形态 = /api/whale-craft/express/<工作区 uuid>/<剩余路径>：${ref?.url}`)
-  console.log(`  ${ref?.markdown === `![](${ref?.url})` ? '✅' : '❌'} 直接给现成 markdown：${ref?.markdown}`)
-  console.log(`  ${E.expressRefFor(join(memRoot, '.out', 'x.png'), memRoot, WS_UUID) === null ? '✅' : '❌'} .out/ 里的文件**不给 URL**（不对外）`)
-  console.log(`  ${E.expressRefFor(join(exRoot, 'world1', 'example.png'), memRoot, '') === null && E.expressRefFor(join(exRoot, 'world1', 'example.png'), memRoot, '../x') === null ? '✅' : '❌'} 🔴 没有合法 uuid 就不给 URL（不退回目录名）`)
-
-  // ② 解析 + 段级防穿透
-  const parse = E.parseExpressPath(WANT_URL)
-  console.log(`  ${parse?.workspaceId === WS_UUID && parse.segments.join('/') === 'world1/example.png' ? '✅' : '❌'} 解析出工作区 uuid 与剩余路径（**子目录可以有**）`)
-  console.log(`  ${E.parseExpressPath(`/api/whale-craft/express/${WS_UUID}`) === null && E.parseExpressPath('/api/whale-craft/express//x.png') === null ? '✅' : '❌'} 缺路径 / 空 uuid 段 → 不解析`)
-  console.log(`  ${E.parseExpressPath('/api/mc/whale-craft/myproj/world1/example.png') === null ? '✅' : '❌'} 🔴 旧地址形态（/api/mc/whale-craft/<目录名>/…）不再认（已停用）`)
-  const root = join(cwd, '.whale-craft', '.express')
-  const bad = [
-    ['..', ['..', 'secret.txt']],
-    ['编码过的 ..', ['%2e%2e', 'secret.txt'].map(decodeURIComponent)],
-    ['绝对路径味道', ['C:', 'windows', 'system32']],
-    ['段里带分隔符', ['a/b.png']],
-    ['反斜杠', ['a\\b.png']],
-    ['空段', ['world1', '', 'x.png']],
-    ['点段', ['.']],
-    ['~ 开头', ['~/.ssh/id_rsa']],
-  ]
-  const leaked = bad.filter(([, segs]) => E.safeExpressTarget(root, segs) !== null)
-  console.log(`  ${leaked.length === 0 ? '✅' : '❌'} 🔴 段级防穿透（${bad.length} 种）全拒：${leaked.map(([n]) => n).join(', ') || '无漏网'}`)
-  console.log(`  ${E.safeExpressTarget(root, ['world1', 'example.png']) === join(root, 'world1', 'example.png') ? '✅' : '❌'} 正常路径（含子目录）放行`)
-
-  // ②b 「文件分享」（2026-10-04 用户定：从"模式"改成**开关**；老 `expressMode` 的迁移见 config 段）
-  //     base 归一化 / URL 拼法照旧：
-  console.log(`  ${E.normalizeExpressBase(' https://a.example.com/ ') === 'https://a.example.com' && E.normalizeExpressBase('') === '' ? '✅' : '❌'} base 归一化：去空白与尾斜杠；空 = 未设置`)
-  console.log(`  ${E.normalizeExpressBase('ftp://x') === null && E.normalizeExpressBase('a.example.com') === null ? '✅' : '❌'} base 必须是 http(s) 完整地址`)
-  console.log(`  ${E.onlineUrlOf('https://a.example.com/', '/api/mc/x') === 'https://a.example.com/api/mc/x' && E.onlineUrlOf('', '/x') === null ? '✅' : '❌'} 在线 URL = base + 相对路径（base 空 → null）`)
-  console.log(`  ${E.EXPRESS_OFF_TEXT === '文件分享已关闭，请告知用户文件绝对路径，让用户自行打开' ? '✅' : '❌'} 关闭模式那句话逐字固定：${E.EXPRESS_OFF_TEXT}`)
-
-  // ②c 桌面模式（2026-10-07）：独立端口 URL 形态 + 端口工具（纯函数）
-  console.log(`  ${E.DEFAULT_EXPRESS_PORT === 16049 && E.EXPRESS_HOST === '127.0.0.1' ? '✅' : '❌'} 桌面默认端口 16049；只绑回环 127.0.0.1`)
-  console.log(`  ${E.isExpressPort(1) && E.isExpressPort(65535) && !E.isExpressPort(0) && !E.isExpressPort(65536) && !E.isExpressPort('x') && !E.isExpressPort(1.5) ? '✅' : '❌'} 端口合法域 = 整数 1–65535`)
-  console.log(`  ${E.normalizeExpressPort('16049') === 16049 && E.normalizeExpressPort(0) === null ? '✅' : '❌'} 端口归一化：数字串→整数；非法→null`)
-  {
-    const lp = E.parseExpressLocalPath(`/${WS_UUID}/world1/example.png`)
-    console.log(`  ${lp?.workspaceId === WS_UUID && lp?.segments.join('/') === 'world1/example.png' ? '✅' : '❌'} 桌面路径解析：/<uuid>/<rel>（无 /api 前缀）`)
-    console.log(`  ${E.parseExpressLocalPath('') === null && E.parseExpressLocalPath('/') === null && E.parseExpressLocalPath(`/${WS_UUID}`) === null ? '✅' : '❌'} 桌面解析：空 / 只有 / / 缺剩余路径 → 不认`)
-  }
-  console.log(`  ${/端口 16049 无法监听/.test(E.EXPRESS_PORT_BUSY_TEXT(16049)) ? '✅' : '❌'} 端口起不来那句话带上端口号：${E.EXPRESS_PORT_BUSY_TEXT(16049).slice(0, 24)}…`)
-  {
-    const refL = E.expressRefFor(join(E.expressRootOf(memRoot), 'world1', 'example.png'), memRoot, WS_UUID)
-    console.log(`  ${refL?.localPath === `/${WS_UUID}/world1/example.png` && refL?.url === `/api/whale-craft/express/${WS_UUID}/world1/example.png` ? '✅' : '❌'} expressRefFor 同时给 web url（带前缀）与 localPath（桌面用）：${refL?.localPath}`)
-  }
-
-  // ③ 真路由：设置接口走 `/api/mc`；**发布区走自己的 `/api/whale-craft` 前缀路由**
   const route = registeredRoutes.find((r) => r.path === '/api/mc')
-  const fileRoute = registeredRoutes.find((r) => r.path === '/api/whale-craft')
-  console.log(`  ${fileRoute ? '✅' : '❌'} 发布区有自己的前缀路由：${fileRoute?.path}（最长前缀优先，不会掉进 /api 的 RPC）`)
-  const callOn = async (r, method, url, headers = {}, payload) => {
+  console.log(`  ${route ? '✅' : '❌'} /api/mc 前缀路由已注册`)
+  console.log(`  ${!registeredRoutes.some((r) => r.path === '/api/whale-craft') ? '✅' : '❌'} 🔴 文件分享路由 /api/whale-craft 已移除`)
+  const callRaw = async (method, url, headers = {}, payload) => {
     const rq = new EventEmitter()
     rq.method = method
     rq.url = url
@@ -882,265 +814,29 @@ console.log('\n--- 发布区：目录即白名单 / 不用 token / 必须防穿�
       writeHead: (code, h) => { rs.status = code; rs.headers = h ?? {} },
       end: (b) => { rs.body = b ?? null },
     }
-    const p = r.handler(rq, rs)
+    const p = route.handler(rq, rs)
     if (payload !== undefined) rq.emit('data', JSON.stringify(payload))
     rq.emit('end')
     await p
     return rs
   }
-  const callRaw = (method, url, headers = {}, payload) => callOn(route, method, url, headers, payload)
-  const callFile = (method, url, headers = {}) => callOn(fileRoute, method, url, headers)
-  // 让服务端认得这个工作区（走真实路径：点开 MC设置 → settingsGate）
-  await callRaw('GET', '/api/mc/accounts?cwd=' + encodeURIComponent(cwd))
-  /** 改全局配置（分享模式/base）—— 走**本 ctx** 的路由，改完立即对工具与路由生效 */
-  const patchCfg = (payload) => callRaw('PATCH', '/api/mc/config?cwd=' + encodeURIComponent(cwd), {}, payload)
-  // 🔴 工作区 uuid 从**宿主注册表**来：自检里给这个 ctx 装一个（真机上由 DSH 维护）
-  const realCwd = (await import('node:fs')).realpathSync(cwd)
-  fakeCtx.workspaceRegistry.list = () => [{ id: WS_UUID, path: realCwd }]
-  const expressUrl = `/api/whale-craft/express/${WS_UUID}/world1/example.png`
 
-  /* 🔴 「文件分享」只有 **web 模式且已开启**才开这条服务（用户 2026-09-17；2026-10-07 按模式拆键）。
-   * 默认是关闭 → 先验这条路由根本不开。 */
-  const notOnline = await callFile('GET', expressUrl)
-  console.log(`  ${notOnline.status === 404 ? '✅' : '❌'} 🔴 默认（关闭）模式下这条服务**不开**：${notOnline.status}`)
-
-  // 切到在线模式（用户要自己填 base）后再验真路由
-  await patchCfg({ expressWebEnabled: true, expressWebBase: 'https://share.example.com/' })
-  const ok = await callFile('GET', expressUrl)
-  console.log(`  ${ok.status === 200 && ok.headers?.['content-type'] === 'image/png' && ok.headers?.['x-content-type-options'] === 'nosniff' ? '✅' : '❌'} GET 正常出图：${ok.status} ${ok.headers?.['content-type']}（len=${ok.headers?.['content-length']}）`)
-  console.log(`  ${ok.headers?.['cache-control'] === 'private, max-age=300' ? '✅' : '❌'} 缓存头 private（不给共享缓存）`)
-  const svg = await callFile('GET', `/api/whale-craft/express/${WS_UUID}/note.svg`)
-  console.log(`  ${svg.status === 200 && /sandbox/.test(String(svg.headers?.['content-security-policy'] ?? '')) ? '✅' : '❌'} 所有扩展名都放行；svg 只加一个 CSP sandbox 头（内联显示照旧、脚本跑不了）`)
-  const trav = await callFile('GET', `/api/whale-craft/express/${WS_UUID}/..%2F..%2FAGENTS.md`)
-  console.log(`  ${trav.status === 404 ? '✅' : '❌'} 🔴 穿透请求 404（实测）`)
-  const trav2 = await callFile('GET', `/api/whale-craft/express/${WS_UUID}/world1/..%2F..%2F..%2FREADME.md`)
-  console.log(`  ${trav2.status === 404 ? '✅' : '❌'} 🔴 子目录里的穿透也 404`)
-  const missing = await callFile('GET', `/api/whale-craft/express/${WS_UUID}/nope.png`)
-  console.log(`  ${missing.status === 404 ? '✅' : '❌'} 不存在的文件 404`)
-  const otherWs = await callFile('GET', '/api/whale-craft/express/99999999-0000-0000-0000-000000000000/world1/example.png')
-  console.log(`  ${otherWs.status === 404 ? '✅' : '❌'} 注册表里没有的 uuid 404（不是 500）`)
-  const oldShape = await callRaw('GET', '/api/mc/whale-craft/myproj/world1/example.png')
-  console.log(`  ${oldShape.status === 404 ? '✅' : '❌'} 🔴 旧地址（/api/mc/whale-craft/<目录名>/…）已停用：${oldShape.status}`)
-  const foreign = await callFile('GET', `/api/whale-craft/express/${WS_UUID}/note.svg`, { host: 'evil.example.com' })
-  console.log(`  ${foreign.status === 403 ? '✅' : '❌'} 外来 Host 仍被信任栅栏挡在门外（403）`)
-  // 🔴 2026-11-07：信任列表必须跟宿主 0.2.2 的 connection 服务对齐（公网反代 / 局域网直连）
+  const loop = await callRaw('GET', '/api/mc/presets')
+  console.log(`  ${loop.status === 200 ? '✅' : '❌'} 回环 Host 放行：${loop.status}`)
+  const foreign = await callRaw('GET', '/api/mc/presets', { host: 'evil.example.com' })
+  console.log(`  ${foreign.status === 403 ? '✅' : '❌'} 外来 Host 被信任栅栏挡在门外（403）`)
   fakeCtx.connection.trustedHosts = ['mc.example.com']
-  const viaTrusted = await callFile('GET', expressUrl, { host: 'mc.example.com' })
-  console.log(`  ${viaTrusted.status === 200 ? '✅' : '❌'} --trusted-host 的权威（connection.trustedHosts）被放行（公网反代）：${viaTrusted.status}`)
-  const viaTrustedApi = await callRaw('GET', '/api/mc/presets', { host: 'mc.example.com' })
-  console.log(`  ${viaTrustedApi.status === 200 ? '✅' : '❌'} 设置接口 /api/mc 同样认可信主机：${viaTrustedApi.status}`)
-  const sameOrigin = await callFile('GET', expressUrl, { host: 'mc.example.com', origin: 'https://mc.example.com' })
+  const trusted = await callRaw('GET', '/api/mc/presets', { host: 'mc.example.com' })
+  console.log(`  ${trusted.status === 200 ? '✅' : '❌'} --trusted-host 的权威（connection.trustedHosts）被放行（公网反代）：${trusted.status}`)
+  const sameOrigin = await callRaw('GET', '/api/mc/presets', { host: 'mc.example.com', origin: 'https://mc.example.com' })
   console.log(`  ${sameOrigin.status === 200 ? '✅' : '❌'} 可信主机 + 同源 Origin 放行：${sameOrigin.status}`)
-  const crossOrigin = await callFile('GET', expressUrl, { host: 'mc.example.com', origin: 'https://evil.example.com' })
+  const crossOrigin = await callRaw('GET', '/api/mc/presets', { host: 'mc.example.com', origin: 'https://evil.example.com' })
   console.log(`  ${crossOrigin.status === 403 ? '✅' : '❌'} 可信主机 + 不同源 Origin 仍拒（403）：${crossOrigin.status}`)
   fakeCtx.connection.trustedHosts = []
-  const viaBind = await callFile('GET', expressUrl, { host: '192.0.2.10:39999' })
+  const viaBind = await callRaw('GET', '/api/mc/presets', { host: '192.0.2.10:39999' })
   console.log(`  ${viaBind.status === 200 ? '✅' : '❌'} listener 绑定地址（局域网直连 IP）被放行：${viaBind.status}`)
-  const head = await callFile('HEAD', expressUrl)
-  console.log(`  ${head.status === 200 && head.body === null ? '✅' : '❌'} HEAD 只有头没有体`)
-  const dirReq = await callFile('GET', `/api/whale-craft/express/${WS_UUID}`)
-  console.log(`  ${dirReq.status !== 200 ? '✅' : '❌'} 目录请求不是 200（不列目录）：${dirReq.status}`)
-  const dirReq2 = await callFile('GET', `/api/whale-craft/express/${WS_UUID}/world1`)
-  console.log(`  ${dirReq2.status !== 200 ? '✅' : '❌'} 子目录请求也不是 200：${dirReq2.status}`)
-  // 关掉分享 → 服务立刻停（不留"以为关了其实还能访问"的口子）
-  await patchCfg({ expressWebEnabled: false })
-  const inOff = await callFile('GET', expressUrl)
-  console.log(`  ${inOff.status === 404 ? '✅' : '❌'} 从在线切回「关闭」→ 服务关闭（404）：${inOff.status}`)
-  await patchCfg({ expressWebEnabled: true, expressWebBase: 'https://share.example.com/' })
-
-  // ④ 专用工具 `mc_kit_express`：入参一个路径，**只回一行**；回什么由「文件分享」开关决定
-  {
-    const tool = tools.get('mc_kit_express')
-    console.log(`  ${tool ? '✅' : '❌'} 工具已注册：mc_kit_express（参数 ${JSON.stringify(Object.keys(tool?.parameters ?? {}))}）`)
-    // 记忆根就是 <工作区>/.whale-craft（2026-10-08 起无 env 重定向）
-    try {
-      const wsEx = join(cwd, '.whale-craft', E.EXPRESS_DIR, 'world1')
-      mkdirSync(wsEx, { recursive: true })
-      writeFileSync(join(wsEx, 'example.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
-      const ex = { agent: { id: 'sess-EX', session: { header: { cwd } } } }
-      const rel = `/api/whale-craft/express/${WS_UUID}/world1/example.png`
-      const line = (v) => tool.output?.render?.({}, v)?.map((b) => b.text).join('') ?? ''
-
-      // ── 开启（块开头已设成 expressEnabled + base）→ 完整 URL ──
-      const got = await tool.execute({ path: `.whale-craft/${E.EXPRESS_DIR}/world1/example.png` }, ex)
-      const want = 'https://share.example.com' + rel
-      console.log(`  ${got.url === want && got.enabled === true ? '✅' : '❌'} 🔴 开启：base + /api/whale-craft/express/<uuid>/… = 完整 URL：${got.url}`)
-      console.log(`  ${line(got) === got.url ? '✅' : '❌'} 渲染给模型的**只有那一行**（不含 JSON 壳）：${JSON.stringify(line(got))}`)
-      const memRel = await tool.execute({ path: join(E.EXPRESS_DIR, 'world1', 'example.png') }, ex)
-      console.log(`  ${memRel.url === want ? '✅' : '❌'} 记忆根相对写法（.express/...）也认`)
-      const absGot = await tool.execute({ path: join(wsEx, 'example.png') }, ex)
-      console.log(`  ${absGot.url === want ? '✅' : '❌'} 绝对路径也认（三种写法给同一条 URL）`)
-
-      // ── 工作区没登记进注册表 → **拒绝**（用户定的 (a)，不退回目录名） ──
-      {
-        const savedList = fakeCtx.workspaceRegistry.list
-        fakeCtx.workspaceRegistry.list = () => []
-        const unregistered = await tool.execute({ path: `.whale-craft/${E.EXPRESS_DIR}/world1/example.png` }, ex)
-          .then(() => null).catch((e) => e.message)
-        fakeCtx.workspaceRegistry.list = savedList
-        console.log(`  ${/不在 DSH 的工作区注册表里/.test(String(unregistered)) ? '✅' : '❌'} 🔴 工作区没登记 → 拒绝（不退回目录名）：${String(unregistered).slice(0, 34)}…`)
-        const back = await tool.execute({ path: `.whale-craft/${E.EXPRESS_DIR}/world1/example.png` }, ex)
-        console.log(`  ${back.url === want ? '✅' : '❌'} 登记回来后照常给 URL`)
-      }
-
-      // ── 在线但没配 base → 不抛错，回"让用户去设置" ──
-      await patchCfg({ expressWebBase: '' })
-      const noBase = await tool.execute({ path: `.whale-craft/${E.EXPRESS_DIR}/world1/example.png` }, ex)
-      console.log(`  ${noBase.url === E.EXPRESS_NEED_BASE_TEXT && /还没有设置 base/.test(line(noBase)) ? '✅' : '❌'} 在线但没 base → 提示去设置（不抛错）：${noBase.url.slice(0, 24)}…`)
-
-      // ── 关闭（默认）→ 恒回那一句（并且依然要求文件在发布区里） ──
-      await patchCfg({ expressWebEnabled: false })
-      const offGot = await tool.execute({ path: `.whale-craft/${E.EXPRESS_DIR}/world1/example.png` }, ex)
-      console.log(`  ${offGot.url === E.EXPRESS_OFF_TEXT && offGot.enabled === false ? '✅' : '❌'} 关闭：恒回那一句（逐字）：${offGot.url}`)
-      console.log(`  ${line(offGot) === E.EXPRESS_OFF_TEXT ? '✅' : '❌'} 渲染出来就是那句话本身`)
-      console.log(`  ${!/^https?:/.test(offGot.url) ? '✅' : '❌'} 关闭模式**不编造** http 链接`)
-      console.log(`  ${typeof offGot.abs === 'string' && offGot.abs.endsWith('example.png') ? '✅' : '❌'} 值里仍带着真实绝对路径（渲染不给模型，留给以后用）：${offGot.abs}`)
-
-      const missing = await tool.execute({ path: '.express/nope.png' }, ex).then(() => null).catch((e) => e.message)
-      console.log(`  ${/找不到这个文件/.test(String(missing)) ? '✅' : '❌'} 文件不存在 → 报错清楚：${String(missing).slice(0, 40)}…`)
-      const outDir2 = join(cwd, '.whale-craft', E.OUT_DIR)
-      mkdirSync(outDir2, { recursive: true })
-      writeFileSync(join(outDir2, 'draft.png'), Buffer.from([0x89]))
-      const notInExpress = await tool.execute({ path: `.whale-craft/${E.OUT_DIR}/draft.png` }, ex).then(() => null).catch((e) => e.message)
-      console.log(`  ${/不在发布区里/.test(String(notInExpress)) ? '✅' : '❌'} 🔴 关闭模式下 .out/ 里的文件照样拒绝（两种模式都只认发布区）：${String(notInExpress).slice(0, 24)}…`)
-      const escape = await tool.execute({ path: '../../../etc/passwd' }, ex).then(() => null).catch((e) => e.message)
-      console.log(`  ${escape ? '✅' : '❌'} 穿透路径也拿不到东西（报错）：${String(escape).slice(0, 30)}…`)
-
-      /* ── ④b 桌面模式：按宿主模式拆键（用户 2026-10-07）──
-       * 用 `fakeCtx.profileContext` 模拟桌面端。验证：独立端口 URL、只监听 localhost、端口占用文案、
-       * `/api/mc/express/port` 自检、web/desktop 两套键互不串。 */
-      {
-        const ESrv = await import('./src/express-server.mjs')
-        // 挑一个本机空闲端口（别用默认 16049，免与开发机真实占用撞车导致抖动）
-        let freePort = null
-        for (let p = 45000; p < 45064; p++) { if (await ESrv.portAvailable(p)) { freePort = p; break } }
-        if (!freePort) console.log('  ❌ 找不到空闲端口做桌面测试（跳过后续桌面断言）')
-        fakeCtx.profileContext.name = 'desktop'   // 模拟桌面端（hostMode 读它）
-        try {
-          const cfgD = JSON.parse(String((await callRaw('GET', '/api/mc/config?cwd=' + encodeURIComponent(cwd))).body ?? '{}'))
-          console.log(`  ${cfgD.mode === 'desktop' ? '✅' : '❌'} profileContext.name=desktop ⇒ mode=desktop：${cfgD.mode}`)
-          console.log(`  ${cfgD.expressDesktopPort === 16049 ? '✅' : '❌'} 桌面端口默认 16049：${cfgD.expressDesktopPort}`)
-
-          // 未启用 → 工具恒回"已关闭"那句
-          await patchCfg({ expressDesktopPort: freePort, expressDesktopEnabled: false })
-          const offD = await tool.execute({ path: `.whale-craft/${E.EXPRESS_DIR}/world1/example.png` }, ex)
-          console.log(`  ${offD.url === E.EXPRESS_OFF_TEXT && offD.enabled === false ? '✅' : '❌'} 桌面模式未启用 → 恒回关闭那一句`)
-
-          // 启用 → 独立端口起来；工具回 http://localhost:<port>/<uuid>/<rel>
-          await patchCfg({ expressDesktopEnabled: true })
-          const st = JSON.parse(String((await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd))).body ?? '{}'))
-          console.log(`  ${st.mode === 'desktop' && st.port === freePort && st.listening === true ? '✅' : '❌'} 启用后独立端口在监听：port=${st.port} listening=${st.listening}`)
-          const gotD = await tool.execute({ path: `.whale-craft/${E.EXPRESS_DIR}/world1/example.png` }, ex)
-          const wantD = `http://localhost:${freePort}/${WS_UUID}/world1/example.png`
-          console.log(`  ${gotD.url === wantD && gotD.enabled === true ? '✅' : '❌'} 🔴 桌面 URL = http://localhost:<port>/<uuid>/<rel>：${gotD.url}`)
-
-          // 真取文件（本机直连独立端口）—— 只监听回环，GET 可得
-          const fetched = await fetch(`http://127.0.0.1:${freePort}/${WS_UUID}/world1/example.png`)
-          console.log(`  ${fetched.status === 200 && fetched.headers.get('content-type') === 'image/png' ? '✅' : '❌'} 独立端口真能取到文件：${fetched.status} ${fetched.headers.get('content-type')}`)
-          const travD = await fetch(`http://127.0.0.1:${freePort}/${WS_UUID}/..%2F..%2FAGENTS.md`)
-          console.log(`  ${travD.status === 404 ? '✅' : '❌'} 独立端口也防穿透（404）：${travD.status}`)
-          const otherD = await fetch(`http://127.0.0.1:${freePort}/99999999-0000-0000-0000-000000000000/world1/example.png`)
-          console.log(`  ${otherD.status === 404 ? '✅' : '❌'} 独立端口上未知 uuid 404：${otherD.status}`)
-          const postD = await fetch(`http://127.0.0.1:${freePort}/${WS_UUID}/world1/example.png`, { method: 'POST' })
-          console.log(`  ${postD.status === 404 ? '✅' : '❌'} 独立端口只认 GET/HEAD（POST 404）：${postD.status}`)
-          // ⚠️ fetch 会**丢掉**自设的 Host 头（forbidden header）→ 得用原生 http 才能发外来 Host
-          const httpMod = await import('node:http')
-          const foreignD = await new Promise((resolve) => {
-            const rq = httpMod.request(
-              { host: '127.0.0.1', port: freePort, path: `/${WS_UUID}/world1/example.png`, headers: { Host: 'evil.example.com' } },
-              (rs) => { rs.resume(); resolve(rs.statusCode) },
-            )
-            rq.on('error', () => resolve(0))
-            rq.end()
-          })
-          console.log(`  ${foreignD === 403 ? '✅' : '❌'} 独立端口拒外来 Host（防 DNS-rebinding，403）：${foreignD}`)
-
-          // /api/mc/express/port 自检：正在用的端口算可用；非法端口 invalid
-          const pCur = JSON.parse(String((await callRaw('GET', `/api/mc/express/port?port=${freePort}`)).body ?? '{}'))
-          console.log(`  ${pCur.available === true && pCur.current === true ? '✅' : '❌'} /port 自检：本插件正在用的端口算可用：${JSON.stringify(pCur)}`)
-          const pBad = JSON.parse(String((await callRaw('GET', '/api/mc/express/port?port=0')).body ?? '{}'))
-          console.log(`  ${pBad.available === false && pBad.reason === 'invalid' ? '✅' : '❌'} /port 自检：非法端口 invalid：${JSON.stringify(pBad)}`)
-
-          // 换到被占用的端口 → 服务起不来，工具回占用文案，/port 报 inuse
-          const busyPort = freePort + 1
-          const blocker = (await import('node:net')).createServer()
-          await new Promise((r) => blocker.listen(busyPort, '127.0.0.1', () => r()))
-          try {
-            await patchCfg({ expressDesktopPort: busyPort })
-            const stBusy = JSON.parse(String((await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd))).body ?? '{}'))
-            console.log(`  ${stBusy.listening === false && String(stBusy.portError ?? '').includes('EADDRINUSE') ? '✅' : '❌'} 端口被占用 ⇒ 服务没起来（portError=${stBusy.portError}）`)
-            const busyGot = await tool.execute({ path: `.whale-craft/${E.EXPRESS_DIR}/world1/example.png` }, ex)
-            console.log(`  ${busyGot.url === E.EXPRESS_PORT_BUSY_TEXT(busyPort) ? '✅' : '❌'} 🔴 端口起不来 ⇒ 工具回占用文案：${busyGot.url.slice(0, 28)}…`)
-            const pBusy = JSON.parse(String((await callRaw('GET', `/api/mc/express/port?port=${busyPort}`)).body ?? '{}'))
-            console.log(`  ${pBusy.available === false && pBusy.reason === 'inuse' ? '✅' : '❌'} /port 自检：被占用 → inuse：${JSON.stringify(pBusy)}`)
-          } finally { await new Promise((r) => blocker.close(() => r())) }
-
-          // 🔴 两套键互不串：web 现在是关的（前段还原过），桌面改它不影响 web
-          const cfgMix = JSON.parse(String((await callRaw('GET', '/api/mc/config?cwd=' + encodeURIComponent(cwd))).body ?? '{}'))
-          console.log(`  ${cfgMix.expressWebEnabled === false && cfgMix.expressDesktopEnabled === true ? '✅' : '❌'} 🔴 两套键互不串：web=${cfgMix.expressWebEnabled} desktop=${cfgMix.expressDesktopEnabled}`)
-
-          // 清理：关掉桌面分享（停掉独立端口，别留句柄）
-          await patchCfg({ expressDesktopEnabled: false, expressDesktopPort: 16049 })
-          const stOff = JSON.parse(String((await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd))).body ?? '{}'))
-          console.log(`  ${stOff.listening === false ? '✅' : '❌'} 关掉桌面分享 ⇒ 独立端口停掉：listening=${stOff.listening}`)
-        } finally {
-          fakeCtx.profileContext.name = 'web'   // 还原成 web ctx，别污染后面的断言
-        }
-      }
-
-      /* ── ⑤ 「清除分享数据」（`/api/mc/express`：看现状 / 清空）──
-       * 只删发布区**里面**的东西；目录重建；返回删了几个文件、多少字节。 */
-      const stat1 = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd))
-      const s1 = JSON.parse(String(stat1.body ?? '{}'))
-      console.log(`  ${s1.ok && s1.dir === join(cwd, '.whale-craft', E.EXPRESS_DIR) && s1.files >= 1 ? '✅' : '❌'} 分享数据现状：${s1.dir}（${s1.files} 个文件 / ${s1.bytes} 字节）`)
-      // 「当前地址」（base 的「获取当前」/ 切在线时自动填）：从**这次请求**推出来
-      console.log(`  ${s1.currentBase === 'http://127.0.0.1:39999' ? '✅' : '❌'} 「当前地址」从 Host 推出来：${s1.currentBase}`)
-      // 🔴 最精准的那一档：浏览器把应用根（document.baseURI，含反代前缀）报上来
-      const withHint = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd) + '&clientBase=' + encodeURIComponent('https://127.0.0.1:39999'))
-      const hintBody = JSON.parse(String(withHint.body ?? '{}'))
-      console.log(`  ${hintBody.currentBase === 'https://127.0.0.1:39999' ? '✅' : '❌'} 🔴 浏览器报的 clientBase 优先（最准）：${hintBody.currentBase}`)
-      const hintPath = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd) + '&clientBase=' + encodeURIComponent('https://127.0.0.1:39999/proxy'))
-      const hintPathBody = JSON.parse(String(hintPath.body ?? '{}'))
-      console.log(`  ${hintPathBody.currentBase === 'https://127.0.0.1:39999/proxy' ? '✅' : '❌'} 🔴 子路径部署：clientBase 的挂载前缀原样保留（分享 URL 不会丢 /proxy）：${hintPathBody.currentBase}`)
-      const legacyHint = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd) + '&clientOrigin=' + encodeURIComponent('https://127.0.0.1:39999'))
-      const legacyHintBody = JSON.parse(String(legacyHint.body ?? '{}'))
-      console.log(`  ${legacyHintBody.currentBase === 'https://127.0.0.1:39999' ? '✅' : '❌'} 旧客户端的 clientOrigin 仍认（向后兼容）：${legacyHintBody.currentBase}`)
-      const badHint = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd) + '&clientBase=' + encodeURIComponent('https://evil.example.com/proxy'))
-      const badHintBody = JSON.parse(String(badHint.body ?? '{}'))
-      console.log(`  ${badHintBody.currentBase === 'http://127.0.0.1:39999' ? '✅' : '❌'} clientBase 的 host 与请求 Host 不一致 → 不认（退回 Host，不泄漏错误前缀）：${badHintBody.currentBase}`)
-      const fwd = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd), { 'x-forwarded-proto': 'https' })
-      const fwdBody = JSON.parse(String(fwd.body ?? '{}'))
-      console.log(`  ${fwdBody.currentBase === 'https://127.0.0.1:39999' ? '✅' : '❌'} 反代场景认 X-Forwarded-Proto：${fwdBody.currentBase}`)
-      // Origin 只能与 Host 同 host:port（信任栅栏的要求），所以它带来的差别是**协议**
-      const withOrigin = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd), { origin: 'https://127.0.0.1:39999' })
-      const originBody = JSON.parse(String(withOrigin.body ?? '{}'))
-      console.log(`  ${originBody.currentBase === 'https://127.0.0.1:39999' ? '✅' : '❌'} 有 Origin 时优先用它（协议最准）：${originBody.currentBase}`)
-      // 🔴 反代终止 TLS 的场景：同源 GET 常常没有 Origin，但一般有 Referer —— 靠它拿到 https
-      const withRef = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd), { referer: 'https://127.0.0.1:39999/chat/abc' })
-      const refBody = JSON.parse(String(withRef.body ?? '{}'))
-      console.log(`  ${refBody.currentBase === 'https://127.0.0.1:39999' ? '✅' : '❌'} 没有 Origin 时用**同源** Referer 的 origin：${refBody.currentBase}`)
-      const badRef = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd), { referer: 'https://evil.example.com/x' })
-      const badRefBody = JSON.parse(String(badRef.body ?? '{}'))
-      console.log(`  ${badRefBody.currentBase === 'http://127.0.0.1:39999' ? '✅' : '❌'} 不同源的 Referer 一律不认（退回 Host 推导）：${badRefBody.currentBase}`)
-      const cleared = await callRaw('DELETE', '/api/mc/express?cwd=' + encodeURIComponent(cwd))
-      const c1 = JSON.parse(String(cleared.body ?? '{}'))
-      const stat2 = await callRaw('GET', '/api/mc/express?cwd=' + encodeURIComponent(cwd))
-      const s2 = JSON.parse(String(stat2.body ?? '{}'))
-      console.log(`  ${c1.ok && c1.removed === s1.files ? '✅' : '❌'} 「清除分享数据」删掉 ${s1.files} 个文件（返回 removed=${c1.removed}）`)
-      console.log(`  ${s2.ok && s2.files === 0 && s2.bytes === 0 ? '✅' : '❌'} 清完发布区是空的（files=${s2.files}）`)
-      console.log(`  ${existsSync(join(cwd, '.whale-craft', E.EXPRESS_DIR)) ? '✅' : '❌'} 发布区目录**重建**（AI 不用再建）`)
-
-      // 还原：回到关闭（默认），别把临时配置留给后面的断言
-      await patchCfg({ expressWebEnabled: false, expressWebBase: '' })
-      const backDefault = await callRaw('GET', '/api/mc/config?cwd=' + encodeURIComponent(cwd))
-      const bd = JSON.parse(String(backDefault.body ?? '{}'))
-      console.log(`  ${bd.expressWebEnabled === false && bd.expressWebBase === '' ? '✅' : '❌'} 还原成默认（关、无 base）：enabled=${bd.expressWebEnabled} base='${bd.expressWebBase}'`)
-      // 模式字段：web profileContext 应报 web；四键齐全
-      console.log(`  ${bd.mode === 'web' && 'expressDesktopEnabled' in bd && 'expressDesktopPort' in bd ? '✅' : '❌'} config 回 mode=web + web/desktop 两套键（desktop 默认端口 ${bd.expressDesktopPort}）`)
-    } finally {
-      /* 记忆根不再有 env 重定向（2026-10-08 删） */
-    }
-  }
+  const oldShare = await callRaw('GET', '/api/mc/express')
+  console.log(`  ${oldShare.status === 404 ? '✅' : '❌'} 🔴 旧分享接口 /api/mc/express 已移除（404）：${oldShare.status}`)
 }
 
 // ── 玩家说话要能被认出来（2026-09-16 真机事故：LAN/离线服上"喊我不应，只能 tp 我"）──
@@ -1649,7 +1345,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const suffixHasCwd = /suffix:[^\n]*\{\{cwd\}\}/.test(mcSrc) || /suffix:[^\n]*\{\{cwd\}\}/.test(plusSrc)
     console.log(`  ${!suffixHasCwd ? '✅' : '❌'} 🔴 preset 的 persona suffix 不引用 {{cwd}}（0.2.1-rc.2 起宿主不再注册该变量）`)
     const mcNeeds = ['@deepseek-ai/dsh-persona', '@deepseek-ai/dsh-tool-fs', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-tool-jobs', '@deepseek-ai/dsh-tool-goal', '@deepseek-ai/dsh-tool-todo', '@deepseek-ai/dsh-tool-web', '@deepseek-ai/dsh-compaction-basic']
-    console.log(`  ${mcNeeds.every((n) => mcSrc.includes(n)) && !mcSrc.includes('@deepseek-ai/dsh-tool-present') ? '✅' : '❌'} MC模式组成含 persona/tool-fs/tool-fs-search/tool-jobs/tool-goal/tool-todo/tool-web/compaction，且**不含** present`)
+    console.log(`  ${mcNeeds.every((n) => mcSrc.includes(n)) && mcSrc.includes('@deepseek-ai/dsh-tool-present') ? '✅' : '❌'} MC模式组成含 persona/tool-fs/tool-fs-search/tool-jobs/tool-goal/tool-todo/tool-web/compaction + present（文件交付）`)
     // 🔴 2026-10-08：MC 模式挂 tool-web 只为 web_search —— fetch 必须关（网页抓取走 mc_kit_web_fetch）
     console.log(`  ${/name: '@deepseek-ai\/dsh-tool-web'\n\s+config:\n\s+fetch: false/.test(mcSrc) ? '✅' : '❌'} 🔴 MC模式只挂 search、不挂 fetch（tool-web 的 fetch: false）`)
     const plusNeeds = ['@deepseek-ai/dsh-persona', '@deepseek-ai/dsh-agent-instructions', '@deepseek-ai/dsh-tool-pwsh', '@deepseek-ai/dsh-tool-bash', '@deepseek-ai/dsh-tool-fs-search', '@deepseek-ai/dsh-skill-filesystem', '@deepseek-ai/dsh-plan-mode', '@deepseek-ai/dsh-tool-subagent', '@deepseek-ai/dsh-tool-web', '@deepseek-ai/dsh-plugin-manager/tools']
@@ -1920,9 +1616,9 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const plusMc = callGuard({ name: 'mc_status', agent: plusAgent })
     console.log(`  ${plusMc === undefined ? '✅' : '❌'} MC+ 的 mc / mc_kit 工具照常放行（与 MC 模式行为一致）`)
     const plainMcDeny = callGuard({ name: 'mc_status', agent: { id: 'sess-P', ctx: plainCtxObj } })
-    const plainKitDeny = callGuard({ name: 'mc_kit_express', arguments: { path: 'x.png' }, agent: { id: 'sess-P', ctx: plainCtxObj } })
+    const plainKitDeny = callGuard({ name: 'mc_kit_image', arguments: { action: 'info', path: 'x.png' }, agent: { id: 'sess-P', ctx: plainCtxObj } })
     const plainAdminOk = callGuard({ name: 'mc_admin_config', agent: { id: 'sess-P', ctx: plainCtxObj } })
-    console.log(`  ${plainMcDeny && plainKitDeny ? '✅' : '❌'} 🔴 其他模式调 mc_status / mc_kit_express 被 guard 硬拒（"不再暴露 mc 和 mckit"的第二道锁）`)
+    console.log(`  ${plainMcDeny && plainKitDeny ? '✅' : '❌'} 🔴 其他模式调 mc_status / mc_kit_image 被 guard 硬拒（"不再暴露 mc 和 mckit"的第二道锁）`)
     console.log(`  ${plainAdminOk === undefined ? '✅' : '❌'} 其他模式**保留** mc_admin_config（它的用途就是在普通会话里管理）`)
   }
 
@@ -2078,7 +1774,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     console.log(`  ${/mc_move/.test(bodyV) && /mc_command/.test(bodyV) && /\/setblock/.test(bodyV) ? '✅' : '❌'} 版本提示正文点了工具名与指令名（mc_move / mc_command / /setblock）`)
     console.log(`  ${/可以先试一次/.test(bodyV) && /被白名单或权限拒绝/.test(bodyV) ? '✅' : '❌'} 第 1 条保留"先试一次、被拒再退"（不然模型有权限也不敢用指令）`)
     console.log(`  ${/生存、冒险/.test(bodyV) && /明确告知用户/.test(bodyV) ? '✅' : '❌'} 第 2 条讲清本版本能力短板（生存/冒险极弱，先告知用户再尽力）`)
-    console.log(`  ${!/mc_kit_express/.test(bodyV) && !/\.whale-craft\/\.express\//.test(bodyV) ? '✅' : '❌'} 🔴 交付/文件分享流程已移出版本提示（归 mc_kit_express 工具说明）`)
+    console.log(`  ${!/mc_kit_express|\.whale-craft\/\.express\//.test(bodyV) ? '✅' : '❌'} 🔴 文件分享流程不在版本提示里（图片走回复内嵌、非图片走 present）`)
     console.log(`  ${/^1\./m.test(bodyV) && /^2\./m.test(bodyV) && !/^3\./m.test(bodyV) ? '✅' : '❌'} 正文就是两条（用户："别的属实多余了"）`)
     // 选项 A（用户 2026-09-16 定）：**正文里不写版本号** —— 版本由来源行与折叠标题携带
     console.log(`  ${!/v\d+\.\d+\.\d+/.test(bodyV.replace(/^Instructions from: [^\n]*\n+/, '')) ? '✅' : '❌'} 🔴 正文里没有版本号（版本只在来源行与折叠标题里；哈希只标记正文本身）`)
@@ -2109,7 +1805,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   console.log(`  ${allowList && allowList.includes('mc_status') && allowList.includes('mc_kit_image') && allowList.includes('mc_kit_fs') && allowList.includes('mc_build') ? '✅' : '❌'} 自己的工具还在（mc_status / mc_kit_image / mc_kit_fs / mc_build）`)
   console.log(`  ${allowList && allowList.every((n) => !n.startsWith('mc_admin_')) ? '✅' : '❌'} 管理工具不在白名单里（hideAdminTools 默认 true）`)
   console.log(`  ${allowList && ['read', 'write', 'edit', 'read_image'].every((n) => allowList.includes(n)) ? '✅' : '❌'} 在场的文件工具在白名单里（路径由 guard 限在 .whale-craft/）`)
-  console.log(`  ${allowList && !allowList.includes('present') ? '✅' : '❌'} 🔴 present **不在**白名单里（MC 模式不暴露文件交付；走 mc_kit_express）`)
+  console.log(`  ${allowList && allowList.includes('present') ? '✅' : '❌'} 🔴 present **在**白名单里（非图片文件交付；路径由 guard 限在本会话工作区）`)
   console.log(`  ${allowList && ['job_list', 'job_output', 'job_kill', 'get_goal', 'create_goal', 'update_goal', 'todo_write'].every((n) => allowList.includes(n)) ? '✅' : '❌'} 🔴 后台任务/目标/待办（job_* / goal_* / todo_write）按 dsh-tools.md 进入了白名单`)
   // 🔴 2026-10-08「允许联网搜索」（默认开）：开 → web_search 进白名单；关 → 不进 + guard 硬拒
   console.log(`  ${allowList && allowList.includes('web_search') ? '✅' : '❌'} 🔴 默认（开关开）白名单**含** web_search`)
@@ -2482,11 +2178,9 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   const hintGone = await callMc2('GET', '/api/mc/config?sessionId=sess-UNKNOWN&cwd=' + encodeURIComponent((await import('node:path')).join((await import('node:os')).tmpdir(), 'definitely-not-here-xyz')))
   console.log(`  ${hintGone.json?.ok === true && hintGone.json?.hasWorkspace === false ? '✅' : '❌'} 报的目录不存在 → 不认（当没工作区）`)
 
-  // 无工作区模式（从插件菜单打开设置）：提示词只读回默认；发布区仍拒绝
+  // 无工作区模式（从插件菜单打开设置）：提示词只读回默认
   const nowsMd = await callMc2('GET', '/api/mc/agents-md')
   console.log(`  ${nowsMd.json?.ok === true && nowsMd.json?.readOnly === true && nowsMd.json?.hasWorkspace === false && typeof nowsMd.json?.text === 'string' && nowsMd.json.text.length > 0 && nowsMd.json?.rulesVersion === null ? '✅' : '❌'} 无工作区 → 提示词**只读**返回内置默认（readOnly / rulesVersion=null）`)
-  const nowsEx = await callMc2('GET', '/api/mc/express')
-  console.log(`  ${nowsEx.json?.ok === false ? '✅' : '❌'} 无工作区 → 发布区接口仍拒绝（分享发布区无工作区不可用）`)
 }
 
 // ── MC账户体系（元数据 / 凭据分离；LLM 只能看基本信息）──
@@ -2782,32 +2476,6 @@ console.log('\n--- 行事准则 RULES.md / 新开关 / 边界信息 ---')
   console.log(`  ${/未知配置项/.test(String(wsSet)) && /未知配置项/.test(String(followSet)) ? '✅' : '❌'} 🔴 三个提示词开关已不在全局配置（mc_admin_config 报未知项）：${String(wsSet).slice(0, 34)}…`)
   const { WS_DEFAULTS } = await import('./src/wsconfig.mjs')
   console.log(`  ${WS_DEFAULTS.injectWorkspaceAgentsMd === false && WS_DEFAULTS.injectWhaleCraftAgentsMd === true && WS_DEFAULTS.rulesFollowVersion === true ? '✅' : '❌'} 🔴 按工作区开关的默认值 = 下放前的全局默认（注入准则开 / 注入工作区关 / 随版本更新开）`)
-
-  /* 「文件分享」（2026-10-07 按宿主模式拆键）：四键都能设 / 类型校验 / base 归一化 / 端口范围 */
-  const setShare = (value, path = 'expressWebEnabled') =>
-    tools.get('mc_admin_config').execute({ action: 'set', path, value }, A).catch((e) => e.message)
-  await setShare(true)
-  const shareOn = await tools.get('mc_admin_config').execute({ action: 'get', path: 'expressWebEnabled' }, A)
-  console.log(`  ${shareOn.value === true ? '✅' : '❌'} 管理员工具能设 expressWebEnabled（当前 ${shareOn.value}）`)
-  const badMode = await setShare('随便')
-  console.log(`  ${/expressWebEnabled 必须是/.test(String(badMode)) ? '✅' : '❌'} 非布尔被拒：${String(badMode).slice(0, 40)}…`)
-  const badBase = await setShare('ftp://x', 'expressWebBase')
-  console.log(`  ${/expressWebBase 必须是/.test(String(badBase)) ? '✅' : '❌'} 非法 base 被拒：${String(badBase).slice(0, 40)}…`)
-  await setShare('https://share.example.com/', 'expressWebBase')
-  const baseOn = await tools.get('mc_admin_config').execute({ action: 'get', path: 'expressWebBase' }, A)
-  console.log(`  ${baseOn.value === 'https://share.example.com' ? '✅' : '❌'} base 存下来是归一化的（尾斜杠已去）：${baseOn.value}`)
-  await setShare(true, 'expressDesktopEnabled')
-  const deskOn = await tools.get('mc_admin_config').execute({ action: 'get', path: 'expressDesktopEnabled' }, A)
-  console.log(`  ${deskOn.value === true ? '✅' : '❌'} 管理员工具能设 expressDesktopEnabled（当前 ${deskOn.value}）`)
-  const badPort = await setShare(70000, 'expressDesktopPort')
-  console.log(`  ${/expressDesktopPort 必须是/.test(String(badPort)) ? '✅' : '❌'} 超范围端口被拒：${String(badPort).slice(0, 40)}…`)
-  await setShare(16050, 'expressDesktopPort')
-  const portOn = await tools.get('mc_admin_config').execute({ action: 'get', path: 'expressDesktopPort' }, A)
-  console.log(`  ${portOn.value === 16050 ? '✅' : '❌'} 端口存整数：${portOn.value}`)
-  await tools.get('mc_admin_config').execute({ action: 'reset' }, A)
-  const shareReset = await tools.get('mc_admin_config').execute({ action: 'get', path: 'expressWebEnabled' }, A)
-  const portReset = await tools.get('mc_admin_config').execute({ action: 'get', path: 'expressDesktopPort' }, A)
-  console.log(`  ${shareReset.value === false && portReset.value === 16049 ? '✅' : '❌'} reset 后回到默认（web 关、桌面端口 16049）：${shareReset.value}/${portReset.value}`)
 
   /* 「开放助手调试工具」开关（2026-10-05）：全局配置键、默认关、有类型校验 */
   const debugDefault = await tools.get('mc_admin_config').execute({ action: 'get', path: 'exposeDebugTools' }, A)
@@ -3854,11 +3522,11 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
     ['点击时才检查工作区（三态：拿不准就不拦）', /function useMcWorkspaceReady\(props, active\)/.test(code) && /if \(wsReadyRef\.current === false\) \{ window\.alert\(NO_WORKSPACE_TIP\); return \}/.test(code)],
     ['工作区判定本地+服务端两处兜底（hasWorkspace）', /useWorkspaceCwd\(props\)/.test(code) && /typeof j\?\.hasWorkspace === 'boolean'/.test(code)],
     ['提示优先用原生 alert（不做自定义模态框）', /window\.alert\(NO_WORKSPACE_TIP\)/.test(code) && /NO_WORKSPACE_TIP\s*=\s*'/.test(code) && !/data-wc-noworkspace/.test(code)],
-    // ── 设置两态（2026-10-04）：有/无工作区 —— 无工作区时账户/白名单照常，提示词只读默认，发布区隐藏 ──
+    // ── 设置两态（2026-10-04）：有/无工作区 —— 无工作区时账户/白名单照常，提示词只读默认 ──
     ['无工作区提示用 data-wc-wsneed（不是 data-wc-noworkspace）', /data-wc-wsneed/.test(code) && /在对话中打开设置/.test(code)],
     ['工作区项标记用官方文件夹图标（IconFolderOpenRegular）+ data-wc-wsmark', /IconFolderOpenRegular/.test(code) && /data-wc-wsmark/.test(code) && /该设置项应用于本工作区/.test(code)],
     ['头部显示工作区名（hasWorkspace → data-wc-wsname）', /data-wc-wsname/.test(code) && /workspaceName/.test(code) && /default-workspace/.test(code)],
-    ['无工作区读服务端 hasWorkspace（config 回值），发布区按它决定要不要拉', /setHasWorkspace\(hasWs\)/.test(code) && /hasWorkspace === true/.test(code)],
+    ['无工作区读服务端 hasWorkspace（config 回值）', /setHasWorkspace\(hasWs\)/.test(code) && /hasWorkspace === true/.test(code)],
     ['提示词：无工作区隐藏三开关/版本、正文只读', /hasWorkspace \? h\(WsMark\)/.test(code) && /readOnly: true/.test(code) && /h\(WsNeedHint\)/.test(code)],
     ['hero 按钮按工作区就绪禁用（getDisabled + refresh，不重建 DOM）', /getDisabled/.test(code) && /btn\.disabled = off/.test(code) && /ctlRef\.current\.refresh\(\)/.test(code)],
     ['详情页入口用受控 open 打开模态框（root 作用域 = 无工作区）', /React\.createElement\(McSettingsModal, \{ open, onClose/.test(code)],
@@ -3913,22 +3581,16 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
     ['插件请求按 document.baseURI 解析（支持反代前缀）', /function apiUrl\(path\)[\s\S]{0,260}document\.baseURI/.test(code) && /replace\(\/\^\\\/\+\/, ''\)/.test(code)],
     ['没有写死根绝对路径的 /api 请求（前缀部署不会被绕过）', !/fetch\(\s*['"`]\/api\//.test(code)],
     ['apiFetch 统一走 apiUrl（设置接口全都覆盖）', /res = await fetch\(apiUrl\(path\), init\)/.test(code)],
-    ['「当前地址」上报应用根 clientBase（含前缀），不再只报 origin', /const here = appBase\(\)/.test(code) && /'&clientBase=' \+ encodeURIComponent\(here\)/.test(code) && !/location\.origin/.test(code)],
-    ['apiUrl / appBase 真的按 document.baseURI 解析（子路径 / 根 / index.html 都对）', (() => {
+    ['apiUrl 真的按 document.baseURI 解析（子路径 / 根都对）', (() => {
       const m = /function apiUrl\(path\) \{[\s\S]*?\n    \}/.exec(code)
-      const b = /function appBase\(\) \{[\s\S]*?\n    \}/.exec(code)
-      if (!m || !b) return false
+      if (!m) return false
       try {
-        const run = new Function('document', `${m[0]}\n${b[0]}\nreturn { apiUrl, appBase }`)
+        const run = new Function('document', `${m[0]}\nreturn apiUrl`)
         const prefixed = run({ baseURI: 'https://host/ui/' })
-        const indexed = run({ baseURI: 'https://host/ui/index.html' })
         const root = run({ baseURI: 'https://host/' })
-        return prefixed.apiUrl('/api/mc/presets?x=1') === 'https://host/ui/api/mc/presets?x=1'
-          && prefixed.apiUrl('api/mc/stop') === 'https://host/ui/api/mc/stop'
-          && root.apiUrl('/api/mc/status') === 'https://host/api/mc/status'
-          && prefixed.appBase() === 'https://host/ui'
-          && indexed.appBase() === 'https://host/ui'
-          && root.appBase() === 'https://host'
+        return prefixed('/api/mc/presets?x=1') === 'https://host/ui/api/mc/presets?x=1'
+          && prefixed('api/mc/stop') === 'https://host/ui/api/mc/stop'
+          && root('/api/mc/status') === 'https://host/api/mc/status'
       } catch { return false }
     })()],
     // 🔴 2026-09-16 真机 bug：两个入口都把模态框写成 `createElement(McSettingsModal, null)`
@@ -3991,34 +3653,8 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
     ['地址太长就截断（完整地址留在 tooltip）', /address\.length > 26 \? address\.slice\(0, 25\) \+ '…'/.test(code) && /'data-mc-sub': '', title: address/.test(code)],
     ['CSS 也兜一层截断（max-width + ellipsis）', /\[data-mc-sub\]\{[^}]*max-width:24ch[^}]*text-overflow:ellipsis/.test(code)],
     ['拿不到地址就只显示"在游戏中"（不硬编造一个"—"）', /address \? React\.createElement\('span', \{ 'data-mc-sub'/.test(code)],
-    // ── 「文件分享」页（用户 2026-09-17）：两模式 + 在线 base（获取当前）+ 清除分享数据（要确认）──
-    ['「文件分享」页存在（开关式；不再有 mode 的 off/online/local 取值）', /function SharePane/.test(code) && /label: '启用文件分享'/.test(code) && !/id: 'local'/.test(code) && !/'data-wc-mode'/.test(code)],
-    ['标签页叫「文件分享」', /label: '文件分享'/.test(code)],
-    ['文件分享是**开关**一拨就存（乐观更新 + 失败回滚）', /setShareOn\(next\)/.test(code) && /if \(!ok\) setShareOn\(prev\)/.test(code)],
-    // 🔴 2026-10-04：不再有"模式"（在线是唯一方式）→ 等宽按钮那一套整个删掉
-    ['不再是"模式"按钮（mode 那一套已删）', /label: '启用文件分享'/.test(code) && !/data-wc-modes/.test(code) && !/data-wc-mode-on/.test(code)],
-    ['🔴 关闭时 base 那块**禁用**（输入框 + 两个按钮）', /disabled: busy \|\| !on/.test(code) && /开启文件分享后才能设置 base/.test(code)],
-    ['「获取当前」按钮：用当前地址填好并保存', /'获取当前'/.test(code) && /onClick: onUseCurrent/.test(code) && /拿不到当前地址/.test(code)],
-    ['🔴 开启且没 base → 自动"获取当前"并一起保存（仅 web 模式）', /shareMode !== 'desktop' && next === true && !shareBase/.test(code) && /cur \? \{ expressWebEnabled: true, expressWebBase: cur \}/.test(code)],
-    ['🔴 不去调就不写：不开/不点按钮时不动 base', /: apiPatch\(withSid\('\/api\/mc\/config'\), \{ \[onKey\]: next \}\)\)/.test(code)],
-    ['🔴 开关按宿主模式绑定各自的键', /shareMode === 'desktop' \? 'expressDesktopEnabled' : 'expressWebEnabled'/.test(code)],
-    // 🔴 2026-09-17 真机：模态框里调 setBaseText（它在 SharePane 内部）→ 点「在线」弹
-    //    "setBaseText is not defined"。保存后靠 load() 刷新 base → pane 的 useEffect 自己同步。
-    ['🔴 模态框不许碰 pane 内部的输入框状态（setBaseText）', !/setBaseText\(cur\)/.test(code) && /setBaseText\(base \?\? ''\)/.test(code)],
-    ['base 单独用「保存」提交（不是边打字边存）', /apiPatch\(withSid\('\/api\/mc\/config'\), \{ expressWebBase: String\(text \?\? ''\) \}\)/.test(code)],
-    // 🔴 2026-10-07：桌面模式改用独立端口（默认 16049）
-    ['🔴 桌面模式：托管端口那块（保存端口 / 恢复默认）', /'data-wc-h': '' \}, '托管端口'/.test(code) && /onClick: \(\) => onSavePort\(String\(portText\)\.trim\(\)\)/.test(code) && /onClick: onResetPort/.test(code)],
-    ['🔴 桌面默认端口 16049（与 src/express.mjs 一致）', /const EXPRESS_DEFAULT_PORT = 16049/.test(code)],
-    ['🔴 端口占用 → 输入框附近红字（防抖 300ms 自检）', /onCheckPort/.test(code) && /setTimeout\(\(\) => \{/.test(code) && /已被占用，请换一个/.test(code)],
-    ['🔴 端口红字样式（data-wc-error → 错误色）', /\[data-wc-hint\]\[data-wc-error\]\{color:var\(--dsw-alias-state-error-primary/.test(code)],
-    ['桌面模式按 mode 分支渲染（托管端口 / base 二选一）', /const isDesktop = mode === 'desktop'/.test(code)],
-    ['在线模式却没填 base → 页面上直接说清', /还没填 base：AI 暂时只能让你去设置/.test(code)],
-    ['🔴 base 那一块**始终渲染**（关闭时禁用而非消失）', /'data-wc-h': '' \}, 'base 地址'/.test(code)],
-    ['「清除分享数据」必须二次确认（确认后才真删）', /onClick: \(\) => setConfirmClear\(true\)/.test(code) && /onClick: \(\) => \{ setConfirmClear\(false\); onClear\(\) \}/.test(code)],
-    ['🔴 清除与模式无关（关闭模式下也能点，不因没文件而禁用）', !/disabled: busy \|\| !share\?\.files/.test(code)],
-    ['不可撤销那句用 <strong>（HTML 不认 markdown 的 **）', /React\.createElement\('strong', \{\}, '全部删掉'\)/.test(code)],
-    ['UI 里没有 markdown 式 `**`（渲染出来是字面星号）', !/'[^'\n]*\*\*[^'\n]*'/.test(code)],
-    ['清除走 DELETE /api/mc/express', /apiDelete\(withSid\('\/api\/mc\/express'\)\)/.test(code)],
+    // ── 文件分享已整体移除（2026-11-08）：入口 / 页面 / 请求都不该残留 ──
+    ['🔴 文件分享页与入口已移除', !/SharePane|启用文件分享|label: '文件分享'|apiDelete\(withSid\('\/api\/mc\/express'\)\)/.test(code)],
     // ── 「联网搜索」页（2026-10-08）：工作区无关的「允许联网搜索」开关（默认开）──
     ['「联网搜索」页存在（WebSearchPane + data-wc-pane-page:websearch）', /function WebSearchPane/.test(code) && /'data-wc-pane-page': 'websearch'/.test(code)],
     ['标签页叫「联网搜索」，排在「调试」之前', /label: '联网搜索'/.test(code) && code.indexOf("label: '联网搜索'") < code.indexOf("label: '调试'")],
@@ -4051,7 +3687,6 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
     ['开关说明写清"会覆盖你的修改"', /用新版本的默认提示词替换当前内容（会覆盖你的修改）/.test(code)],
     ['页面显示"当前内容对应哪个版本"', /当前内容对应：\$\{rulesVersion \? `v\$\{rulesVersion\}` : '未知（还没同步过）'\}/.test(code)],
     ['开关一拨就存（乐观更新 + 失败回滚）', /run\('cfg:follow', \(\) => apiPatch\(withSid\('\/api\/mc\/config'\), \{ rulesFollowVersion: next === true \}\)/.test(code) && /if \(!ok\) setFollowVersion\(prev\)/.test(code)],
-    ['页面上能看见发布区目录与大小', /data-wc-hint/.test(code) && /share\.files\} 个文件/.test(code) && /fmtBytes/.test(code)],
     // 地址只能走 connectionView()（host/port/version）；`_connectionProfile` 还带账号名，别发到浏览器
     ['后端只把 connectionView() 发给前端（不发含账号的 _connectionProfile）', !/connection: (sess|this)\.bot\._connectionProfile/.test(readFileSync(new URL('./index.js', import.meta.url), 'utf8'))],
   ]

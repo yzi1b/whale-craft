@@ -25,15 +25,13 @@
 // 🔴 必须**排在 core.mjs 之前**（ESM 按 import 顺序求值）：此处包一层宿主解析器，兜住 DSH rc.2
 //    「非 link 插件里 readable-stream 的 require('process/') 把 ResolutionRouter 搞崩」的 bug。
 import './src/resolver-shim.mjs'
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync, statSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync, statSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { resolve, sep, join, isAbsolute, dirname, basename } from 'node:path'
 import { McBot, lossless, logLine, libraryInfo } from './src/core.mjs'
 import { defineTool, toolDefKind } from './src/tool-def.mjs'
 import { versionPromptText, versionPromptTitle, versionPromptSource } from './src/version-prompt.mjs'
-import { EXPRESS_DIR, OUT_DIR, expressRootOf, outRootOf, parseExpressPath, parseExpressLocalPath, safeExpressTarget, mimeOf, SANDBOX_TYPES, expressRefFor, EXPRESS_OFF_TEXT, EXPRESS_NEED_BASE_TEXT, EXPRESS_PORT_BUSY_TEXT, normalizeExpressBase, normalizeExpressPort, onlineUrlOf } from './src/express.mjs'
-import { ExpressShareServer, portAvailable } from './src/express-server.mjs'
 import { Watchdog, WATCH_DEFAULTS } from './src/watchdog.mjs'
 import { MemoryStore } from './src/memory.mjs'
 import { PluginConfig, DEFAULT_CONFIG, resolveStateDir } from './src/config.mjs'
@@ -61,6 +59,10 @@ export const inject = ['webServer', 'tools', 'profileContext', 'agentPresets']
 const PLUGIN_VERSION = (() => {
   try { return JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version ?? 'unknown' } catch { return 'unknown' }
 })()
+
+/** 默认出图目录（`<工作区>/.whale-craft/.out/`）：不对外，回复里用工作区相对路径即可内嵌显示。 */
+const OUT_DIR = '.out'
+const outRootOf = (memRoot) => join(memRoot, OUT_DIR)
 
 /* ============================ HTTP 工具与信任栅栏 ============================ */
 /* 与宿主 `@deepseek-ai/dsh-client-connection` 的 /api 同款栅栏（DNS-rebinding + 跨站），
@@ -531,15 +533,6 @@ export function apply(ctx, rawConfig) {
     return () => clearTimeout(timer)
   }, 'whale_craft: preset health check')
   const lastPresetSeen = new WeakMap()
-  const hostMode = () => String(profileContext.name).toLowerCase() === 'desktop' ? 'desktop' : 'web'
-
-  /* ─────────── 发布区（`.whale-craft/.express/`）：地址用**工作区 uuid** ───────────
-   * 用户 2026-09-17 定稿：`<base>/api/whale-craft/express/<工作区 uuid>/<剩余路径>`。
-   * uuid 直接从宿主的工作区注册表拿（`ctx.workspaceRegistry.list()` 是**同步**的，`path` 已 realpath 规范化）——
-   * 不再用"目录名 + 进程内见过的工作区集合"那套（同名会撞、改名会失效、重启要重新见过）。
-   * 🔴 用户定的兜底是 **(a) 拒绝**：注册表里查不到这个 cwd 对应的 uuid 就不分享（不退回目录名）。
-   * ------------------------------------------------------------------------ */
-  const EXPRESS_MAX_BYTES = 32 * 1024 * 1024
 
   /** 宿主的工作区注册表（可能还没就绪 → 返回空表，别抛） */
   const workspaceRows = () => {
@@ -547,27 +540,6 @@ export function apply(ctx, rawConfig) {
       const rows = ctx.get('workspaceRegistry')?.list?.()
       return Array.isArray(rows) ? rows : []
     } catch { return [] }
-  }
-
-  /** cwd → 工作区 uuid（比对 realpath 规范化后的路径；查不到 = null） */
-  const workspaceIdOfCwd = (cwd) => {
-    const s = typeof cwd === 'string' ? cwd.trim() : ''
-    if (!s || !isAbsolute(s)) return null
-    let real = s
-    try { real = realpathSync(s) } catch { /* 目录可能还不存在，就用原样比 */ }
-    for (const w of workspaceRows()) {
-      const p = String(w?.path ?? '')
-      if (p && (p === real || p === s)) return String(w.id)
-    }
-    return null
-  }
-
-  /** 工作区 uuid → cwd（注册表里的规范路径） */
-  const workspaceCwdById = (id) => {
-    const key = String(id ?? '')
-    if (!key) return null
-    for (const w of workspaceRows()) if (String(w?.id) === key) return String(w.path)
-    return null
   }
 
   /** cwd → 工作区显示名（注册表里的 `title`；查不到 = null。前端回退路径尾段） */
@@ -584,93 +556,6 @@ export function apply(ctx, rawConfig) {
       }
     }
     return null
-  }
-
-  /* ─────────── 「文件分享」页要的两件事：看现状 / 清除数据（用户 2026-09-17 定）───────────
-   * · 现状 = 这个工作区的发布区在哪、攒了几个文件、多大（分享模式本身是全局配置，见 configView）；
-   * · 清除 = 用户确认后把 `.express/` 下的东西**全删掉**（目录自己留着，AI 不用重新建）。
-   * 🔴 目录永远由服务端按「工作区 + `.whale-craft/.express`」推出来，**不接受任何用户给的路径**。
-   * ------------------------------------------------------------------------ */
-  const sharedStat = (cwd) => {
-    const root = expressRootOf(memoryRootFor(cwd))
-    let files = 0
-    let bytes = 0
-    const walk = (dir) => {
-      let entries = []
-      try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
-      for (const ent of entries) {
-        const p = join(dir, ent.name)
-        if (ent.isDirectory()) { walk(p); continue }
-        if (!ent.isFile()) continue
-        files++
-        try { bytes += statSync(p).size } catch { /* 读不到大小就当 0 */ }
-      }
-    }
-    if (existsSync(root)) walk(root)
-    return { dir: root, exists: existsSync(root), files, bytes }
-  }
-
-  const clearShared = (cwd) => {
-    const root = expressRootOf(memoryRootFor(cwd))
-    const before = sharedStat(cwd)
-    if (!existsSync(root)) return { ...before, existed: false, removed: 0 }
-    try {
-      rmSync(root, { recursive: true, force: true })     // 连目录一起删（里面有符号链接也只删链接本身）
-      mkdirSync(root, { recursive: true })               // 立刻重建：发布区随时可用
-    } catch (e) {
-      throw new Error(`清除分享数据失败：${e.message}`)
-    }
-    logLine(`「文件分享」清除分享数据：${root}（${before.files} 个文件 / ${before.bytes} 字节）`)
-    return { ...before, existed: true, removed: before.files }
-  }
-
-  /**
-   * 「当前地址」= 浏览器**实际在用**的那个地址（在线 base 的默认值 / 「获取当前」按钮的值）。
-   *
-   * 精度从高到低：
-   *   ① **浏览器自己报的** `clientBase`（查询参数，前端塞 `document.baseURI` 的应用根，
-   *      含反代前缀）——协议/域名/端口/挂载前缀都是它真在用的，反代终止 TLS 也不会错。
-   *      旧客户端只报 `clientOrigin`（origin，不含前缀）也认；只认 host 与请求 Host 一致的；
-   *   ② `Origin` 请求头；
-   *   ③ `Referer`（只取 origin，且 host 必须与 Host 一致）；
-   *   ④ `X-Forwarded-Proto` + `Host`；
-   *   ⑤ `Host` + socket 是否 TLS。
-   * 都拿不到就回 `''`（前端提示手填）。
-   *
-   * 🔴 为什么必须有 ①/③ 这两档：用户可能从 `https://域名` 访问、而 TLS 是**反代终止**的
-   * （转发到本机是明文 http，代理也未必带 `X-Forwarded-Proto`）—— 只看 Host 会推出 `http://域名`：
-   * 协议错，图片会被浏览器当混合内容挡掉。
-   * DSH 0.2.2 起支持 `--public-url https://host/prefix/` 的前缀部署；浏览器报的 `clientBase`
-   * 会把这个前缀带来（宿主客户端同样以 `document.baseURI` 为根调接口），不再需要用户手补。
-   */
-  const currentBaseOf = (req, hints = {}) => {
-    const host = String(req?.headers?.host ?? '').trim()
-    const sameHost = (value) => {
-      try { return Boolean(host) && new URL(value).host === new URL(`http://${host}`).host } catch { return false }
-    }
-    const originPart = (value) => {
-      try {
-        const u = new URL(String(value))
-        return u.protocol === 'http:' || u.protocol === 'https:' ? `${u.protocol}//${u.host}` : ''
-      } catch { return '' }
-    }
-    // ① 浏览器报上来的（最准：协议/域名/端口/前缀都是它真在用的）——服务端不裁剪它；host 必须与请求 Host 一致
-    const hint = normalizeExpressBase(hints.clientBase) || normalizeExpressBase(hints.clientOrigin)
-    if (hint && sameHost(hint)) return hint
-    // ② Origin 头
-    const o = normalizeExpressBase(originPart(req?.headers?.origin))
-    if (o) return o
-    // ③ 同源 Referer
-    const ref = originPart(req?.headers?.referer)
-    if (ref && sameHost(ref)) {
-      const r = normalizeExpressBase(ref)
-      if (r) return r
-    }
-    if (!host) return ''
-    // ④ 反代声明的协议 + Host；⑤ Host + socket
-    const fwd = String(req?.headers?.['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase()
-    const proto = fwd === 'https' || fwd === 'http' ? fwd : (req?.socket?.encrypted ? 'https' : 'http')
-    return normalizeExpressBase(`${proto}://${host}`) ?? ''
   }
 
   /* ─────────── MC账户库：元数据在 $DSH_HOME/whale_craft/accounts.json，凭据只进宿主凭据服务 ───────────
@@ -979,16 +864,6 @@ export function apply(ctx, rawConfig) {
       injectWorkspaceAgentsMd: ws ? ws.injectWorkspaceAgentsMd : null,
       // 「提示词」页的「随版本更新」（默认开；按工作区）
       rulesFollowVersion: ws ? ws.rulesFollowVersion !== false : null,
-      // 「MC设置 → 文件分享」：**按宿主模式各认一套键**（用户 2026-10-07）——
-      //   web：开关 + base；desktop：开关 + 端口。前端据 `mode` 只显示/只写自己那套。
-      mode: hostMode(),
-      expressWebEnabled: pluginConfig.expressWebEnabled,
-      expressWebBase: pluginConfig.expressWebBase,
-      expressDesktopEnabled: pluginConfig.expressDesktopEnabled,
-      expressDesktopPort: pluginConfig.expressDesktopPort,
-      // desktop 独立端口现状（设置页红字 / "已开放"提示；**工作区无关**，故放在这里而非 /api/mc/express）
-      expressDesktopListening: expressServer.status.listening && expressServer.status.port === pluginConfig.expressDesktopPort,
-      expressDesktopError: expressServer.status.wantPort === pluginConfig.expressDesktopPort ? expressServer.status.error : null,
       // 「MC设置 → 调试」页的「开放助手调试工具」开关（工作区无关）
       exposeDebugTools: pluginConfig.exposeDebugTools,
       // 「MC设置 → 联网搜索」页的「允许联网搜索」开关（工作区无关；默认开）
@@ -1210,7 +1085,7 @@ export function apply(ctx, rawConfig) {
       const cwd = await cwdOf(body)
       if (cwd) ensureMemoryRootForCwd(cwd)
       // 全局键 → PluginConfig（**无条件**）；三个提示词开关 → **本工作区**的 config.json（有工作区才写）
-      for (const k of ['commandWhitelist', 'allowAllCommands', 'expressWebEnabled', 'expressWebBase', 'expressDesktopEnabled', 'expressDesktopPort', 'exposeDebugTools', 'allowWebSearch', 'webFetchEnabled', 'webFetchDomains', 'allowAllFetchDomains', 'webFetchAllowHtml', 'webFetchAllowText', 'webFetchAllowImage']) {
+      for (const k of ['commandWhitelist', 'allowAllCommands', 'exposeDebugTools', 'allowWebSearch', 'webFetchEnabled', 'webFetchDomains', 'allowAllFetchDomains', 'webFetchAllowHtml', 'webFetchAllowText', 'webFetchAllowImage']) {
         if (body[k] !== undefined) pluginConfig.set(k, body[k])
       }
       // 调试 / 联网搜索 / 网页抓取开关变更 → 立即重算各 MC/MC+ 会话的工具可见性
@@ -1218,59 +1093,12 @@ export function apply(ctx, rawConfig) {
       if (body.exposeDebugTools !== undefined || body.allowWebSearch !== undefined || body.webFetchEnabled !== undefined) {
         try { refreshMcPolicy() } catch (e) { logLine(`可见性开关变更后重算工具策略失败：${e?.message ?? e}`) }
       }
-      // desktop 分享开关/端口变更 → 立即对齐独立端口服务（用户 2026-10-07）。
-      // **await**：让响应返回时 `listening`/`portError` 已是最终态，设置页不必猜。
-      if (body.expressDesktopEnabled !== undefined || body.expressDesktopPort !== undefined) {
-        await syncExpressServer()
-      }
       const wsPatch = {}
       for (const k of ['injectWhaleCraftAgentsMd', 'injectWorkspaceAgentsMd', 'rulesFollowVersion']) {
         if (body[k] !== undefined) wsPatch[k] = body[k]
       }
       if (cwd && Object.keys(wsPatch).length) wsCfgPatch(cwd, wsPatch)
       return ok(configView(cwd))
-    }
-
-    /* ── 「MC设置 → 文件分享」：这个工作区的发布区现状 / 清除分享数据 ──────────────
-     * 分享**开关与地址/端口**是全局配置（走 `/api/mc/config`）；这两个接口是**按工作区**的：
-     *   · GET    看发布区在哪、攒了多少（页面上显示，省得用户去翻文件夹）；
-     *   · DELETE 「清除分享数据」—— 前端必须**先让用户确认**再调它（不可撤销）。
-     * 目录由服务端推导，前端传不了路径。
-     * ------------------------------------------------------------------------ */
-    /* 端口占用自检（desktop 设置页用；**按需、不绑工作区**）：该端口能否在本机回环监听
-     * —— 若正是我们当前已监听的端口，则算"可用（本插件占用）"。 */
-    if (path === '/api/mc/express/port' && req.method === 'GET') {
-      const port = normalizeExpressPort(url?.searchParams?.get('port'))
-      if (port === null) return ok({ port: null, available: false, current: false, reason: 'invalid' })
-      const st = expressServer.status
-      if (st.listening && st.port === port) return ok({ port, available: true, current: true, reason: '' })
-      const free = await portAvailable(port)
-      return ok({ port, available: free, current: false, reason: free ? '' : 'inuse' })
-    }
-    if (path === '/api/mc/express' && req.method === 'GET') {
-      const gate = await gateOf()
-      if (!gate.ok) return sendJson(res, 400, { ok: false, error: gate.error })
-      // 顺带把「当前地址」给前端：base 的「获取当前」按钮 / 切到在线时的自动填，都用它
-      // （`clientBase` = 浏览器塞进来的应用根（含反代前缀），最精准那一档；`clientOrigin` 是旧客户端别名）
-      const st = expressServer.status
-      const wantPort = pluginConfig.expressDesktopPort
-      return ok({
-        ...sharedStat(gate.cwd),
-        mode: hostMode(),
-        currentBase: currentBaseOf(req, {
-          clientBase: url?.searchParams?.get('clientBase'),
-          clientOrigin: url?.searchParams?.get('clientOrigin'),
-        }),
-        // desktop：独立端口现状（设置页据此红字提示 / 显示"已开放"）
-        port: wantPort,
-        listening: st.listening && st.port === wantPort,
-        portError: st.wantPort === wantPort ? st.error : null,
-      })
-    }
-    if (path === '/api/mc/express' && req.method === 'DELETE') {
-      const gate = await gateOf()
-      if (!gate.ok) return sendJson(res, 400, { ok: false, error: gate.error })
-      return ok(clearShared(gate.cwd))
     }
 
     /* ── 提示词（「MC设置 → 提示词」页 = `.whale-craft/RULES.md`）：读 / 存 / 恢复默认 ──
@@ -1337,115 +1165,6 @@ export function apply(ctx, rawConfig) {
     }
     throw new Error(`未知的设置接口：${req.method} ${path}`)
   }
-
-  /**
-   * 发布区服务：`GET/HEAD /api/whale-craft/express/<工作区 uuid>/<剩余路径>`
-   *   → `<工作区>/.whale-craft/.express/<剩余路径>`（**子目录可以有**）。
-   *
-   * 用户 2026-09-16 定的规矩（照做）：
-   *   · **不用 token**（DSH 本身禁止公网访问；真要架公网，架的人自己加代理与鉴权）；
-   *   · **目录即白名单**：只有 `.express/` 下的文件可访问，`.out/`（默认输出）不对外；
-   *   · **所有扩展名都放行**（用户自己把握）；
-   *   · 🔴 **必须防穿透**：段级校验（`.whale-craft` 那边已做）之后，这里再用
-   *     `realpath` 复查一次"真实路径仍在发布区里" —— 这样**符号链接也跳不出去**。
-   *   · 信任栅栏在路由入口处（非回环且不在 trustedHosts → 403）。
-   *
-   * 🔴 2026-09-17：地址里的"工作区指代"从**目录名**换成**工作区 uuid**（`workspaceRegistry` 的 id）。
-   *    查不到对应工作区（或段不合法）→ 统一 404，不给探测依据。
-   */
-  const serveSharedFile = (req, res, hit) => {
-    const notFound = (why) => {
-      // 统一 404（不区分"没有这个工作区/没有这个文件/段不合法"）：不给人做探测的依据
-      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-      res.end(`not found${why ? ` (${why})` : ''}`)
-      return true
-    }
-    try {
-      const cwd = workspaceCwdById(hit.workspaceId)
-      if (!cwd) {
-        logLine(`发布区：工作区注册表里没有 uuid=「${hit.workspaceId}」`)
-        return notFound()
-      }
-      const root = expressRootOf(memoryRootFor(cwd))
-      const target = safeExpressTarget(root, hit.segments)
-      if (!target) return notFound()
-      let real = null
-      try { real = realpathSync(target) } catch { return notFound() }   // 不存在
-      const rootReal = (() => { try { return realpathSync(root) } catch { return root } })()
-      const prefix = rootReal.endsWith(sep) ? rootReal : rootReal + sep
-      if (real !== rootReal && !real.startsWith(prefix)) {              // 符号链接跳出去了
-        logLine(`发布区：拒绝越界（符号链接）${real}`)
-        return notFound()
-      }
-      let st = null
-      try { st = statSync(real) } catch { return notFound() }
-      if (!st.isFile()) return notFound()                                // 目录不列目录
-      if (st.size > EXPRESS_MAX_BYTES) {
-        res.writeHead(413, { 'content-type': 'text/plain; charset=utf-8' })
-        res.end(`too large (${st.size} > ${EXPRESS_MAX_BYTES})`)
-        return true
-      }
-      const type = mimeOf(real)
-      const head = {
-        'content-type': type,
-        'content-length': st.size,
-        'cache-control': 'private, max-age=300',
-        'x-content-type-options': 'nosniff',
-        // 会被当文档执行脚本的类型（svg/html/xml/js）→ 加 sandbox：内联 <img> 照常显示，导航过去跑不了脚本
-        ...(SANDBOX_TYPES.test(type) ? { 'content-security-policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'" } : {}),
-      }
-      res.writeHead(200, head)
-      if (req.method === 'HEAD') { res.end(); return true }
-      res.end(readFileSync(real))
-      return true
-    } catch (e) {
-      logLine(`发布区服务失败：${e?.message ?? e}`)
-      res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
-      res.end('internal error')
-      return true
-    }
-  }
-
-  /* ─────────── 桌面模式的「发布区独立端口」服务（用户 2026-10-07）───────────
-   * 只有 desktop 模式且启用分享时才起，只监听 localhost，地址 `http://localhost:<port>/<工作区uuid>/<rel>`。
-   * 换端口 / 开关即重启（`syncExpressServer` 串行化）。壳在 src/express-server.mjs；文件读写复用 serveSharedFile。
-   * 「只有启用分享且端口服务正常监听，才真正开放」——起不来就落 `status.error`，工具回占用文案。
-   * ------------------------------------------------------------------------ */
-  const expressServer = new ExpressShareServer({
-    logger: (m) => logLine(m),
-    handler: (req, res) => {
-      const url = new URL(req.url ?? '/', 'http://localhost')
-      const hit = parseExpressLocalPath(url.pathname)
-      if (!hit || (req.method !== 'GET' && req.method !== 'HEAD')) {
-        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-        res.end('not found')
-        return
-      }
-      serveSharedFile(req, res, hit)
-    },
-  })
-  let expressSyncChain = Promise.resolve()
-  /** 把「期望态」与「现状」对齐（起 / 停 / 换端口）；串行化避免并发 bind。 */
-  const syncExpressServer = () => {
-    expressSyncChain = expressSyncChain.then(async () => {
-      const want = (hostMode() === 'desktop' && pluginConfig.expressDesktopEnabled)
-        ? pluginConfig.expressDesktopPort
-        : null
-      if (want === null) {
-        if (expressServer.listening || expressServer.wantPort !== null) await expressServer.stop()
-        expressServer.wantPort = null
-        expressServer.error = null
-        return
-      }
-      if (expressServer.listening && expressServer.port === want) return
-      await expressServer.start(want)
-    }).catch((e) => { logLine(`发布区独立端口同步失败：${e?.message ?? e}`) })
-    return expressSyncChain
-  }
-  ctx.effect(() => {
-    void syncExpressServer()
-    return () => { void expressServer.stop() }
-  }, 'whale_craft: 发布区独立端口（desktop 模式）')
 
   /** 分支标题 +1（保留半角/全角括号），与宿主 `ClientSessions.fork` 的 `increaseTitle` 同款。 */
   const increasedForkTitle = (title) => {
@@ -1548,9 +1267,6 @@ export function apply(ctx, rawConfig) {
   const handleMcApi = async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     const path = url.pathname
-
-    // 🔴 2026-09-17：发布区**不再挂在 `/api/mc` 下**（旧地址 `/api/mc/whale-craft/<目录名>/…` 已停用）。
-    //    新地址是 `/api/whale-craft/express/<工作区 uuid>/…`，由**自己的顶层前缀路由**服务（见 shareRoute）。
 
     if (req.method === 'GET' && path === '/api/mc/status') {
       const sessionId = url.searchParams.get('sessionId') ?? ''
@@ -1707,13 +1423,13 @@ export function apply(ctx, rawConfig) {
       return sendJson(res, 200, out)
     }
 
-    /* ── 「MC设置」模态框用的接口（门控名单 / 账户 / 认证服务器 / 白名单 / 提示词 / 文件分享 / 服务器历史与探测）──
+    /* ── 「MC设置」模态框用的接口（门控名单 / 账户 / 认证服务器 / 白名单 / 提示词 / 服务器历史与探测）──
      * 🔴 2026-09-17 隔离实例实测抓到的**真 bug**：`/api/mc/presets` 一直没进这个分派名单
      *    （它只在 `handleSettingsApi` 里判过），于是真机上它一律 404 —— 前端只能靠
      *    `MC_PRESETS_FALLBACK` 兜底，名单一旦和默认值不同就悄悄失灵。谁再加接口，**记得也加这里**。 */
     if (path.startsWith('/api/mc/accounts') || path.startsWith('/api/mc/authservers')
       || path.startsWith('/api/mc/agents-md') || path === '/api/mc/config'
-      || path.startsWith('/api/mc/express') || path === '/api/mc/presets'
+      || path === '/api/mc/presets'
       || path === '/api/mc/servers' || path === '/api/mc/lan') {
       try {
         return await handleSettingsApi(req, res, path, url)
@@ -1743,51 +1459,6 @@ export function apply(ctx, rawConfig) {
     },
   }
   ctx.effect(() => ctx.webServer.register(apiRoute), 'whale_craft: /api/mc 路由')
-
-  /**
-   * 发布区服务路由（用户 2026-09-17 定稿）：`/api/whale-craft/express/<工作区 uuid>/<剩余路径>`。
-   *
-   * 为什么单独一条前缀路由而不是挂 `/api/mc` 下：
-   *   · 用户要求地址**放在 `/api` 后面**、但不要混进 `/api/mc`（那是设置接口）；
-   *   · webServer 是**最长前缀优先**（`packages/host/webserver/src/index.ts:317`），
-   *     所以 `/api/whale-craft` 会赢过宿主自己在 `/api` 上的 RPC 前缀，跟注册顺序无关；
-   *   · 信任栅栏得**自己再过一遍**（`/api/mc` 那道只管它自己），判据与用法完全一致。
-   *
-   * 🔴 只有 **web 模式且已开启**才服务（desktop 走自己的独立端口；关闭一律 404）：不留"以为关了其实还能访问"的口子。
-   */
-  const shareRoute = {
-    kind: 'prefix',
-    path: '/api/whale-craft',
-    handler: async (req, res) => {
-      if (!isTrustedRequest(req.headers, liveTrustedHosts(), liveBindHost(), liveProtocol())) {
-        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
-        res.end('forbidden')
-        return
-      }
-      try {
-        // 🔴 宿主 webServer 的这条路由只服务 **web 模式**；desktop 走自己的独立端口（src/express-server.mjs）。
-        if (hostMode() !== 'web' || !pluginConfig.expressWebEnabled) {
-          logLine('发布区：宿主 webServer 上的分享路由未开放（非 web 模式，或 web 分享未开启）')
-          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-          res.end('not found (sharing disabled)')
-          return
-        }
-        const url = new URL(req.url ?? '/', 'http://localhost')
-        const hit = parseExpressPath(url.pathname)
-        if (!hit || (req.method !== 'GET' && req.method !== 'HEAD')) {
-          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-          res.end('not found')
-          return
-        }
-        serveSharedFile(req, res, hit)
-      } catch (e) {
-        ctx.logger?.warn?.(`[whale_craft] /api/whale-craft 处理失败：${e instanceof Error ? e.message : String(e)}`)
-        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
-        res.end('internal error')
-      }
-    },
-  }
-  ctx.effect(() => ctx.webServer.register(shareRoute), 'whale_craft: /api/whale-craft 路由（发布区）')
 
   // 启动自检标记：确认"插件到底加载了没"（同时写 whale-craft.log 与宿主日志）
   const startup = `插件已加载｜pid=${process.pid}｜每会话独立实例｜工具注册中…`
@@ -1876,13 +1547,9 @@ export function apply(ctx, rawConfig) {
   }
 
   /**
-   * `present`（宿主 `@deepseek-ai/dsh-tool-present`）—— **MC 模式不再暴露它**（用户 2026-10-08：
-   * "免得误导 agent"；文件交付在 MC 模式走 `mc_kit_express` 给 URL）。
-   *
-   * 历史：2026-09-16 删掉 `mc_kit_share`（那是在调宿主另装的 dsh-file-host，插件本身没有文件服务器），
-   *    一度改用 `present`（往会话写 `deliverables/presented`，Web 端渲染产出文件卡片）。现在**不放进
-   *    MC 白名单**，但保留判定：① guard 仍限制它的交付路径在会话工作区内；② 用户若用
-   *    `mcMode.allowOtherTools` 重新放行，边界照旧生效。
+   * `present`（宿主 `@deepseek-ai/dsh-tool-present`）—— 文件分享移除后，MC 模式**重新放行**它：
+   * 图片走回复内嵌（本地路径），非图片/需要文件卡片时用 `present` 声明交付。
+   * guard 仍把它的交付路径限制在**本会话工作区**内（见 applyMcModePolicy 的 ④）。
    */
   const MC_PRESENT_TOOL = 'present'
 
@@ -2460,7 +2127,8 @@ export function apply(ctx, rawConfig) {
       + '`reply`（默认 true）= 结果是否回复到上下文；`dist` = 结果写到的文件路径（可空，写文件与 reply 互不影响）。'
       + '路径：绝对照用，相对以**工作区根**为基准。字符图存 .txt、图像存 .png。'
       + '网格方向**上北下南 · 左西右东**。'
-      + `要让 **Master** 看到图：先 dist 写到发布区（\`.whale-craft/${EXPRESS_DIR}/<子目录>/x.png\`），再用 \`mc_kit_express\` 取链接。`,
+      + `要让 **Master** 看到图：dist 写到工作区里（如 \`.whale-craft/${OUT_DIR}/x.png\`），`
+      + '回复里用 `![说明](.whale-craft/.out/x.png)` 内嵌（路径相对工作区根；宿主会直接显示）。',
     parameters: {
       radius: { type: 'number', description: '半径（默认 32，上限 96）' },
       glyphStep: { type: 'number', description: '字符图抽稀步长（默认 2；1 最细）' },
@@ -2828,8 +2496,8 @@ export function apply(ctx, rawConfig) {
    * 🔴 2026-09-16：**删掉了 mc_kit_share**（以及 mc_map 的 share 参数）。原因：它不是"我们实现的
    *    上传"，而是去调宿主实例里另装的 `dsh-file-host`（`/serve/file-host/api/upload`）——
    *    插件本身没有文件服务器，开源出去别人也没有那个条目，等于提供一个"看着能用、实际 404"的工具。
-   *    要"让本地用户看到文件"，MC 模式现在走 **`mc_kit_express`**（把发布区文件换成一行 URL）。
-   *    所以这里只负责**把图落到工作区**，交付交给 `mc_kit_express`。
+   *    现在只负责**把图落到工作区**；用户怎么看图由宿主的文件路由 + markdown 图片渲染负责
+   *    （回复里写 `![说明](相对工作区路径)` 即可）。
    * ------------------------------------------------------------------------ */
 
   /** 把用户给的路径解析到**这个会话的工作区**内（不许越界） */
@@ -2853,8 +2521,8 @@ export function apply(ctx, rawConfig) {
       + '· render  SVG → PNG（可给 width/height/scale；svg 文本或 svgPath 二选一）\n'
       + '· grid    把多张图按网格拼成**可继续编辑的 SVG 文本**（省掉重复写 N 个 <image> 和算坐标）\n'
       + '· save    把 SVG 文本或 PNG 字节落盘\n'
-      + `输出默认落在 \`.whale-craft/${OUT_DIR}/\`（**不对外**）。要给用户看，就把 \`out\` 写成`
-      + `\`.whale-craft/${EXPRESS_DIR}/<子目录>/x.png\`（**发布区**），再用 \`mc_kit_express\` 取那一行。`,
+      + `输出默认落在 \`.whale-craft/${OUT_DIR}/\`。要给用户看，就在回复里用`
+      + `\`![说明](.whale-craft/${OUT_DIR}/x.png)\` 内嵌（路径相对工作区根；宿主会直接显示）。`,
     parameters: {
       action: { type: 'string', description: 'info / embed / render / grid / save' },
       path: { type: 'string', description: '输入文件（info/embed 用）' },
@@ -2881,17 +2549,11 @@ export function apply(ctx, rawConfig) {
       }
       const action = String(args.action ?? '').toLowerCase()
       /**
-       * 输出路径。默认落在**记忆夹的 `.out/`**（`.whale-craft/.out/`，**不对外**）。
-       *
-       * 🔴 用户 2026-09-16 定的**发布模型**：
-       *    · `.out/` = 默认输出，**谁都访问不到**；
-       *    · `.express/` = **发布区**，放进去的文件可通过
-       *      `GET /api/mc/whale-craft/<工作区目录名>/<剩余路径>` 访问 —— 要给用户看就显式写进这里，
-       *      再用专用工具 `mc_kit_express` 换回那行路径，自己拼 markdown。
+       * 输出路径。默认落在**记忆夹的 `.out/`**（`.whale-craft/.out/`）。
+       * 用户要看图时，AI 在回复里写 `![说明](.whale-craft/.out/x.png)` 即可（宿主原生渲染）。
        */
       const outDir = outRootOf(memoryRootFor(workspaceOf(exec?.agent)))
       const needOut = (name) => (args.out ? inWs(args.out) : join(outDir, name))
-      /* 🔴 用户 2026-09-16：结果里**不再**塞任何 express 字段（'不要乱给已有工具加'）——取路径统一走 mc_kit_express。 */
 
       switch (action) {
         case 'info': {
@@ -2950,78 +2612,6 @@ export function apply(ctx, rawConfig) {
         default:
           throw new Error(`未知 action："${action}"（可用 info/embed/render/grid/save）`)
       }
-    },
-  }))
-
-  /**
-   * 发布区取链接：**唯一**的"把文件端给用户"的入口（用户 2026-09-16 定）。
-   *
-   * 只做一件事：把 `.whale-craft/.express/` 下的文件换成**给用户用的那一行**，
-   * 剩下的 markdown 由 AI 自己拼（`![名](url)` / `[名](url)`）——不再往别的工具返回值里塞字段。
-   *
-   * 🔴 **回什么由「文件分享」开关决定，且按宿主模式分两套**（用户 2026-09-17 定、2026-10-04 改开关、2026-10-07 按模式拆键）：
-   *   · 关（默认）→ 恒回一句"文件分享已关闭…"，服务也不开（AI 只能把绝对路径告诉用户）；
-   *   · web 模式开 → 回 `base + /api/whale-craft/express/<uuid>/<rel>` 的**完整 URL**；
-   *   · desktop 模式开 → 回 `http://localhost:<port>/<uuid>/<rel>`；端口服务没起来则回占用文案。
-   * 各模式都仍然**只认发布区**（`.express/`）里的文件。
-   */
-  ctx.tools.register(asTool({
-    name: 'mc_kit_express',
-    description: '获取分享区中文件的完整分享URL。\n'
-      + '要给用户分享图片或其他文件，先将要分享的文件放在工作区 `.whale-craft/.express/` 下，然后调用本工具传入文件路径，本工具会返回该文件用户可达的**完整**URL。该URL即可用于回报用户，无需再补充协议或域名。\n'
-      + '如果要分享的文件是图片，期望在回复中内嵌展示出来，回复 `![图片名](url)` 即可。其他文件，或期望是可以下载的URL，回复 `[文件名](url)` 即可。\n'
-      + '本工具只用于生成URL。只要用户开启分享功能，`.whale-craft/.express/` 下的文件都会分享出去。如果用户没有开启分享功能，调用本工具会有相应报错。如果用户反映仍然无法看到图片或访问文件，且你的操作并无问题，提醒用户去「MC设置 → 文件分享」检查配置（web 模式看 base，桌面模式看端口）。',
-    parameters: {
-      path: { type: 'string', required: true, description: '发布区下的文件路径（工作区相对或绝对；必须在 .whale-craft/.express/ 下）' },
-    },
-    output: {
-      schema: { type: 'object', properties: { url: { type: 'string' }, enabled: { type: 'boolean' } }, additionalProperties: true },
-      // **只把那一行给模型**（用户："输出纯路径，让 AI 自己拼接 md"）
-      render: (_args, value) => [{ type: 'text', text: String(value?.url ?? '') }],
-    },
-    async execute(args, exec) {
-      const cwd = workspaceOf(exec?.agent)
-      if (!cwd) throw new Error('这个会话没有工作区，拿不到分享地址。')
-      const memRoot = memoryRootFor(cwd)
-      const raw = String(args.path ?? '').trim()
-      if (!raw) throw new Error('path 不能为空')
-      // 解析顺序：绝对路径照用；相对路径先按**记忆根**试（`.express/x.png` 这种写法最常见），
-      // 再按**工作区**试（`.whale-craft/.express/x.png`）。都不存在才算文件不存在。
-      const candidates = isAbsolute(raw)
-        ? [resolve(raw)]
-        : [resolve(memRoot, raw), resolve(cwd ?? memRoot, raw)]
-      const abs = candidates.find((p) => { try { return statSync(p).isFile() } catch { return false } })
-      if (!abs) {
-        throw new Error(`找不到这个文件：${raw}（试过：${candidates.join(' / ')}）`)
-      }
-      // 🔴 地址里的"工作区指代"= **工作区 uuid**（`workspaceRegistry` 的 id）。
-      //    用户定的兜底是 (a) 拒绝：这个 cwd 在注册表里查不到就直接报错，不退回目录名。
-      const wsId = workspaceIdOfCwd(cwd)
-      if (!wsId) {
-        throw new Error('这个会话的工作区不在 DSH 的工作区注册表里，拿不到分享地址（不退回目录名）。'
-          + '请让用户在工作区选择器里选中该目录（或用它新建/打开一个会话）后再试。')
-      }
-      const ref = expressRefFor(abs, memRoot, wsId)
-      if (!ref) {
-        throw new Error('这个文件不在发布区里，所以没有可分享的地址。'
-          + `请先把它放到 .whale-craft/${EXPRESS_DIR}/<子目录>/ 下（出图时把 out 写成那里，`
-          + '或用写文件工具把文件放进去），再来取。')
-      }
-      // 关闭（默认）：恒回那一句（**不抛错** —— 让 AI 直接把话转达用户，而不是去试别的歪招）
-      if (hostMode() === 'desktop') {
-        if (!pluginConfig.expressDesktopEnabled) return { enabled: false, url: EXPRESS_OFF_TEXT, rel: ref.rel, abs }
-        const port = pluginConfig.expressDesktopPort
-        const st = expressServer.status
-        // 已启用但独立端口没起来（被占用/启动失败）→ 回占用文案（**不抛错**）
-        if (!(st.listening && st.port === port)) return { enabled: true, url: EXPRESS_PORT_BUSY_TEXT(port), rel: ref.rel }
-        return { enabled: true, url: `http://localhost:${port}${ref.localPath}`, rel: ref.rel }
-      }
-      // web 模式
-      if (!pluginConfig.expressWebEnabled) return { enabled: false, url: EXPRESS_OFF_TEXT, rel: ref.rel, abs }
-      // 开启：base + 相对路径；base 还没配就把"让用户去设置"这句话交给 AI
-      const url = onlineUrlOf(pluginConfig.expressWebBase, ref.url)
-      if (!url) return { enabled: true, url: EXPRESS_NEED_BASE_TEXT, rel: ref.rel }
-      return { enabled: true, url, rel: ref.rel }
     },
   }))
 
@@ -3931,6 +3521,7 @@ export function apply(ctx, rawConfig) {
         ...(hideAdminTools ? [] : adminNames),
         ...MC_FILE_TOOLS,
         ...MC_EXTRA_HOST_TOOLS,
+        MC_PRESENT_TOOL,
         // 联网搜索：按「MC设置 → 联网搜索」的开关（默认开）放行；preset 没挂 tool-web 的部署
         // 会被下面 applyAllow 的"宿主不认识的名字"过滤掉（不会炸整次白名单）。
         ...(pluginConfig.allowWebSearch ? [MC_WEB_SEARCH_TOOL] : []),
@@ -4250,8 +3841,7 @@ export function apply(ctx, rawConfig) {
       + '可用键：`commandWhitelist`（字符串数组；支持 "tp" 精确名、"/^gi.*/" 正则、"*" 全放行）· '
       + '`mcModePresets`（哪些 preset 算 MC 模式——应含 MC+ 的 id）· `mcPlusPresets`（哪些算 MC+ 变体：'
       + '开放标准模式全部工具）· `mcMode.allowOtherTools`（MC 模式白名单里**额外**放行的工具）· '
-      + '`mcMode.hideAdminTools`（默认 true）· `expressWebEnabled` / `expressWebBase`（**web 模式**文件分享开关 + base，如 https://example.com）· '
-      + '`expressDesktopEnabled` / `expressDesktopPort`（**桌面模式**文件分享开关 + 独立托管端口，默认 16049）· '
+      + '`mcMode.hideAdminTools`（默认 true）· '
       + '`exposeDebugTools`（是否向助手暴露调试用途的工具，默认 false）· '
       + '`allowWebSearch`（是否让 MC 模式的助手联网搜索，默认 true；MC+ 不受影响）· '
       + '`webFetchEnabled`（是否让助手抓网页，默认 false）/ `webFetchDomains`（允许抓取的域名表：精确名、'

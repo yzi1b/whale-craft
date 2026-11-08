@@ -64,7 +64,7 @@
 - **-** web_fetch 抓取网页内容 *以插件自带的 `mc_kit_web_fetch` 替代* —— MC 模式 preset 挂 `tool-web` 时已 `fetch: false`；`mc_kit_web_fetch` 默认**关**，在「MC设置 → 联网搜索 → 网页抓取」里开（MC+ 的宿主 `web_fetch` 仍按标准全表可见）
 - **-** ask_user_question 向用户提问
 - **+** todo_write 维护待办清单
-- **-** present 交付文件给用户
+- **+** present 交付文件给用户 *图片默认走回复内嵌；非图片/文件卡片用它；路径限本会话工作区*
 
 ## 其它编辑 / 依赖
 

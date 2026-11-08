@@ -1,8 +1,8 @@
-# 工具目录（34 个）
+# 工具目录（33 个）
 
 > 快照：**0.2.0**（开发中，未发布）。注册全部在 `index.js` 的 `apply()` 内（`ctx.tools.register(asTool({...}))`），
-> 分四段：`mc_*`（游戏内，26）/ `mc_kit_*`（游戏外辅助，5）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
-> 可见性按模式分档（2026-10-04）：**MC模式** 只见 mc/mckit + 文件工具 + `job_*`/`goal_*`/`todo_write` + 宿主 `web_search`（**不含** present：交付走 `mc_kit_express`）；**MC+模式** 全量可见（含 admin）；
+> 分四段：`mc_*`（游戏内，26）/ `mc_kit_*`（游戏外辅助，4）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
+> 可见性按模式分档（2026-10-04）：**MC模式** 只见 mc/mckit + 文件工具 + `job_*`/`goal_*`/`todo_write` + 宿主 `web_search` + 文件交付 `present`；**MC+模式** 全量可见（含 admin）；
 > **其他模式** 隐藏 mc_* / mc_kit_*（仅保留 `mc_admin_*`），另有 guard 硬拒兜底。
 > 🔴 **调试工具（`mc_debug_*`）另受「MC设置 → 调试」的 `exposeDebugTools` 开关门控**（2026-10-05）：关时在 MC/MC+ 也不暴露（白名单 / MC+ deny / guard 三处）。
 > 🔴 **宿主 `web_search` 受「MC设置 → 联网搜索」的 `allowWebSearch` 门控（2026-10-08，默认开）**：MC 模式关时摘掉 + guard 硬拒；**MC+ 不受限**（其组成本来就有 tool-web）。
@@ -38,7 +38,7 @@
 | --- | --- | --- |
 | `mc_context` | 游戏上下文 | basic = 模式/维度/坐标/朝向；survival 段（血量/吸收/饱食/饱和/气泡/装备/经验 + buff + 坐骑/骑乘者）——生存/冒险默认给，`survival:true` 强制给。底层 `core.context()` |
 | `mc_players` | 在线玩家 | tab 栏名 / 档案名 / uuid（含自己）。底层 `core.players()` |
-| `mc_map` | 地表方块图 | `format: chars / image`（**`both` 已删**）；`image` 渲染真彩俯视图 → 手工 PNG（`encodePng`）；🔴 **2026-10-05 改版**：`out` → **`dist`**（结果文件路径；空=不写文件）+ **`reply`**（默认 true=结果回复到上下文；false=只写文件/stub）；无默认输出目录；相对路径以**工作区根**为基准；chars 存 `.txt`；附图前先查模型是否接受视觉（`ctx.llm.resolveModelInfo`），不接受则跳过附图并给警告 |
+| `mc_map` | 地表方块图 | `format: chars / image`（**`both` 已删**）；`image` 渲染真彩俯视图 → 手工 PNG（`encodePng`）；🔴 **2026-10-05 改版**：`out` → **`dist`**（结果文件路径；空=不写文件）+ **`reply`**（默认 true=结果回复到上下文；false=只写文件/stub）；无默认输出目录；相对路径以**工作区根**为基准；chars 存 `.txt`；附图前先查模型是否接受视觉（`ctx.llm.resolveModelInfo`），不接受则跳过附图并给警告。给用户看：`dist` 写工作区（如 `.whale-craft/.out/x.png`），回复里 `![说明](.whale-craft/.out/x.png)` |
 | `mc_height` | 高度（地势）图 | 每列一个地表 Y（startY 处无方块→向下找第一个方块；有方块→向上找第一个空格取 Y−1；startY 空=当前 Y）；按 `glyphStep` 抽样省算力；`ignoreLiquid:true` 把液体当空气（水面/岩浆下的地面才算地表）。`format: chars / image / full`（分层设色等高图 / 字符模拟 / **逐格高度值 CSV**——一格一个 Y、非 x/y/z 坐标）；`scale` 仅 image；chars→.txt、full→.csv；`reply`/`dist` 同 `mc_map`。**网格上北下南·左西右东**。底层 `core.heightGrid/heightImage/heightGlyphs` |
 | `mc_scan` | 范围扫描 | 半径 ≤24、高 ≤16；25 类方块计数或按名搜索 |
 | `mc_entities` | 附近实体 | 半径默认 24，返回前 40 |
@@ -65,14 +65,13 @@
 | `mc_sequence` | 连串动作 | **最多 64 步**；`stopOnError` 默认 true；`budgetMs ≤570s`、`timeoutMs 600s`；步类型 wait≤30s/move/look/toward/place/break/dig/use/attack/equip/give/toss/say/jump。比让模型写脚本稳 |
 | `mc_command` | 服务器指令 | **最后手段**：要 OP、受白名单（`commandWhitelist` 精确名/`/正则/`/`"*"`；`allowAllCommands` 全放行） |
 
-## 五、游戏外辅助（5，`mc_kit_*`）
+## 五、游戏外辅助（4，`mc_kit_*`）
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
 | `mc_kit_rules` | 规则策略**只读**查询 | 按 `type` 回当前生效的策略（读的是 `mc_admin_config` 同一份 config，用户改完立即反映）：`command` → `commandWhitelist` + `allowAllCommands`；`web_fetch` → `webFetchEnabled` + 域名表 + 内容类型三开关（含内置图片格式）。补 MC 模式"看不见管理工具却要知道放行了什么"的缺口；`mc_command` / `mc_kit_web_fetch` 的描述指向它 |
-| `mc_kit_image` | 图像处理 | `info/embed/render/grid/save`：SVG→PNG 光栅化（`sharp`，可选依赖，缺失只影响 `render`）、引图进 SVG、拼网格（≤64 张，返回 SVG）、落盘。输入输出都限制在本会话工作区内（`insideWorkspace`） |
+| `mc_kit_image` | 图像处理 | `info/embed/render/grid/save`：SVG→PNG 光栅化（`sharp`，可选依赖，缺失只影响 `render`）、引图进 SVG、拼网格（≤64 张，返回 SVG）、落盘。输入输出都限制在本会话工作区内（`insideWorkspace`）。默认输出 `.whale-craft/.out/`；给用户看时在回复里写 `![说明](.whale-craft/.out/x.png)`（宿主原生内嵌） |
 | `mc_kit_fs` | 文件系统操作 | `copy/move/delete/make_dir`（都递归）。末尾 `/*` 只选目录下**直接**子项；**保留符号链接（不跟随）**。`to` 以分隔符结尾=放进该目录（目标父目录自动创建）；`overwrite=false` 默认不覆盖；**预检失败零副作用、错误一律中文**。沙箱按模式：**MC** 限 `.whale-craft/`、**MC+** 放工作区；相对路径以工作区根为基准。受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径**不可删改**（`src/fsops.mjs` 权威 + guard 第二道锁，大小写不敏感） |
-| `mc_kit_express` | 把发布区文件换成"给用户的东西" | 路径解析先记忆根后 cwd；只认 `.express/`（目录即白名单）；**按宿主模式回不同 URL** —— web：`base + /api/whale-craft/express/<uuid>/…`；desktop：`http://localhost:<port>/<uuid>/…`（端口服务没起来回占用文案）；关闭恒回"文件分享已关闭…绝对路径…"；工作区 uuid 查不到即拒。宿主另有 `present`（显式文件交付组，MC 模式白名单里放行）——两者互补 |
 | `mc_kit_web_fetch` | 抓网页（文本 + 图片） | 参数：`url` + 我们自己加的 `reply`/`dist`（语义照 `mc_map`：`reply=false` 只写文件回 stub）。🔴 **抓取全自研**：文本与图片都走 `src/webget.mjs`（唯一出网口：公网地址校验 + 地址钉死 + 只跟同源跳转 + 限 5MB / 10 万字符 / 20MB / 30s），**一次请求**、按真实 Content-Type 判型、**不经宿主 `ctx.web`**；输出形态照抄宿主（`Fetched <url> (HTTP <status>)` + 反注入声明 + 正文 + 截断尾注，上限 200000 字符；HTML 用 `src/webfetch.mjs` 的轻量转换，非 turndown）。**图片只支持内置四种** png/jpeg/gif/webp（= 宿主附件服务认的），其余一律算不支持；模型有视觉就直接附图，否则可落盘。**默认关**，受 `webFetchEnabled` + 域名表（`webFetchDomains` / `allowAllFetchDomains`）+「允许的内容类型」三开关（`webFetchAllowHtml` / `webFetchAllowText` / `webFetchAllowImage`，默认都开）门控；**MC 与 MC+ 两档都过** |
 
 ## 六、管理（1，`mc_admin_*`）
@@ -106,9 +105,9 @@
 
 ## 历史变更（防混淆）
 
+- **文件分享整体移除**（2026-11-08）：`mc_kit_express`、`.express/` 发布区、`/api/whale-craft/express/*` 路由、桌面独立端口服务与四套 express 配置全部删除。图片改走回复内嵌本地路径（宿主 `/api/file`），非图片交付走宿主 `present`（MC 模式重新放行）。**外部可访问链接不再提供**。
 - **`mc_kit_memory` 已删除**（2026-10-07）：长期记忆改由**宿主受限文件工具**（`read/write/edit/glob/grep/read_image`，MC 模式 guard 已限在 `.whale-craft/` 内）直接读写。**同日又去掉 README 索引的自动注入**（`memoryIndexText` 已删）：`README.md` 作为目录约定仍在，由 agent 按 RULES.md 自行阅读/维护，插件不再往上下文里注入它；`MemoryStore`（`src/memory.mjs`）保留为库。自检里有"mc_kit_memory 已移除 / 记忆索引不再自动注入"的断言——老名字不要再出现。已知缺口（等宿主补）：宿主暂无删文件工具、也无二进制 `put`。
-- **`mc_kit_share`（及 `mc_map` 的 `share` 参数）已删除**（2026-09-16）：它只是在调宿主**另装**的 `dsh-file-host`，插件本身没有文件服务器。"让用户看到文件"改走：宿主 `present`（显式文件交付）+ 本插件的 `mc_kit_express`。自检里有"mc_kit_share 已移除 / 源码无文件服务器残留"的断言——老名字不要再出现。
-- 文件分享 2026-10-04 起是**开关**（`expressEnabled`），不再有"模式"；老配置里的 `expressMode`（含 `local`）由 `PluginConfig.migrate` 搬成布尔（`online`→`true`，其余→`false`）。
-- **2026-10-07 文件分享按宿主模式拆键**：`expressEnabled`/`expressBase` → **web 那套** `expressWebEnabled`/`expressWebBase`；新增 **desktop 那套** `expressDesktopEnabled`/`expressDesktopPort`（默认 16049，独立端口只监听 localhost）。从哪种模式（宿主 profile）进来只认哪套；`expressMode` 与两个旧键都由 `migrate` 逐档搬（见 architecture §10）。
+- **`mc_kit_share`（及 `mc_map` 的 `share` 参数）已删除**（2026-09-16）：它只是在调宿主**另装**的 `dsh-file-host`，插件本身没有文件服务器。后来短暂用过 `present` + `mc_kit_express`，2026-11-08 起全部收束到宿主原生交付。自检里有"mc_kit_share / mc_kit_express 已移除 / 源码无文件服务器残留"的断言——老名字不要再出现。
+- ~~文件分享 2026-10-04 起是开关 / 2026-10-07 按宿主模式拆键~~：该功能已于 2026-11-08 整体移除；`PluginConfig.migrate()` 会删除所有 express 旧键。
 - **2026-10-08 网页抓取 `mc_kit_web_fetch`（新工具）**：宿主 `web_fetch` 在 MC 模式被我们关掉（preset 的 tool-web 只挂 search），这个补位。初版是「文本走宿主 `ctx.web` seam、图片走自己的下载器」；**当天用户定「全改成自己的可控逻辑，宿主的强关联就不要了」** ⇒ 文本与图片统一到 `src/webget.mjs`（唯一出网口；防 SSRF 规则照宿主但**更严**：tunnelling / 转换前缀按内嵌 IPv4 复核；不依赖 ipaddr.js）。收益：**一次请求**（按真实 Content-Type 判型，不用先试一次宿主）、不依赖宿主 `web` 服务、类型判定精确；代价：charset / 解压 / 分类 / 上限自己扛，且**没有代理支持**。HTML→markdown 仍用 `src/webfetch.mjs` 的轻量转换（**不引 turndown**：实测宿主对非 link 插件的 CJS 依赖树有解析 bug）。内置图片格式**不可配置**（用户：「只有内置的格式和未知的格式」）。参数另加 `reply` / `dist`（语义照 `mc_map`）。
 - **2026-10-05 工具面改动**：① `mc_connect`/`mc_ping` 收成单一 `address`（删 `host/port/subserver/version`；版本永远自动探测，连上后版本不支持则强制断开）② `mc_accounts` 删 `use` ③ `mc_lan` 删 `mode` ④ 新增 `mc_context`/`mc_players` ⑤ `mc_sessions`/`mc_diag` → `mc_debug_sessions`/`mc_debug_diag`（受 `exposeDebugTools` 门控）⑥ `mc_status` 改为"连接态 + 在线内联 context" ⑦ `mc_map` 改版：`out`→`dist` + `reply`、去 `both`、无默认输出目录、相对路径以工作区根为基准、chars 存 .txt、附图前查视觉；新增 **`mc_height`**（高度/地势图，chars/image/full）。工具总数 29 → **32**。

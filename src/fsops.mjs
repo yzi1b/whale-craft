@@ -16,7 +16,7 @@
  *   · **失败在动手前停止**（预检由调用方逐项做完才执行）；错误一律**中文**、不透出 Node/系统本地化文案。
  *
  * 安全：本模块**不跟随**符号链接，但仍防"路径中途经过越界符号链接"——
- *   `root/link -> /etc` 这类，取**父目录的 realpath** 复查（与发布区 index.js 的 realpath 复查同风格）。
+ *   `root/link -> /etc` 这类，取**父目录的 realpath** 复查。
  * ============================================================================
  */
 import { readdirSync, lstatSync, statSync, mkdirSync, renameSync, rmSync, unlinkSync, cpSync, realpathSync } from 'node:fs'
