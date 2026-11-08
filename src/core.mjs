@@ -170,6 +170,28 @@ const canPlaceInto = (blk) => {
   return isAir(blk.name) || isLiquid(blk.name)     // 兜底：个别版本 boundingBox 可能不准
 }
 
+const itemView = (item) => {
+  if (!item) return null
+  return {
+    name: item.name ?? null,
+    count: Number(item.count ?? 0),
+    ...(Number.isInteger(item.slot) ? { slot: item.slot } : {}),
+  }
+}
+
+const actionFailure = (result) => {
+  if (!result || typeof result !== 'object') return null
+  if (result.arrived === false) return result.note ?? '未到达目标'
+  if (result.placed === false) return result.note ?? '方块未放置成功'
+  if (result.broken === false) return result.note ?? '方块未破坏成功'
+  if (Number(result.failed) > 0) {
+    return result.results?.find?.((entry) => entry?.ok === false)?.error
+      ?? result.failures?.[0]
+      ?? `动作有 ${result.failed} 项失败`
+  }
+  return null
+}
+
 /**
  * 规范化认证端点基址：去首尾空白、去掉结尾多余的斜杠。
  * 否则 `https://x/yggdrasil/` 会拼成 `https://x/yggdrasil//authserver/authenticate`
@@ -1268,11 +1290,10 @@ export class McBot extends EventEmitter {
     const b = this.bot
     const slots = b?.inventory?.slots
     if (!slots) return null
-    const fmt = (it) => (it ? `${it.name}x${it.count}` : null)
     return {
-      held: fmt(b.heldItem),
-      armor: [slots[5], slots[6], slots[7], slots[8]].map(fmt),
-      offhand: fmt(slots[45]),
+      held: itemView(b.heldItem),
+      armor: [slots[5], slots[6], slots[7], slots[8]].map(itemView),
+      offhand: itemView(slots[45]),
     }
   }
 
@@ -1666,7 +1687,7 @@ export class McBot extends EventEmitter {
 
   async dig ({ name = null, pos = null, maxDistance = 6, count = 1 } = {}) {
     const b = this.requireBot()
-    const out = []
+    const results = []
     const n = Math.min(Math.max(count, 1), 16)
     for (let i = 0; i < n; i++) {
       let target
@@ -1677,8 +1698,12 @@ export class McBot extends EventEmitter {
         const want = name ?? (pos ? b.blockAt(new Vec3(pos.x, pos.y, pos.z))?.name : null)
         if (!want) throw new Error('需要 name 或 pos')
         target = b.findBlock({ matching: (blk) => blk?.name === want, maxDistance })
-        if (!target) { out.push(`附近找不到 ${want}`); break }
+        if (!target) {
+          results.push({ ok: false, block: want, error: `附近找不到 ${want}` })
+          break
+        }
       }
+      const at = { x: target.position.x, y: target.position.y, z: target.position.z }
       try {
         if (b.game?.gameMode !== 'creative') {
           const best = b.inventory.items().find((it) => {
@@ -1691,15 +1716,19 @@ export class McBot extends EventEmitter {
         const nm = target.name
         await this.#t(b.dig(target, true), 'dig', `挖 ${target.name}`)
         await sleep(200)
-        out.push(`挖掉 ${nm} @ ${p} → 现在 ${b.blockAt(p)?.name ?? '?'}`)
-      } catch (e) { out.push(`挖 ${target.name} 失败：${e.message}`); break }
+        results.push({ ok: true, block: nm, position: at, now: b.blockAt(p)?.name ?? null })
+      } catch (e) {
+        results.push({ ok: false, block: target.name, position: at, error: e.message })
+        break
+      }
     }
-    return out
+    const succeeded = results.filter((entry) => entry.ok).length
+    return { requested: n, succeeded, failed: results.length - succeeded, results }
   }
 
   inventory () {
     const b = this.requireBot()
-    return { held: b.heldItem ? `${b.heldItem.name}x${b.heldItem.count}` : null, items: b.inventory.items().map((i) => `${i.name}x${i.count}`) }
+    return { held: itemView(b.heldItem), items: b.inventory.items().map(itemView) }
   }
 
   /* ───────────── 朝向（"看向我"就该用工具，不要用 /tp 指令） ───────────── */
@@ -1892,7 +1921,7 @@ export class McBot extends EventEmitter {
     const item = b.inventory.items().find((i) => i.name === String(name))
     if (!item) throw new Error(`背包里没有 ${name}（用 mc_inventory 看有什么）`)
     await this.#t(b.equip(item, 'hand'), 'equip', `手持 ${name}`)
-    return { held: `${item.name}x${item.count}` }
+    return { held: itemView(item) }
   }
 
   /**
@@ -1909,7 +1938,14 @@ export class McBot extends EventEmitter {
     const ok = []
     const fail = []
     for (const p of pts) {
-      try { await this.placeBlock({ ...p, name }); ok.push(`${p.x},${p.y},${p.z}`) }
+      try {
+        const result = await this.placeBlock({ ...p, name })
+        const failure = actionFailure(result)
+        if (failure) {
+          fail.push(`${p.x},${p.y},${p.z}: ${failure}`)
+          if (fail.length >= 5) break
+        } else ok.push(`${p.x},${p.y},${p.z}`)
+      }
       catch (e) { fail.push(`${p.x},${p.y},${p.z}: ${e.message}`); if (fail.length >= 5) break }
     }
     return { requested: pts.length, placed: ok.length, failed: fail.length, failures: fail.slice(0, 5) }
@@ -1972,8 +2008,8 @@ export class McBot extends EventEmitter {
     await this.#t(b.creative.setInventorySlot(target, item, 800), 'give', `取物 ${itemName}`)
     await sleep(120)
     return {
-      gave: `${itemName}x${n}`, slot: target,
-      now: b.inventory.slots?.[target] ? `${b.inventory.slots[target].name}x${b.inventory.slots[target].count}` : null,
+      gave: { name: itemName, count: n }, slot: target,
+      now: itemView(b.inventory.slots?.[target]),
       note: target >= 36 ? `已放进快捷栏第 ${target - 35} 格` : '已放进背包',
     }
   }
@@ -2038,7 +2074,7 @@ export class McBot extends EventEmitter {
     if (!item) throw new Error('手上没东西可丢')
     const n = Math.min(Math.max(Number(count) || 1, 1), item.count)
     await this.#t(Promise.resolve(b.toss(item.type, null, n)), 'toss', `丢弃 ${item.name}`)
-    return { tossed: `${item.name}x${n}` }
+    return { tossed: { name: item.name, count: n } }
   }
 
   /* ───────────── 序列执行（需求 5：世界交互往往要连串调用）───────────── */
@@ -2060,7 +2096,12 @@ export class McBot extends EventEmitter {
       if (Date.now() - t0 > budgetMs) { results.push({ i, op: steps[i]?.op, ok: false, error: `总预算 ${budgetMs}ms 用尽` }); break }
       const step = steps[i] ?? {}
       try {
-        results.push({ i, op: step.op, ok: true, ...(await this.#runStep(step)) })
+        const result = await this.#runStep(step)
+        const failure = actionFailure(result)
+        if (failure) {
+          results.push({ i, op: step.op, ...result, ok: false, error: failure })
+          if (stopOnError) break
+        } else results.push({ i, op: step.op, ...result, ok: true })
       } catch (e) {
         results.push({ i, op: step.op, ok: false, error: e.message })
         if (stopOnError) break
@@ -2095,7 +2136,7 @@ export class McBot extends EventEmitter {
       case 'toward':  return this.interact({ mode: 'toward', who: s.who, approach: s.approach, budgetMs: s.budgetMs })
       case 'place':   return this.placeBlock(s)
       case 'break':   return this.breakBlock(s)
-      case 'dig':     return { result: await this.dig(s) }
+      case 'dig':     return this.dig(s)
       case 'use':     return this.useBlock(s)
       case 'attack':  return this.attack(s)
       case 'equip':   return this.equip(s)

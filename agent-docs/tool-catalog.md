@@ -13,6 +13,9 @@
 - **必须经 `asTool()` 注册**：它做两件事 —— ① 对返回值做 `lossless()` 无损化（类实例只留自有可枚举属性、Vec3→`{x,y,z}`、Date→ISO、NaN/±Inf→null、`-0`→0；宿主校验要求纯 JSON，Vec3 实例曾让 5 个工具全挂）；② 把 `exec.signal` 注入 `bot.setAbortSignal`（宿主取消能中断走路/挖掘循环）。
 - **超时纪律**：调 `src/core.mjs` 的方法已自带超时/中断；扩展自己写 mineflayer 调用时**必须**套 `withTimeout` / `raceAbort`（宿主无法硬杀同进程代码）。
 - **错误形态**：工具失败直接抛错（`mcTimeout:true` / `mcAborted:true` 标记可辨）；HTTP 设置 API 相反——统一 200+`{ok:false,...}`。
+- **物品形态**：背包、手持、装备、给予和丢弃统一返回纯 JSON `{name,count,slot?}`，不把 mineflayer Item 实例或易歧义字符串交给模型。
+- **交付状态**：`mc_map` / `mc_height` / `mc_kit_web_fetch` 返回 `replyOk`、`writeOk`；图片另有 `attachmentOk`。未请求对应交付方式时为 `null`，请求后为明确布尔值。
+- **语义失败**：动作即使没有抛异常，只要返回 `arrived:false`、`placed:false`、`broken:false` 或 `failed>0`，`mc_sequence` 就按失败步骤处理；`mc_build` 只把落地方块复验成功计为 placed。
 - 工具名列表由 `ourToolNames` 收集（注册时自动登记）：MC 模式白名单用它 + `MC_FILE_TOOLS` + `MC_EXTRA_HOST_TOOLS`（宿主 `job_*` / `goal_*` / `todo_write`）+ `MC_WEB_SEARCH_TOOL`（宿主 `web_search`，按 `allowWebSearch` 开关）+ `present`；其中 `mc_kit_web_fetch` 与 `mc_debug_*` 按各自开关从白名单里摘（`hidden` 判定）。其他模式的 deny 名单也用它（`mc_kit_*` + 非 admin 的 `mc_*`）。
 
 ---
@@ -28,7 +31,7 @@
 | `mc_accounts` | 账户管理（会话内） | `list/search/refresh`（**`use` 已删**，2026-10-05）；`refresh` 走 `bot.authOnly`（只认证不连接），`innerID` 缺省用本会话选定/默认；返回值**永不含密码/token** |
 | `mc_disconnect` | 主动退服 | 看门狗 `disarm(notify:true)`（提醒 AI 已不在游戏）+ 优雅 quit |
 | `mc_stop` | 停本会话 | 等价强制停止但 `cancelTurn: false`（**防自我 abort**；HTTP 的 `/api/mc/stop` 用 `cancelTurn:true`） |
-| `mc_capabilities` | 能力/限制自述 | 报 plugin 版本、mineflayer testedVersions、超时上限、指令白名单等 |
+| `mc_capabilities` | 能力/限制自述 | 报 plugin 版本、mineflayer testedVersions、超时上限、指令白名单等；不返回插件安装目录，配置路径用 `$DSH_HOME` 占位符或工作区相对路径 |
 
 > `mc_sessions` / `mc_diag` 已改名并移入「调试」（见 §七）。
 
@@ -36,20 +39,20 @@
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
-| `mc_context` | 游戏上下文 | basic = 模式/维度/坐标/朝向；survival 段（血量/吸收/饱食/饱和/气泡/装备/经验 + buff + 坐骑/骑乘者）——生存/冒险默认给，`survival:true` 强制给。底层 `core.context()` |
+| `mc_context` | 游戏上下文 | basic = 模式/维度/坐标/朝向；survival 段（血量/吸收/饱食/饱和/气泡/装备/经验 + buff + 坐骑/骑乘者）——生存/冒险默认给，`survival:true` 强制给；装备项为 `{name,count,slot?}`。底层 `core.context()` |
 | `mc_players` | 在线玩家 | tab 栏名 / 档案名 / uuid（含自己）。底层 `core.players()` |
-| `mc_map` | 地表方块图 | `format: chars / image`（**`both` 已删**）；`image` 渲染真彩俯视图 → 手工 PNG（`encodePng`）；🔴 **2026-10-05 改版**：`out` → **`dist`**（结果文件路径；空=不写文件）+ **`reply`**（默认 true=结果回复到上下文；false=只写文件/stub）；无默认输出目录；相对路径以**工作区根**为基准；chars 存 `.txt`；附图前先查模型是否接受视觉（`ctx.llm.resolveModelInfo`），不接受则跳过附图并给警告。给用户看：`dist` 写工作区（如 `.whale-craft/.out/x.png`），回复里 `![说明](.whale-craft/.out/x.png)` |
-| `mc_height` | 高度（地势）图 | 每列一个地表 Y（startY 处无方块→向下找第一个方块；有方块→向上找第一个空格取 Y−1；startY 空=当前 Y）；按 `glyphStep` 抽样省算力；`ignoreLiquid:true` 把液体当空气（水面/岩浆下的地面才算地表）。`format: chars / image / full`（分层设色等高图 / 字符模拟 / **逐格高度值 CSV**——一格一个 Y、非 x/y/z 坐标）；`scale` 仅 image；chars→.txt、full→.csv；`reply`/`dist` 同 `mc_map`。**网格上北下南·左西右东**。底层 `core.heightGrid/heightImage/heightGlyphs` |
+| `mc_map` | 地表方块图 | `format: chars / image`（**`both` 已删**）；`image` 渲染真彩俯视图 → 手工 PNG（`encodePng`）；🔴 **2026-10-05 改版**：`out` → **`dist`**（结果文件路径；空=不写文件）+ **`reply`**（默认 true=结果回复到上下文；false=只写文件/stub）；无默认输出目录；相对路径以**工作区根**为基准；chars 存 `.txt`；附图前先查模型是否接受视觉（`ctx.llm.resolveModelInfo`），不接受则跳过附图并给警告。返回 `replyOk/writeOk`，图片另有 `attachmentOk`。给用户看：`dist` 写工作区（如 `.whale-craft/.out/x.png`），回复里 `![说明](.whale-craft/.out/x.png)` |
+| `mc_height` | 高度（地势）图 | 每列一个地表 Y（startY 处无方块→向下找第一个方块；有方块→向上找第一个空格取 Y−1；startY 空=当前 Y）；按 `glyphStep` 抽样省算力；`ignoreLiquid:true` 把液体当空气（水面/岩浆下的地面才算地表）。`format: chars / image / full`（分层设色等高图 / 字符模拟 / **逐格高度值 CSV**——一格一个 Y、非 x/y/z 坐标）；`scale` 仅 image；chars→.txt、full→.csv；`reply`/`dist` 与 `replyOk/writeOk/attachmentOk` 同 `mc_map`。**网格上北下南·左西右东**。底层 `core.heightGrid/heightImage/heightGlyphs` |
 | `mc_scan` | 范围扫描 | 半径 ≤24、高 ≤16；25 类方块计数或按名搜索 |
 | `mc_entities` | 附近实体 | 半径默认 24，返回前 40 |
-| `mc_inventory` | 背包 | — |
+| `mc_inventory` | 背包 | `held` 与 `items[]` 均为 `{name,count,slot?}` |
 | `mc_events` | 事件队列（拉） | `limit ≤100`、`waitSec ≤120`（阻塞等新事件，**只是兜底**）；被看门狗唤醒打断时返回 `interrupted:true` + `interruptReason` + "先别再 wait"提示；内部 `timeoutMs` 130s。⚠️ 被传送/捡物/上下线**不在这个队列**（只进看门狗留档） |
 
 ## 三、看门狗控制（2）
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
-| `mc_watch` | 唤醒通道的唯一控制面 | `action: status / arm / disarm / log`；`log` 返回 `{armed, stats, recent: 留档末 30 条}`。进服默认自动 arm |
+| `mc_watch` | 唤醒通道的唯一控制面 | `action: status / arm / disarm / log`；`log` 返回 `{armed, stats, recent: 留档末 30 条}`；未知 action 明确抛错，不再静默退回 status。进服默认自动 arm |
 | `mc_config` | 改看门狗参数 | `patch`（点号键如 `wakeOn.pushed`）/ `reset`；响应附 `WATCH_DEFAULTS`。**只能改本会话的看门狗**，全局配置在 `mc_admin_config` |
 
 ## 四、交互与动作（8）
@@ -58,11 +61,11 @@
 | --- | --- | --- |
 | `mc_say` | 公屏说话 | 换行折空格、截 220 字符 |
 | `mc_move` | 走/飞/跳 | `jump` 无需坐标；创造模式缺省 fly；生存走路上限 ~90s；走路**一直按住 forward**、卡住自跳 |
-| `mc_act` | 单动作 | 8 种子模式：`look/toward/place/break/use/attack/equip/toss`；`toward` = 看向+走近+再看 |
-| `mc_dig` | 挖掘 | `name` 或 `pos`；`count ≤16`；距离 ≤6；非创造自动换 `harvestTools` 里最好的工具 |
-| `mc_build` | 长方体搭建 | 尺寸夹 [1,256]；失败 5 个即停；创造缺方块自动取 |
-| `mc_give` | 拿物品 | **协议级 `set_creative_slot`**（创造模式即可，**不需要 OP**）；`clearAll` = 清背包；自动找空槽（优先同物品/快捷栏） |
-| `mc_sequence` | 连串动作 | **最多 64 步**；`stopOnError` 默认 true；`budgetMs ≤570s`、`timeoutMs 600s`；步类型 wait≤30s/move/look/toward/place/break/dig/use/attack/equip/give/toss/say/jump。比让模型写脚本稳 |
+| `mc_act` | 单动作 | 8 种子模式：`look/toward/place/break/use/attack/equip/toss`；`toward` = 看向+走近+再看；equip/toss 的物品字段为结构化对象 |
+| `mc_dig` | 挖掘 | `name` 或 `pos`；`count ≤16`；距离 ≤6；非创造自动换 `harvestTools` 里最好的工具；返回 `{requested,succeeded,failed,results[]}`，逐项含 `ok` 和位置/错误 |
+| `mc_build` | 长方体搭建 | 尺寸夹 [1,256]；失败 5 个即停；创造缺方块自动取；只有 `placeBlock` 落地复验成功才累计 placed |
+| `mc_give` | 拿物品 | **协议级 `set_creative_slot`**（创造模式即可，**不需要 OP**）；`clearAll` = 清背包；自动找空槽（优先同物品/快捷栏）；`gave` / `now` 为结构化物品对象 |
+| `mc_sequence` | 连串动作 | **最多 64 步**；`stopOnError` 默认 true；`budgetMs ≤570s`、`timeoutMs 600s`；步类型 wait≤30s/move/look/toward/place/break/dig/use/attack/equip/give/toss/say/jump；无异常但返回语义失败也记为失败并服从 `stopOnError`。比让模型写脚本稳 |
 | `mc_command` | 服务器指令 | **最后手段**：要 OP、受白名单（`commandWhitelist` 精确名/`/正则/`/`"*"`；`allowAllCommands` 全放行） |
 
 ## 五、游戏外辅助（4，`mc_kit_*`）
@@ -71,8 +74,8 @@
 | --- | --- | --- |
 | `mc_kit_rules` | 规则策略**只读**查询 | 按 `type` 回当前生效的策略（读的是 `mc_admin_config` 同一份 config，用户改完立即反映）：`command` → `commandWhitelist` + `allowAllCommands`；`web_fetch` → `webFetchEnabled` + 域名表 + 内容类型三开关（含内置图片格式）。补 MC 模式"看不见管理工具却要知道放行了什么"的缺口；`mc_command` / `mc_kit_web_fetch` 的描述指向它 |
 | `mc_kit_image` | 图像处理 | `info/embed/render/grid/save`：SVG→PNG 光栅化（`sharp`，可选依赖，缺失只影响 `render`）、引图进 SVG、拼网格（≤64 张，返回 SVG）、落盘。输入输出都限制在本会话工作区内（`insideWorkspace`）。默认输出 `.whale-craft/.out/`；给用户看时在回复里写 `![说明](.whale-craft/.out/x.png)`（宿主原生内嵌） |
-| `mc_kit_fs` | 文件系统操作 | `copy/move/delete/make_dir`（都递归）。末尾 `/*` 只选目录下**直接**子项；**保留符号链接（不跟随）**。`to` 以分隔符结尾=放进该目录（目标父目录自动创建）；`overwrite=false` 默认不覆盖；**预检失败零副作用、错误一律中文**。沙箱按模式：**MC** 限 `.whale-craft/`、**MC+** 放工作区；相对路径以工作区根为基准。受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径**不可删改**（`src/fsops.mjs` 权威 + guard 第二道锁，大小写不敏感） |
-| `mc_kit_web_fetch` | 抓网页（文本 + 图片） | 参数：`url` + 我们自己加的 `reply`/`dist`（语义照 `mc_map`：`reply=false` 只写文件回 stub）。🔴 **抓取全自研**：文本与图片都走 `src/webget.mjs`（唯一出网口：公网地址校验 + 地址钉死 + 只跟同源跳转 + 限 5MB / 10 万字符 / 20MB / 30s），**一次请求**、按真实 Content-Type 判型、**不经宿主 `ctx.web`**；输出形态照抄宿主（`Fetched <url> (HTTP <status>)` + 反注入声明 + 正文 + 截断尾注，上限 200000 字符；HTML 用 `src/webfetch.mjs` 的轻量转换，非 turndown）。**图片只支持内置四种** png/jpeg/gif/webp（= 宿主附件服务认的），其余一律算不支持；模型有视觉就直接附图，否则可落盘。**默认关**，受 `webFetchEnabled` + 域名表（`webFetchDomains` / `allowAllFetchDomains`）+「允许的内容类型」三开关（`webFetchAllowHtml` / `webFetchAllowText` / `webFetchAllowImage`，默认都开）门控；**MC 与 MC+ 两档都过** |
+| `mc_kit_fs` | 文件系统操作 | `copy/move/delete/make_dir`（都递归）。末尾 `/*` 只选目录下**直接**子项；**保留符号链接（不跟随）**。`to` 以分隔符结尾=放进该目录（目标父目录自动创建）；`overwrite=false` 默认不覆盖；**预检失败零副作用、错误一律中文**。沙箱按模式：**MC** 限 `.whale-craft/`、**MC+** 放工作区；相对路径以工作区根为基准，返回路径也统一为工作区相对路径（根为 `.`），不泄露本机绝对路径。受保护文件（RULES.md/AGENTS.md/config.json）与凭据路径**不可删改**（`src/fsops.mjs` 权威 + guard 第二道锁，大小写不敏感） |
+| `mc_kit_web_fetch` | 抓网页（文本 + 图片） | 参数：`url` + 我们自己加的 `reply`/`dist`（语义照 `mc_map`：`reply=false` 只写文件回 stub）；返回 `replyOk/writeOk`，图片另有 `attachmentOk`。🔴 **抓取全自研**：文本与图片都走 `src/webget.mjs`（唯一出网口：公网地址校验 + 地址钉死 + 只跟同源跳转 + 限 5MB / 10 万字符 / 20MB / 30s），**一次请求**、按真实 Content-Type 判型、**不经宿主 `ctx.web`**；输出形态照抄宿主（`Fetched <url> (HTTP <status>)` + 反注入声明 + 正文 + 截断尾注，上限 200000 字符；HTML 用 `src/webfetch.mjs` 的轻量转换，非 turndown）。**图片只支持内置四种** png/jpeg/gif/webp（= 宿主附件服务认的），其余一律算不支持；模型有视觉就直接附图，否则可落盘。**默认关**，受 `webFetchEnabled` + 域名表（`webFetchDomains` / `allowAllFetchDomains`）+「允许的内容类型」三开关（`webFetchAllowHtml` / `webFetchAllowText` / `webFetchAllowImage`，默认都开）门控；**MC 与 MC+ 两档都过** |
 
 ## 六、管理（1，`mc_admin_*`）
 

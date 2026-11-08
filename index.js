@@ -28,7 +28,7 @@ import './src/resolver-shim.mjs'
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync, statSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
-import { resolve, sep, join, isAbsolute, dirname, basename } from 'node:path'
+import { resolve, sep, join, isAbsolute, dirname, basename, relative } from 'node:path'
 import { McBot, lossless, logLine, libraryInfo } from './src/core.mjs'
 import { defineTool, toolDefKind } from './src/tool-def.mjs'
 import { versionPromptText, versionPromptTitle, versionPromptSource } from './src/version-prompt.mjs'
@@ -1512,7 +1512,7 @@ export function apply(ctx, rawConfig) {
    * 「网页抓取」工具名（`mc_kit_*`，游戏外辅助）—— 我们**自己实现**的网页抓取：
    * 宿主 `web_fetch` 在 MC 模式被我们关掉了（preset 里 tool-web 只挂 search），本工具补上这一块。
    *
-   * 抓取走宿主 `ctx.web`（`@deepseek-ai/dsh-web` seam；provider = `dsh-web-fetch-http`，含公网地址校验/防 SSRF），
+   * 抓取走 `src/webget.mjs`（公网地址校验、防 SSRF、地址钉死、同源跳转），不经过宿主 `ctx.web`，
    * **不需要**宿主 `web_fetch` 工具启用（用户 2026-10-08 定）。
    * 可见性由「MC设置 → 联网搜索 → 网页抓取」的 `webFetchEnabled`（默认**关**）+ 域名表（`webFetchDomains`
    * / `allowAllFetchDomains`）控制：白名单（MC）/ guard（MC 与 MC+ 都过）。
@@ -1833,7 +1833,8 @@ export function apply(ctx, rawConfig) {
       if (action === 'arm') return { ...wd.arm(), note: '看门狗已挂载，整局游戏期间有效（退服自动卸载并提醒你）。' }
       if (action === 'disarm') return wd.disarm(args.reason ? String(args.reason) : 'AI 主动关闭')
       if (action === 'log') return { armed: wd.armed, stats: { ...wd.stats }, recent: wd.log.slice(-30) }
-      return wd.status()
+      if (action === 'status') return wd.status()
+      throw new Error(`未知 action："${action}"（可用 status/arm/disarm/log）`)
     },
   }))
 
@@ -1879,8 +1880,14 @@ export function apply(ctx, rawConfig) {
     output: text(),
     async execute(args, exec) {
       const lib = libraryInfo()
+      const workspace = workspaceRootFor(exec?.agent)
+      const workspacePath = (path) => {
+        if (!workspace || !path) return null
+        const rel = relative(workspace, path)
+        return rel || '.'
+      }
       return {
-        plugin: { name: 'whale_craft', version: PLUGIN_VERSION, dir: fileURLToPath(new URL('.', import.meta.url)) },
+        plugin: { name: 'whale_craft', version: PLUGIN_VERSION },
         game: {
           testedVersions: lib.testedVersions,
           oldest: lib.oldest,
@@ -1913,17 +1920,17 @@ export function apply(ctx, rawConfig) {
           timeoutsMs: { lookAt: 4000, equip: 6000, dig: 25000, place: 6000, flyTo: 30000 },
         },
         config: {
-          file: pluginConfig.file,
+          file: '$DSH_HOME/whale_craft/config.json',
           keys: Object.keys(DEFAULT_CONFIG),
           commandWhitelist: pluginConfig.get('commandWhitelist'),
           allowAllCommands: pluginConfig.get('allowAllCommands'),
-          memoryDir: memoryRootFor(workspaceOf(exec?.agent)),
-          workspaceConfigFile: (() => { const r = memoryRootFor(workspaceOf(exec?.agent)); return r ? wsConfigPath(r) : null })(),
+          memoryDir: workspace ? '.whale-craft' : null,
+          workspaceConfigFile: (() => { const r = memoryRootFor(workspaceOf(exec?.agent)); return workspacePath(r ? wsConfigPath(r) : null) })(),
           mcModePresets: pluginConfig.mcModePresets,
           mcPlusPresets: pluginConfig.mcPlusPresets,
         },
         prompt: {
-          agentsMd: (() => { const r = memoryRootFor(workspaceOf(exec?.agent)); return r ? agentsMdPath(r) : null })(),
+          agentsMd: (() => { const r = memoryRootFor(workspaceOf(exec?.agent)); return workspacePath(r ? agentsMdPath(r) : null) })(),
           injectWhaleCraftAgentsMd: wsCfgValues(workspaceOf(exec?.agent)).injectWhaleCraftAgentsMd,
           injectWorkspaceAgentsMd: wsCfgValues(workspaceOf(exec?.agent)).injectWorkspaceAgentsMd,
         },
@@ -2047,6 +2054,17 @@ export function apply(ctx, rawConfig) {
     catch (e) { return { attachmentError: e.message } }
   }
 
+  const finishDelivery = (out, { reply, dist, image = false }) => {
+    const attachmentOk = image && reply ? Boolean(out.image?.attachment) : null
+    if (image && reply && !attachmentOk && !out.note) {
+      out.note = out.image?.warning ?? `图片附件失败：${out.image?.attachmentError ?? '未知原因'}`
+    }
+    out.replyOk = reply ? (image ? attachmentOk : true) : null
+    out.writeOk = dist ? Boolean(out.written) : null
+    if (image) out.attachmentOk = attachmentOk
+    return out
+  }
+
   ctx.tools.register(asTool({
     name: 'mc_context',
     description: '获取游戏上下文：游戏模式、所在维度、坐标、朝向。'
@@ -2142,7 +2160,7 @@ export function apply(ctx, rawConfig) {
         const dist = outputPathFor(args.dist, exec?.agent)
         if (dist) { try { const file = withExt(dist, '.txt'); out.written = { file, bytes: writeOutputFile(file, Buffer.from(glyphMap, 'utf8')) } } catch (e) { out.writeError = e.message } }
         if (!reply) out.note = out.written ? `已写入 ${out.written.file}（${out.written.bytes} 字节）` : '（reply=false 且未给 dist：无输出）'
-        return out
+        return finishDelivery(out, { reply, dist })
       }
 
       if (format === 'image') {
@@ -2156,7 +2174,7 @@ export function apply(ctx, rawConfig) {
         else if (reply) Object.assign(out.image, await attachImage(png, 'mc-map.png'))
         if (!reply) out.note = out.written ? `已写入 ${out.written.file}` : '（reply=false 且未给 dist：无输出）'
         else if (!vision) out.note = out.image.warning
-        return out
+        return finishDelivery(out, { reply, dist, image: true })
       }
 
       throw new Error(`未知 format："${format}"（可用 chars / image）`)
@@ -2197,7 +2215,7 @@ export function apply(ctx, rawConfig) {
         const dist = outputPathFor(args.dist, exec?.agent)
         if (dist) { try { const file = withExt(dist, '.csv'); out.written = { file, bytes: writeOutputFile(file, Buffer.from(csv, 'utf8')) } } catch (e) { out.writeError = e.message } }
         if (!reply) out.note = out.written ? `已写入 ${out.written.file}` : '（reply=false 且未给 dist：无输出）'
-        return out
+        return finishDelivery(out, { reply, dist })
       }
 
       if (format === 'chars') {
@@ -2206,7 +2224,7 @@ export function apply(ctx, rawConfig) {
         const dist = outputPathFor(args.dist, exec?.agent)
         if (dist) { try { const file = withExt(dist, '.txt'); out.written = { file, bytes: writeOutputFile(file, Buffer.from(glyphs, 'utf8')) } } catch (e) { out.writeError = e.message } }
         if (!reply) out.note = out.written ? `已写入 ${out.written.file}` : '（reply=false 且未给 dist：无输出）'
-        return out
+        return finishDelivery(out, { reply, dist })
       }
 
       if (format === 'image') {
@@ -2220,7 +2238,7 @@ export function apply(ctx, rawConfig) {
         else if (reply) Object.assign(out.image, await attachImage(png, 'mc-height.png'))
         if (!reply) out.note = out.written ? `已写入 ${out.written.file}` : '（reply=false 且未给 dist：无输出）'
         else if (!vision) out.note = out.image.warning
-        return out
+        return finishDelivery(out, { reply, dist, image: true })
       }
 
       throw new Error(`未知 format："${format}"（可用 chars / image / full）`)
@@ -2404,7 +2422,7 @@ export function apply(ctx, rawConfig) {
         name: args.name ? String(args.name) : null, pos,
         maxDistance: args.maxDistance, count: args.count,
       })
-      return { result: lines }
+      return lines
     },
   }))
 
@@ -2728,10 +2746,21 @@ export function apply(ctx, rawConfig) {
         else if (p.kind === 'mkdir') { makeDir(p.abs); done.push(p.abs) }
       }
 
-      const head = `${action}：完成 ${done.length} 个目标（每项 = 一个被**直接选中**的文件/目录；目录内部的条目不计入）`
+      const displayPath = (path) => relative(base, path) || '.'
+      const shownDone = done.map(displayPath)
+      const shownSkipped = skipped.map((entry) => ({ ...entry, path: displayPath(entry.path) }))
+      const shownOverwritten = overwritten.map(displayPath)
+      const head = `${action}：完成 ${shownDone.length} 个目标（每项 = 一个被**直接选中**的文件/目录；目录内部的条目不计入）`
         + (overwritten.length ? `；覆盖 ${overwritten.length} 项` : '')
-        + (skipped.length ? `；跳过 ${skipped.length} 项（受保护/凭据）：${skipped.map((s) => s.path).join('、')}` : '')
-      return { action, root, done, skipped, overwritten, text: head + (done.length ? `\n${done.join('\n')}` : '') }
+        + (shownSkipped.length ? `；跳过 ${shownSkipped.length} 项（受保护/凭据）：${shownSkipped.map((s) => s.path).join('、')}` : '')
+      return {
+        action,
+        root: displayPath(root),
+        done: shownDone,
+        skipped: shownSkipped,
+        overwritten: shownOverwritten,
+        text: head + (shownDone.length ? `\n${shownDone.join('\n')}` : ''),
+      }
     },
   }))
 
@@ -2820,7 +2849,7 @@ export function apply(ctx, rawConfig) {
         }
         if (!reply) out.note = out.written ? `已写入 ${out.written.file}（${out.written.bytes} 字节）` : '（reply=false 且未给 dist：无输出）'
         else if (!vision) out.note = out.image.warning
-        return out
+        return finishDelivery(out, { reply, dist, image: true })
       }
 
       // 文本类：按声明 charset 解码（超长截断）→ 交给 webfetch 渲染（形态与宿主 web_fetch 一致）
@@ -2837,7 +2866,7 @@ export function apply(ctx, rawConfig) {
         catch (e) { out.writeError = e.message }
       }
       if (!reply) out.note = out.written ? `已写入 ${out.written.file}（${out.written.bytes} 字节）` : '（reply=false 且未给 dist：无输出）'
-      return out
+      return finishDelivery(out, { reply, dist })
     },
   }))
 

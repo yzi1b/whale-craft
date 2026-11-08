@@ -237,6 +237,9 @@ await tools.get('mc_status').execute({}, A)
 await tools.get('mc_status').execute({}, A)   // 同一会话再来一次，应复用
 await tools.get('mc_status').execute({}, B)
 
+const capabilities = await tools.get('mc_capabilities').execute({}, A)
+console.log(`  ${capabilities.plugin?.dir === undefined && capabilities.config?.file === '$DSH_HOME/whale_craft/config.json' ? '✅' : '❌'} mc_capabilities 不暴露插件安装目录，配置路径使用占位符`)
+
 const sess = await tools.get('mc_debug_sessions').execute({}, A)
 console.log('  活跃实例:', JSON.stringify(sess.sessions.map((s) => s.agentId)))
 const ids = sess.sessions.map((s) => s.agentId).sort().join(',')
@@ -438,6 +441,9 @@ console.log('\n--- 看门狗 v2 ---')
   // 卸载
   const s2 = await tools.get('mc_watch').execute({ action: 'disarm', reason: '自检' }, A)
   console.log(`  ${s2.armed === false ? '✅' : '❌'} disarm 成功`)
+
+  const badAction = await tools.get('mc_watch').execute({ action: 'stats' }, A).then(() => null).catch((e) => e.message)
+  console.log(`  ${/未知 action/.test(String(badAction)) ? '✅' : '❌'} mc_watch 未知 action 明确报错`)
 }
 
 // ── 新工具：mc_act / mc_give / mc_sequence / mc_stop ──
@@ -494,6 +500,16 @@ for (const [label, args, want] of [
   const first = r.results[0]
   const stopped = r.results.length === 1
   console.log(`  ${first?.ok === false && /可用：/.test(first.error) && stopped ? '✅' : '❌'} 未知 op 报错+列可用值+遇错即停：${String(first?.error).slice(0, 60)}…`)
+}
+
+// mc_sequence：动作没有抛错但明确返回失败，也必须按失败步骤处理
+{
+  const { McBot } = await import('./src/core.mjs')
+  const bot = new McBot({ instanceId: 'selftest-sequence-result' })
+  bot.bot = { game: { gameMode: 'creative' } }
+  bot.flyTo = async () => ({ arrived: false, distance: 8, note: '服务端拒绝位移' })
+  const r = await bot.runSequence([{ op: 'move', mode: 'fly', x: 1, y: 2, z: 3 }, { op: 'wait', sec: 0 }])
+  console.log(`  ${r.failed === 1 && r.results.length === 1 && r.results[0]?.ok === false ? '✅' : '❌'} 🔴 序列不再把 arrived:false 记成成功`)
 }
 
 // ── 强制停止：语义与**顺序**（用户 2026-09-16：移除普通停止，只剩强制停止）──
@@ -787,7 +803,7 @@ console.log('\n--- disconnect：优雅优先 / 强断兜底 ---')
 console.log('\n--- 会话锁文件落点 ---')
 {
   const { McBot } = await import('./src/core.mjs')
-  const { join } = await import('node:path')
+  const { join, isAbsolute } = await import('node:path')
   const lockDir = 'C:\\Users\\x\\.dsh\\whale_craft'
   const withDir = new McBot({ instanceId: 'sess-A', lockDir })
   console.log(`  ${withDir.lockFile === join(lockDir, '.instance.sess-A.json') ? '✅' : '❌'} 给了 lockDir → 锁文件落在插件的家：${withDir.lockFile}`)
@@ -961,7 +977,7 @@ console.log('\n--- 文件系统操作（mc_kit_fs）---')
   const fsops = await import('./src/fsops.mjs')
   const { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, lstatSync, readdirSync } = await import('node:fs')
   const { tmpdir } = await import('node:os')
-  const { join } = await import('node:path')
+  const { join, isAbsolute } = await import('node:path')
   const base = mkdtempSync(join(tmpdir(), 'whale-fs-'))
   const root = join(base, 'sandbox')
   mkdirSync(root, { recursive: true })
@@ -1055,6 +1071,7 @@ console.log('\n--- 文件系统操作（mc_kit_fs）---')
   // 「完成 N 个目标」口径写明：N = 直接选中目标数，不含目录内部条目
   const r1 = await tool.execute({ action: 'copy', from: 'srcDir', to: 'dstDir3' }, ex)
   console.log(`  ${/完成 1 个目标/.test(String(r1?.text)) && /内部/.test(String(r1?.text)) ? '✅' : '❌'} 🔴 「完成 N 个目标」口径写明（N=直接选中目标数，目录内部条目不计入）：${JSON.stringify(String(r1?.text).split('\n')[0])}`)
+  console.log(`  ${!isAbsolute(r1.root) && r1.done.every((p) => !isAbsolute(p)) ? '✅' : '❌'} mc_kit_fs 返回工作区相对路径，不暴露本机绝对路径`)
 
   // move 自动建目标父目录（修复"move 没有自动建目录"）
   await tool.execute({ action: 'move', from: 'into/a.md', to: 'deep/nest/a.md' }, ex)
@@ -2863,7 +2880,7 @@ console.log('\n--- 无 OP 建造（创造模式自动取物）---')
   if (typeof Vec3 !== 'function') { console.log('  ⚠️ Vec3 拿不到，跳过这组（不影响其他检查）') }
   else {
 
-  const mkFakeBot = ({ gameMode = 'creative', inventory = [], slots = null } = {}) => {
+  const mkFakeBot = ({ gameMode = 'creative', inventory = [], slots = null, acceptPlacement = true } = {}) => {
     const state = { setCalls: [], placed: [], equipped: [] }
     // 有状态的世界：placeBlock 后目标格要真的变成该方块。
     // 因为 placeBlock 现在**会校验结果**（旧版不管成没成都报 placed），假 bot 不更新状态就会被正确判失败。
@@ -2913,7 +2930,7 @@ console.log('\n--- 无 OP 建造（创造模式自动取物）---')
         // 模拟服务端接受：把"被依附方块相邻的那格"变成新方块。
         // 我们的调用是 placeBlock(ref, face)，目标是 ref+face —— 简化成记录依附点即可，
         // 真正的目标格由测试自己按 (1,64,0) 预置。
-        world.set('1,64,0', 'oak_planks')
+        if (acceptPlacement) world.set('1,64,0', 'oak_planks')
       },
       setControlState: () => {},
       dig: async () => {},
@@ -2960,10 +2977,31 @@ console.log('\n--- 无 OP 建造（创造模式自动取物）---')
     const { fake, state } = mkFakeBot({ gameMode: 'creative', slots })
     const bot = new McBot({ instanceId: 'selftest-nop4' })
     bot.bot = fake
-    await bot.giveItem({ name: 'oak_planks', count: 1 })
+    const result = await bot.giveItem({ name: 'oak_planks', count: 1 })
     const used = state.setCalls[0]?.slot
     console.log(`  ${used === 36 ? '✅' : '❌'} 同款复用原槽位（用了 ${used}，而不是空槽 38）`)
     console.log(`  ${fake.inventory.slots[37]?.name === 'stone' ? '✅' : '❌'} 没有覆盖掉别的方块（stone 还在 37）`)
+    console.log(`  ${result.gave?.name === 'oak_planks' && result.gave?.count === 1 && result.now?.name === 'oak_planks' ? '✅' : '❌'} mc_give 返回结构化物品`)
+    console.log(`  ${bot.inventory().items.every((item) => item && typeof item.name === 'string' && typeof item.count === 'number') ? '✅' : '❌'} mc_inventory 返回结构化物品`)
+  }
+
+  // ⑤ 服务端未实际放下方块时，build 必须计失败，不能再报假成功
+  {
+    const { fake } = mkFakeBot({ gameMode: 'creative', acceptPlacement: false })
+    const bot = new McBot({ instanceId: 'selftest-build-result' })
+    bot.bot = fake
+    const result = await bot.build({ x1: 1, y1: 64, z1: 0, x2: 1, y2: 64, z2: 0, name: 'oak_planks' })
+    console.log(`  ${result.placed === 0 && result.failed === 1 && /没有出现/.test(result.failures[0] ?? '') ? '✅' : '❌'} 🔴 mc_build 不再把 placed:false 计为成功`)
+  }
+
+  // ⑥ dig 返回逐项结构，不再把成功/失败混成字符串
+  {
+    const { fake } = mkFakeBot({ gameMode: 'creative' })
+    fake.findBlock = () => ({ name: 'stone', position: new Vec3(0, 63, 0), harvestTools: null })
+    const bot = new McBot({ instanceId: 'selftest-dig-result' })
+    bot.bot = fake
+    const result = await bot.dig({ name: 'stone', count: 1 })
+    console.log(`  ${result.requested === 1 && result.succeeded === 1 && result.results[0]?.block === 'stone' ? '✅' : '❌'} mc_dig 返回结构化逐项结果`)
   }
   }
 }
