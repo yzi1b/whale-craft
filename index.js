@@ -396,11 +396,10 @@ export function apply(ctx, rawConfig) {
 
   /* ── 插件状态目录（**配置 + 账户库**）：`$DSH_HOME/whale_craft/` ──────────────────
    * 🔴 2026-09-16 用户要求：配置和账户**不该躺在工作区里** —— 工作区是项目的家，
-   *    插件有插件自己的家。宿主（app-boot）`ctx.provide('dshHomePath', …)` 给了这个路径，
+   *    插件有插件自己的家。路径由官方 `@deepseek-ai/dsh-home-paths` 解析，
    *    与 `$DSH_HOME/skills` / `.agent-presets` / `storages` / `attachments` 同一套规矩。
    * ------------------------------------------------------------------------ */
-  const dshHomePath = (() => { try { return ctx.get('dshHomePath') } catch { return undefined } })()
-  const stateDir = resolveStateDir({ dshHomePath, whaleDir: process.env.WHALE_CRAFT_DIR })
+  const stateDir = resolveStateDir({ whaleDir: process.env.WHALE_CRAFT_DIR })
   registry.lockDir = stateDir      // 会话锁文件也放插件自己的家（别写进插件包目录）
 
   /* ── 记忆 / 提示词：挂在**会话工作区**下，不再假设"插件装在工作区里" ──────────────
@@ -784,56 +783,44 @@ export function apply(ctx, rawConfig) {
     return out
   }
 
-  /* ─────────── 归档保护（用户 2026-09-15 补充要求）───────────
+  /* ─────────── 归档保护（DSH 0.2.2 官方归档准入接缝）───────────
    * "会话归档前要自动强行停止，或者阻止归档。"
    *
-   * 做法：包一层 `ctx.workspaceRegistry.archiveSession`。归档一个正在玩 MC 的会话时，
-   * 先把机器人踢下线、关看门狗、清后台任务、中断当前轮，**再**放行归档。
-   * 选择"自动停止"而不是"阻止归档"——用户想归档就该让它归档，只是别留个孤儿 bot 在线。
-   *
-   * 为什么能包：`archiveSession` 是 workspace 服务上的普通方法（`workspace/src/index.ts:243`），
-   * 不是抽象/私有；卸载时还原原方法。
+   * `workspace/session-activity` 让普通归档拒绝仍在运行的 MC；调用方选择
+   * `archiveSession(id, { stopActivity:true })` 时，宿主先持久化归档，再并行派发
+   * `workspace/session-stop`。这里只停止本插件拥有的机器人与看门狗；LLM、通用 job、
+   * subagent 等活动由各自的官方 provider 停止，不再越权包装 `archiveSession()`。
    * ------------------------------------------------------------------------ */
-
-  /**
-   * 安装归档保护。
-   *
-   * ⚠️ 必须在 `workspaceRegistry` **就绪之后**才能装：`apply()` 跑的时候它往往还没起来，
-   *    `ctx.get('workspaceRegistry')` 会返回 undefined（隔离实例实测踩到）。
-   *    正解是 `ctx.inject(['workspaceRegistry'], cb)` —— 服务就绪（或重新就绪）时回调，
-   *    并且回调里的 `scope.effect` 把还原逻辑挂在**那个 fiber** 上。
-   *    参照宿主自己的写法：`packages/client/modules/src/index.ts:576`。
-   */
-  const installArchiveGuard = (scope) => {
-    const wsRegistry = scope.get('workspaceRegistry')
-    if (!wsRegistry || typeof wsRegistry.archiveSession !== 'function') {
-      logLine('宿主没有 workspaceRegistry：归档保护未启用')
-      return
-    }
-    const originalArchive = wsRegistry.archiveSession
-    wsRegistry.archiveSession = async function (sessionId) {
-      const id = String(sessionId)
-      const sess = registry.peek(id)
-      if (sess && (sess.bot?.online || sess.watchdog?.armed)) {
-        logLine(`会话 ${id} 将被归档 → 先强制停止 MC`)
-        try {
-          await stopSession(id, { reason: '会话被归档' })
-        } catch (e) {
-          logLine(`归档前停止失败（仍继续归档）：${e.message}`)
-        }
-      }
-      return originalArchive.call(this, sessionId)
-    }
-    scope.effect(() => () => { wsRegistry.archiveSession = originalArchive }, 'whale_craft: archive guard')
-    logLine('已挂上归档保护（归档前自动停止 MC）')
-    scope.logger?.info?.('[whale_craft] 已挂上归档保护（归档前自动停止 MC）')
+  const hasMinecraftActivity = (sessionId) => {
+    const sess = registry.peek(String(sessionId))
+    return Boolean(sess && (
+      sess.bot?.online
+      || sess.bot?.reconnecting
+      || sess.bot?.reconnectPending
+      || sess.watchdog?.armed
+    ))
   }
 
-  if (ctx.get('workspaceRegistry') === undefined) {
-    ctx.inject(['workspaceRegistry'], (scope) => installArchiveGuard(scope))
-  } else {
-    installArchiveGuard(ctx)
-  }
+  ctx.on('workspace/session-activity', async ({ sessionId } = {}, next) => {
+    const active = hasMinecraftActivity(sessionId)
+    const rest = await next()
+    return active ? [{ kind: 'minecraft' }, ...rest] : rest
+  })
+
+  ctx.on('workspace/session-stop', async ({ sessionId } = {}) => {
+    const id = String(sessionId ?? '')
+    if (!id || !hasMinecraftActivity(id)) return
+    const sess = registry.peek(id)
+    logLine(`会话 ${id} 已归档 → 停止 MC 活动`)
+    if (sess.watchdog) {
+      try { sess.watchdog.disarm('会话被归档', { notify: false }) } catch {}
+    }
+    try {
+      await sess.bot.disconnect('会话被归档')
+    } finally {
+      sess.mode = 'standby'
+    }
+  })
 
   /**
    * 「MC设置」模态框的后端（账户 / 认证服务器 / 指令白名单）。

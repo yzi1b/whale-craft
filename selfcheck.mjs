@@ -109,7 +109,7 @@ const fakeCtx = {
     host: '192.0.2.10',      // 非回环的 listener 绑定地址：宿主栅栏会放行它
     protocol: 'http:',
   },
-  // 必须在 apply 之前就在，否则归档保护的包装装不上
+  // 分支失败回撤等路径仍会使用；归档保护本身走 DSH 0.2.2 官方事件，不再包装此方法
   workspaceRegistry: { archiveSession: async (sid) => { archivedSessions.push(String(sid)) } },
   // 系统提示：收集插件注册的动态 context（本插件已不注册任何 systemPrompt 段）
   systemPrompt: {
@@ -1234,65 +1234,29 @@ console.log('\n--- 扩展点 ---')
   console.log(`  ${missing.length ? '⚠️ ' : '✅'} 模板演示了关键 api（缺失项即使未演示也不影响加载）`)
 }
 
-// ── 归档保护（用户补充要求：归档前自动强行停止）──
-console.log('\n--- 归档保护 ---')
+// ── 归档保护（DSH 0.2.2 官方 activity/stop provider）──
+console.log('\n--- 归档保护（官方生命周期）---')
 {
-  // 前置：给 sess-A 挂上看门狗
+  const activity = eventHandlers.find((h) => h.ev === 'workspace/session-activity')?.fn
+  const stop = eventHandlers.find((h) => h.ev === 'workspace/session-stop')?.fn
+  console.log(`  ${activity && stop ? '✅' : '❌'} 注册 workspace/session-activity + workspace/session-stop`)
+
+  const rest = [{ kind: 'turn' }]
+  const plain = await activity({ sessionId: 'plain-session' }, async () => rest)
+  console.log(`  ${plain === rest ? '✅' : '❌'} 无 MC 活动时原样交棒，不阻止普通归档`)
+
   await tools.get('mc_watch').execute({ action: 'arm' }, A)
   const armed = (await tools.get('mc_watch').execute({}, A)).armed
-
-  // ① 无 MC 的会话：必须原样放行（不能把普通归档搞坏）
-  await fakeCtx.workspaceRegistry.archiveSession('plain-session')
-  console.log(`  ${archivedSessions.includes('plain-session') ? '✅' : '❌'} 无 MC 的会话正常放行归档`)
-
-  // ② 有 MC（看门狗挂着）的会话：包装后的实现应先停掉再放行
-  await fakeCtx.workspaceRegistry.archiveSession('sess-A')
-  const armedAfter = (await tools.get('mc_watch').execute({}, A)).armed
+  const active = await activity({ sessionId: 'sess-A' }, async () => rest)
   console.log(`  ${armed === true ? '✅' : '❌'} 前置条件：归档前看门狗挂着`)
-  console.log(`  ${armedAfter === false ? '✅' : '❌'} 归档时看门狗被自动关闭（armed: ${armed} → ${armedAfter}）`)
-  console.log(`  ${archivedSessions.includes('sess-A') ? '✅' : '❌'} 停止之后仍放行归档（选了"先停止"而非"阻止"）`)
+  console.log(`  ${active[0]?.kind === 'minecraft' && active[1] === rest[0] ? '✅' : '❌'} MC 活动排在其余 provider 结果前，并且调用 next()`)
 
-  // ③ 原方法必须被调用（不是被我们吞掉）
-  const calls = archivedSessions.filter((x) => x === 'sess-A').length
-  console.log(`  ${calls === 1 ? '✅' : '❌'} 原 archiveSession 恰好被调用一次（未被吞/未重复）`)
+  await stop({ sessionId: 'sess-A' })
+  const armedAfter = (await tools.get('mc_watch').execute({}, A)).armed
+  console.log(`  ${armedAfter === false ? '✅' : '❌'} stopActivity 派发后关闭看门狗（armed: ${armed} → ${armedAfter}）`)
 
-  // ④ 回归：`apply()` 时 workspaceRegistry **还没就绪**（远端服务晚启动）——
-  //    必须走 ctx.inject 等它就绪，而不是静默放弃。
-  //    这是隔离实例实测抓到的真 bug（第一版直接 ctx.get 拿到 undefined 就放弃了）。
-  {
-    const mod3 = await import('./index.js')
-    const pending = []
-    const lateArchived = []
-    let installRan = false
-    const ctx3 = {
-      logger: { info: () => {}, warn: () => {}, debug: () => {} },
-      tools: { register: () => {} },
-      webServer: { register: () => () => {} },
-      profileContext: { name: 'web' },
-      agentPresets: { composedPreset: () => 'standard' },
-      effect: (fn) => { try { fn() } catch {} },
-      set: () => {}, on: () => {},
-      // 初次 get 拿不到（模拟服务未就绪）
-      get: (k) => (k === 'workspaceRegistry' || k === 'jobs' || k === 'sessionController' || k === 'attachments'
-        ? undefined : ctx3[k]),
-      inject: (deps, cb) => { pending.push({ deps, cb }) },
-      logger2: null,
-    }
-    mod3.apply(ctx3, mod3.Config ? mod3.Config({}) : {})
-    const registered = pending.some((p) => p.deps.includes('workspaceRegistry'))
-    console.log(`  ${registered ? '✅' : '❌'} 服务未就绪时登记了 ctx.inject(['workspaceRegistry'])`)
-
-    // 服务就绪 → 回调触发 → 应装上包装
-    const scope = {
-      get: () => ({ archiveSession: async (sid) => { lateArchived.push(String(sid)) } }),
-      effect: (fn) => { try { fn() } catch {} },
-      logger: { info: () => {} },
-    }
-    for (const p of pending) { if (p.deps.includes('workspaceRegistry')) { p.cb(scope); installRan = true } }
-    const wrapped = typeof (await scope.get()).archiveSession === 'function'
-    await scope.get().archiveSession('late-session')
-    console.log(`  ${installRan && wrapped && lateArchived.includes('late-session') ? '✅' : '❌'} 服务迟到时归档保护仍能装上并放行`)
-  }
+  const idx = (await import('node:fs')).readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+  console.log(`  ${!idx.includes('wsRegistry.archiveSession =') && !idx.includes('installArchiveGuard') ? '✅' : '❌'} 不再劫持 workspaceRegistry.archiveSession`)
 }
 
 // ── 提示词注入**只有一条通道**（用户 2026-09-16："系统提示词不用显式注入，设置好了会自动注入"）──
@@ -1388,23 +1352,23 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     const { readFileSync } = await import('node:fs')
     const fakeHome = 'C:\\Users\\x'
     const ws = 'E:\\ws\\.whale-craft'
-    const viaSvc = resolveStateDir({ env: {}, dshHomePath: (n) => `C:\\Users\\x\\.dsh\\${n}`, whaleDir: ws, home: fakeHome })
-    console.log(`  ${viaSvc === 'C:\\Users\\x\\.dsh\\whale_craft' ? '✅' : '❌'} 优先用宿主 dshHomePath('whale_craft')：${viaSvc}`)
-    const viaEnv = resolveStateDir({ env: { DSH_HOME: 'D:\\dsh' }, whaleDir: ws, home: fakeHome })
-    console.log(`  ${viaEnv === 'D:\\dsh\\whale_craft' ? '✅' : '❌'} 没有该服务时按 $DSH_HOME：${viaEnv}`)
-    const viaHome = resolveStateDir({ env: {}, whaleDir: ws, home: fakeHome })
-    console.log(`  ${viaHome === 'C:\\Users\\x\\.dsh\\whale_craft' ? '✅' : '❌'} 连 $DSH_HOME 也没有时用 ~/.dsh：${viaHome}`)
+    const viaConfigured = resolveStateDir({ env: {}, dshHome: `${fakeHome}\\.dsh`, whaleDir: ws })
+    console.log(`  ${viaConfigured === 'C:\\Users\\x\\.dsh\\whale_craft' ? '✅' : '❌'} 官方 resolveDshHome 接受显式 home：${viaConfigured}`)
+    const viaEnv = resolveStateDir({ env: { DSH_HOME: 'D:\\dsh' }, whaleDir: ws })
+    console.log(`  ${viaEnv === 'D:\\dsh\\whale_craft' ? '✅' : '❌'} 官方 resolveDshHome 读取 $DSH_HOME：${viaEnv}`)
+    const viaHome = resolveStateDir({ env: {}, whaleDir: ws, dshHome: `${fakeHome}\\.dsh` })
+    console.log(`  ${viaHome === 'C:\\Users\\x\\.dsh\\whale_craft' ? '✅' : '❌'} 官方默认 home 下追加 whale_craft：${viaHome}`)
     console.log(`  ${!viaHome.includes('E:\\ws') ? '✅' : '❌'} 🔴 结果**不在工作区**里（这正是用户要的）`)
-    const iso = resolveStateDir({ env: { WHALE_CRAFT_DIR: 'T:\\tmp' }, dshHomePath: () => 'C:\\x\\.dsh\\whale_craft', whaleDir: 'T:\\tmp', home: fakeHome })
+    const iso = resolveStateDir({ env: { WHALE_CRAFT_DIR: 'T:\\tmp' }, whaleDir: 'T:\\tmp', dshHome: `${fakeHome}\\.dsh` })
     console.log(`  ${iso === 'T:\\tmp' ? '✅' : '❌'} 自检/隔离模式（WHALE_CRAFT_DIR）一切留在临时目录：${iso}`)
     // 🔴 2026-09-24（issue #1 附带）：日志路径走 `fileURLToPath`，别用 `new URL().pathname`
     //    （家目录含中文时会被百分号编码 → 自检在 mkdir 上 EPERM 崩掉）
     console.log(`  ${!/%[0-9A-Fa-f]{2}/.test(String(process.env.MC_LOG)) ? '✅' : '❌'} 自检日志路径没有被百分号编码（fileURLToPath；中文/空格家目录下也能跑）：${process.env.MC_LOG}`)
-    const explicit = resolveStateDir({ env: { WHALE_CRAFT_STATE_DIR: 'S:\\s', WHALE_CRAFT_DIR: 'T:\\tmp' }, whaleDir: 'T:\\tmp', home: fakeHome })
+    const explicit = resolveStateDir({ env: { WHALE_CRAFT_STATE_DIR: 'S:\\s', WHALE_CRAFT_DIR: 'T:\\tmp' }, whaleDir: 'T:\\tmp', dshHome: `${fakeHome}\\.dsh` })
     console.log(`  ${explicit === 'S:\\s' ? '✅' : '❌'} WHALE_CRAFT_STATE_DIR 优先级最高`)
     const idx = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
     console.log(`  ${/new PluginConfig\(stateDir\)/.test(idx) && /new AccountStore\(\{ dir: stateDir/.test(idx) ? '✅' : '❌'} index.js 里配置与账户都建在 stateDir 上（不是 whaleDir）`)
-    console.log(`  ${/resolveStateDir\(\{ dshHomePath, whaleDir: process\.env\.WHALE_CRAFT_DIR \}\)/.test(idx) ? '✅' : '❌'} 状态目录走 resolveStateDir（拿不到就 /$DSH_HOME 兜底）`)
+    console.log(`  ${/resolveStateDir\(\{ whaleDir: process\.env\.WHALE_CRAFT_DIR \}\)/.test(idx) ? '✅' : '❌'} 状态目录走 resolveStateDir + 官方 dsh-home-paths`)
     console.log(`  ${/copyFileSync\(from, to\)/.test(idx) && /unlinkSync\(from\)/.test(idx) ? '✅' : '❌'} 老工作区文件有一次性的"搬出工作区"迁移`)
     // 🔴 2026-09-16 抽取成标准插件：记忆/提示词必须**按会话工作区**解析（插件装哪都行）
     console.log(`  ${/const workspaceOf = \(agent\) =>/.test(idx) && /agent\?\.session\?\.header\?\.cwd/.test(idx) ? '✅' : '❌'} 工作区取自 exec.agent.session.header.cwd（不再用"插件自己在哪"）`)
@@ -3755,6 +3719,7 @@ console.log('\n--- 依赖面 + 打包完整性（mineflayer 是**依赖**不是"
   }
 
   const checks = [
+    ['官方 dsh-home-paths 是直接依赖（状态/日志根不再自行复刻）', deps['@deepseek-ai/dsh-home-paths'] === '0.2.2-rc.1'],
     ['mineflayer 是**直接依赖**（装上插件就有机器人，不用用户自己补）', typeof deps.mineflayer === 'string'],
     ['vec3 也是直接依赖（pnpm 严格布局下，不声明就 import 不到传递依赖）', typeof deps.vec3 === 'string'],
     ['vec3 与 mineflayer 要的是**同一条线**（防两份 vec3 → instanceof 命门）', !!mfVec3Range && lineOf(deps.vec3) === lineOf(mfVec3Range)],

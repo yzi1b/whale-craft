@@ -24,8 +24,8 @@ import { EventEmitter } from 'node:events'
 import { createRequire } from 'node:module'
 import { writeFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, appendFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
 const Vec3 = vec3pkg.Vec3 ?? vec3pkg
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -146,14 +146,7 @@ export const DEFAULTS = {
    * 日志落盘位置。🔴 **默认不写插件包目录**（装进 `node_modules/` 后那可能是只读的、
    * 升级时也会被覆盖）：默认写 `$DSH_HOME/whale_craft/logs/`，可用 `MC_LOG` 覆盖。
    */
-  logFile: process.env.MC_LOG ?? join(resolveHarnessHome(), 'whale_craft', 'logs', 'whale-craft.log'),
-}
-
-/** 宿主家目录：`$DSH_HOME` → `~/.dsh`（与宿主 `resolveDshHome` 同一套规矩） */
-function resolveHarnessHome () {
-  const fromEnv = String(process.env.DSH_HOME ?? '').trim()
-  if (fromEnv) return fromEnv
-  try { return join(homedir(), '.dsh') } catch { return join(process.cwd(), '.dsh') }
+  logFile: process.env.MC_LOG ?? join(resolveDshHome(), 'whale_craft', 'logs', 'whale-craft.log'),
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))

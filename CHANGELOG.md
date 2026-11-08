@@ -11,6 +11,7 @@
 
 - 【变更】移除旧宿主的目录式 preset 自动创建、修复和跨版本 persona 适配；MC / MC+ 模式只使用包内声明式 preset
 - 【变更】宿主事件与 `profileContext` 固定按 DSH 0.2.2 契约使用，不再静默兼容缺失服务或旧事件形态
+- 【变更】归档保护迁移到 DSH 0.2.2 官方 `workspace/session-activity` / `workspace/session-stop` 生命周期，不再替换宿主 `archiveSession`；插件状态与日志根改用官方 `dsh-home-paths` 解析
 - 【修复】通过公网地址（反向代理）或局域网 IP 访问 DSH 时，「MC设置」无法使用（设置接口一律 403）。根因是信任栅栏仍在读取 DSH 0.2.1 起已删除的 `webRuntime` 服务；现改读宿主的 `connection.trustedHosts`（即 `--trusted-host`），并放行监听绑定地址
 - 【修复】使用 `--public-url` 子路径（如 `https://host/ui/`）部署时，MC 设置与状态条请求打不到后端（客户端写死根绝对路径，绕过了挂载前缀）。现在所有插件请求按应用挂载根解析
 - 【修复】在 DSH 0.2.2-rc.1 上「MC+模式」无法识别：其 preset 组成抄自旧版宿主，引用了新版已删除的插件行，导致整份 preset 挂载失败。现已按 0.2.2-rc.1 的标准模式组成重新对齐；插件启动时也会检查并报告 preset 挂载失败

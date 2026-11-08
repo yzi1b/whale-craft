@@ -1,11 +1,11 @@
 # src/ 模块参考
 
-> 快照：**0.2.0**（开发中，未发布）。所有模块都是纯 ESM，**除 `agentsmd.mjs → wsconfig.mjs` / `memory.mjs → protected.mjs` 外没有模块间依赖**，其余全部由 `index.js` 组装。
+> 快照：**0.2.0**（开发中，未发布）。所有模块都是纯 ESM；内部模块依赖见 §17，宿主数据根统一由官方 `@deepseek-ai/dsh-home-paths` 解析。
 > 通用规矩：任何可能永不 settle 的 await 套 `withTimeout`/`raceAbort`；日志走 `logLine()`。
 
 ---
 
-## 1. `src/core.mjs` —— McBot（mineflayer 封装，不依赖 DSH）
+## 1. `src/core.mjs` —— McBot（mineflayer 封装，不依赖 DSH 服务）
 
 **导出**：`McBot`（default 也是它）、`Vec3`、`DEFAULTS`、`TIMEOUTS`、`DEFAULT_COMMAND_WHITELIST`、`withTimeout`、`raceAbort`、`lossless`、`glyphOf`、`logLine`、`libraryInfo`、`sessionFlags`、`takeAuthJoinError`、`wrapYggdrasilServer`、`friendlyAuthError`。
 
@@ -125,7 +125,7 @@
 - `PluginConfig`：`load`（坏配置不崩、记 `lastError` 按默认跑；**顺带跑 `migrate()`**）、`set` 只认 `TOP_KEYS`（= DEFAULT_CONFIG 键）且过 `validate`、`values()` 深合并（数组整体覆盖）；语义 getter（`mcModePresets/mcPlusPresets/commandAllowed/isMcModePreset/isMcPlusPreset`…）每次现读 ⇒ **改完热生效**。
 - `migrate()`：删除废弃的 `ensureMcPreset` 与全部文件分享旧键（`expressMode` / `expressEnabled` / `expressBase` / `expressWeb*` / `expressDesktop*`，只在真改动时落盘）。
 - `legacyPromptSwitches()`：从**文件原值**里取旧版全局存过的三个提示词开关（只取显式设过且类型合法的）—— 只作工作区建档时的一次性 seed 来源（消费方 index.js → `wsconfig.migrate`）。
-- `resolveStateDir`：`WHALE_CRAFT_STATE_DIR` → `WHALE_CRAFT_DIR`+whaleDir → `$DSH_HOME/whale_craft` → `~/.dsh/whale_craft`。
+- `resolveStateDir`：`WHALE_CRAFT_STATE_DIR` → `WHALE_CRAFT_DIR`+whaleDir → 官方 `resolveDshHome()`（显式路径 / `$DSH_HOME` / `~/.dsh`）下的 `whale_craft`。`core.mjs` 的默认日志根也复用同一官方 helper，不再自行复制解析规则。
 
 ## 9. `src/accounts.mjs` —— 账户与凭据
 
@@ -256,6 +256,6 @@
 
 ## 17. 模块依赖与不变式
 
-- 模块间 import：`agentsmd.mjs → wsconfig.mjs`（版本读写）；`memory.mjs → protected.mjs`（保护判定）；`webfetch.mjs` / `webget.mjs` **不依赖任何模块**（纯文本转换 / 自带公网抓取，index.js 组装）；`tool-def.mjs` 自解析宿主包（可缺省）；index.js 组装其余；`resolver-shim.mjs` 无导出、纯副作用（index.js 首条 import，必须早于其余全部）。
+- 模块间 import：`agentsmd.mjs → wsconfig.mjs`（版本读写）；`memory.mjs → protected.mjs`（保护判定）；`core.mjs` / `config.mjs → @deepseek-ai/dsh-home-paths`（官方数据根解析）；`webfetch.mjs` / `webget.mjs` **不依赖任何模块**（纯文本转换 / 自带公网抓取，index.js 组装）；`tool-def.mjs` 自解析宿主包（可缺省）；index.js 组装其余；`resolver-shim.mjs` 无导出、纯副作用（index.js 首条 import，必须早于其余全部）。
 - 记忆根定位（index.js `memoryRootFor`）：**就是** `<会话 cwd>/.whale-craft`；没有会话工作区 → `null`（无兜底目录、无 env/config 重定向 —— 2026-10-08 删掉旧的 `WHALE_CRAFT_MEMORY_DIR` 与 `config.memoryDir`）。
 - 跨模块不变式：① 记忆路径全过 `safePath`，受保护文件（RULES/AGENTS/config.json）**可读不可写**（写类方法拒绝）；② 凭据只进宿主凭据服务，`view()`/工具返回/HTTP 永不见；③ 插件不再自建文件服务（图片/文件交付走宿主原生 `/api/file` + `present`）；④ LAN 只被动听；⑤ ping 永不 reject；⑥ 一切写给模型的注入都是"提示行"。

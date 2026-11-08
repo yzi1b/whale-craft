@@ -125,7 +125,7 @@
 ## 4. 待办 / 已知边界
 
 - 微软正版登录未实现（只有离线 / Yggdrasil）。
-- 归档保护依赖宿主内部方法（`workspaceRegistry.archiveSession`）——DSH 升级需跟进。
+- **待办（官方实现已存在，删除前须做干净安装验证）**：① `src/user-message.mjs` 的 `builtinUserMessage` → 只保留 `@deepseek-ai/dsh-llm.createUserMessage`；② `src/tool-def.mjs` 的内置编译/校验器 → 只保留 `@deepseek-ai/dsh-tools.defineTool`；③ `index.js` 的 Schemastery 动态 fallback → 只保留官方 schema。三项当初解决的是 **npm/desktop 包隔离导致宿主包解析不到**，不是旧 API 缺失；只有 registry（非 link）安装与 desktop 干净 profile 都能稳定加载这些宿主包，并且 CI 覆盖该部署形态后才能删除。删除时同步移除“无宿主等价实现”自检及 F11 对应说明。
 - online 分享模式的 `base` 不做连通性自检（填错只有用户能发现）。
 - `mc_move/mc_act/mc_build` 官方定性"不成熟"（版本硬提示词里让 AI 优先 `mc_command`）。
 - 工具描述与文档目前中文。

@@ -34,7 +34,7 @@ DSH host 进程
    │   └─ /api/mc/*                     状态/停止/设置（账户/配置/提示词/preset 名单）
    ├─ agent/pre-step 监听   提示词注入（改写 decision.messages）+ MC 模式策略对账
    ├─ presets/*.patch.yml   包内声明「MC模式」「MC+模式」两个 preset（dsh.bundle.patch 数组）
-   ├─ installArchiveGuard   包装 workspaceRegistry.archiveSession
+   ├─ archive providers     workspace/session-activity + workspace/session-stop
    └─ extensions/*.mjs      自动加载（apply(api)）
 
 浏览器
@@ -209,14 +209,14 @@ kind 变化先 release 再套新）：
 
 ## 11. 停止、归档与保护
 
-- **`stopSession` 四步顺序**（强制停止/归档共用）：停 LLM → 优雅退游戏（看门狗 disarm(notify)）→ **只杀 `ownerSession` / `owner===sessionId` 的 job**（无主的不设防，**误杀宿主任务的坑**）→ 再停一次 LLM。HTTP 的 `/api/mc/stop` 默认 `cancelTurn: true`；工具 `mc_stop` 必须 `cancelTurn: false`（否则自我 abort 卡死）。
-- **归档保护**：包装 `ctx.workspaceRegistry.archiveSession`——归档一个正在玩 MC 的会话时先踢下线 + 关看门狗 + 清后台任务再放行。⚠️ 这是**接替宿主内部方法**（不是公开扩展点），DSH 升级后可能需跟进；安装必须在 `workspaceRegistry` 就绪之后（`ctx.inject(['workspaceRegistry'], ...)`）。
+- **`stopSession` 四步顺序**（状态条“强制停止”专用）：停 LLM → 优雅退游戏（看门狗 disarm(notify)）→ **只杀 `ownerSession` / `owner===sessionId` 的 job**（无主的不设防，**误杀宿主任务的坑**）→ 再停一次 LLM。HTTP 的 `/api/mc/stop` 默认 `cancelTurn: true`；工具 `mc_stop` 必须 `cancelTurn: false`（否则自我 abort 卡死）。
+- **归档保护**：使用 DSH 0.2.2 官方接缝。`workspace/session-activity` 是 waterfall：MC 在线、重连中或看门狗挂着时，在 `await next()` 的结果前追加 `{kind:'minecraft'}`，普通归档因此拒绝；调用方选择 `archiveSession(id,{stopActivity:true})` 后，宿主先持久化归档再派发 `workspace/session-stop`，插件只关闭自己拥有的看门狗和机器人。LLM、通用 job、subagent 由各自 provider 停止；**不得再包装 `workspaceRegistry.archiveSession`**。
 
 ## 12. 落盘地图
 
 | 东西 | 位置 |
 | --- | --- |
-| 全局配置 / 账户元数据 / 日志 / 会话锁 | `$DSH_HOME/whale_craft/`（`config.json` / `accounts.json` / `logs/whale-craft.log` / `.instance.<会话>.json`） |
+| 全局配置 / 账户元数据 / 日志 / 会话锁 | `$DSH_HOME/whale_craft/`（根路径由官方 `@deepseek-ai/dsh-home-paths` 解析；`config.json` / `accounts.json` / `logs/whale-craft.log` / `.instance.<会话>.json`） |
 | 凭据（password/token） | 宿主凭据服务 `$DSH_HOME/.credentials.yaml`（key=`whale-craft/<innerID>`；**绝不降级写明文**） |
 | 记忆 / 行事准则 / 输出 | `<会话工作区>/.whale-craft/`（`README.md` / `RULES.md` / `config.json` / `.out/`） |
 | 按工作区的配置（提示词三开关 + 版本标记） | `<会话工作区>/.whale-craft/config.json`（旧版单独的 `.rules-version` 标记会迁入并删除） |
@@ -231,7 +231,7 @@ kind 变化先 release 再套新）：
 
 1. `agent/pre-step` waterfall **必须 `next()`**（不交棒 = 全崩，0.1.4 P0）。
 2. `tools.restrict` 的**黏性**语义与 disposer；`agent-preset/locked`。
-3. `workspaceRegistry.archiveSession` 内部方法（归档保护包装点）。
+3. 官方归档接缝：`workspace/session-activity` 必须 `await next()` 并组合结果；`workspace/session-stop` 只停本插件自己的活动，不越权停其它 provider。
 4. preset 体系：DSH 0.2.2 使用**声明式注册表**（`@deepseek-ai/dsh-agent-preset` 行 + `dsh.bundle.patch` **数组**；注册表不扫目录、无 copy）——两个 preset 只靠包内 `presets/*.patch.yml` 声明。**每次升宿主**都要拿 `dsh-web-app/presets/standard.patch.yml` 对照刷新 `minecraft-plus.patch.yml`（手抄无继承）；`agentPresets.list()` 的 `broken` 字段会指出挂载失败的行，插件启动日志也会报。
 5. preset persona 键名（`text` → `prefix`）；`complete` / `includeRuntimeContext` 的压制关系。
 6. `@deepseek-ai/dsh-llm` 的 `createUserMessage` 可用性（缺失时走自带兜底，但**依赖声明不能少**）。

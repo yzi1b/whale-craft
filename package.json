@@ -48,6 +48,7 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "dependencies": {
+    "@deepseek-ai/dsh-home-paths": "0.2.2-rc.1",
     "mineflayer": "^4.37.1",
     "vec3": "^0.1.7"
   },

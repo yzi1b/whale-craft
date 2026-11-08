@@ -11,7 +11,7 @@
  * ⚠️ 这里是**全局**行为配置；**按工作区**的配置（提示词版本 + 三个提示词开关）在
  *    src/wsconfig.mjs → `<记忆根>/config.json`（2026-10-03 下放，见该文件头注释）。
  * 🔴 2026-09-16 用户要求：**配置与账户不该躺在工作区里** —— 工作区是某个项目的家，
- *    插件有插件自己的家。宿主在 app-boot 里 `ctx.provide('dshHomePath', …)`，
+ *    插件有插件自己的家。根路径由官方 `@deepseek-ai/dsh-home-paths` 解析，
  *    与 `$DSH_HOME/skills`、`$DSH_HOME/.agent-presets`、`$DSH_HOME/storages`、`$DSH_HOME/attachments` 同一套规矩。
  *
  * 为什么不放在 cordis.patch.yml：那份配置要重启宿主才生效，而这里的键要**当场生效**。
@@ -21,7 +21,7 @@
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { homedir } from 'node:os'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
 /** 插件在 `$DSH_HOME` 下的目录名 */
 export const STATE_DIR_NAME = 'whale_craft'
@@ -30,23 +30,16 @@ export const STATE_DIR_NAME = 'whale_craft'
  * 解析**插件状态目录**（配置 + 账户库放这里，**不放工作区**）。
  *
  * 优先级：`WHALE_CRAFT_STATE_DIR` → （自检/隔离）`WHALE_CRAFT_DIR` →
- * 宿主给的 `dshHomePath('whale_craft')` → `$DSH_HOME/whale_craft` → `~/.dsh/whale_craft`。
- * @param {{env?: Record<string,string|undefined>, dshHomePath?: Function, whaleDir?: string, home?: string}} [opts]
+ * 官方 `resolveDshHome()`（显式路径 → `$DSH_HOME` → `~/.dsh`）下的 `whale_craft`。
+ * @param {{env?: Record<string,string|undefined>, whaleDir?: string, dshHome?: string}} [opts]
  * @returns {string} 绝对路径
  */
-export function resolveStateDir ({ env = process.env, dshHomePath, whaleDir, home } = {}) {
+export function resolveStateDir ({ env = process.env, whaleDir, dshHome } = {}) {
   const explicit = String(env.WHALE_CRAFT_STATE_DIR ?? '').trim()
   if (explicit) return explicit
   // 自检 / 隔离实例：WHALE_CRAFT_DIR 一给，所有状态都留在那个临时目录（搬迁前的行为不变）
   if (String(env.WHALE_CRAFT_DIR ?? '').trim() && whaleDir) return whaleDir
-  if (typeof dshHomePath === 'function') {
-    try {
-      const p = dshHomePath(STATE_DIR_NAME)
-      if (p) return p
-    } catch { /* 拿到不就用下面的兜底 */ }
-  }
-  const base = String(env.DSH_HOME ?? '').trim() || join(home ?? homedir(), '.dsh')
-  return join(base, STATE_DIR_NAME)
+  return join(resolveDshHome(dshHome, env), STATE_DIR_NAME)
 }
 
 /** 默认值 = 老行为（现有 mc_command 的白名单原样搬过来） */
