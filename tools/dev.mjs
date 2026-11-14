@@ -376,7 +376,7 @@ function attachWatcher (child, port, opts, runtime) {
     if (!existsSync(p)) continue
     webWatchers.push(watch(p, { recursive: true }, (event, file) => {
       const path = (file ?? '').split(sep).join('/').toLowerCase()
-      if (/\.(mjs|js|cjs)$/.test(path) && !path.includes('node_modules') && !/(^|\/)\./.test(path)) onChange(`${rel}/${path}`)
+      if (/\.(mjs|js|cjs|ts)$/.test(path) && !path.includes('node_modules') && !/(^|\/)\./.test(path)) onChange(`${rel}/${path}`)
     }))
   }
   for (const w of webWatchers) w.on('error', (e) => console.log(`[dev] watch 出错（不影响实例）：${e.message}`))

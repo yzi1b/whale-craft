@@ -7,7 +7,7 @@
 //      插件整树加载失败、主实例起不来。
 //   ② config.mjs 里两行粘成一行（`…DEFAULT_CONFIG))const SECRET_KEYS…`）→ 只有 import 到它才会炸；
 //      而当时这个脚本**只查 core.mjs**，于是它在"上主实例之前"什么都没说。
-//   → 现在：src/*.mjs + index.js + client.js + selfcheck.mjs + tools/*.mjs **全部** --check，
+//   → 现在：src/*.{mjs,ts} + index.js + client.js + selfcheck.mjs + tools/*.{mjs,ts} **全部** --check，
 //     再把"纯模块"逐个真 import 一遍（抓坏导出/循环引用这类 --check 看不出的问题）。
 import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -18,8 +18,16 @@ const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
 const core = join(root, 'src', 'core.mjs')
 
-const listOf = (dir, ext = '.mjs') => {
-  try { return readdirSync(join(root, dir)).filter((f) => f.endsWith(ext)).map((f) => `${dir}/${f}`) } catch { return [] }
+const listOf = (dir, extensions = ['.mjs', '.ts']) => {
+  const out = []
+  const visit = (relativeDir) => {
+    for (const entry of readdirSync(join(root, relativeDir), { withFileTypes: true })) {
+      const relative = `${relativeDir}/${entry.name}`
+      if (entry.isDirectory()) visit(relative)
+      else if (extensions.some((ext) => entry.name.endsWith(ext))) out.push(relative)
+    }
+  }
+  try { visit(dir); return out } catch { return [] }
 }
 /** 全部要语法检查的文件（相对包根）。
  * ⚠️ `scripts/` 只在开源副本里有（发版工具：本机发 npm / 落地工作流修复），缺失不算错 */
@@ -30,7 +38,7 @@ const TARGETS = [
   ...listOf('scripts'),
 ]
 /** 真去 import 一遍的"纯模块"（不碰网络/文件系统副作用；core.mjs 单独处理） */
-const IMPORTABLE = listOf('src').filter((f) => !f.endsWith('/core.mjs'))
+const IMPORTABLE = listOf('src').filter((f) => !f.endsWith('/core.mjs') && !f.endsWith('/types.ts'))
 
 let failed = false
 function step (name, fn) {

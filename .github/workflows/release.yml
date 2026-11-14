@@ -32,7 +32,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
 
       - name: 发布前必须全绿
-        run: node tools/check-core.mjs && node selfcheck.mjs
+        run: npm run check
 
       - name: tag 必须和 package.json 版本一致
         run: |
@@ -122,7 +122,7 @@ jobs:
             echo "::notice::npm 上已经有 whale_craft@${VERSION}，跳过（npm 不允许覆盖同版本）"
             exit 0
           fi
-          # --ignore-scripts：上面「发布前必须全绿」已经跑过 check-core + selfcheck 了，
+          # --ignore-scripts：上面「发布前必须全绿」已经跑过类型检查、构建、check-core + selfcheck 了，
           # 不加还会经 prepublishOnly 再跑一遍同一套（重复又慢）。prepublishOnly 留着，
           # 是给"裸跑 npm publish"兜底的 —— 不走这条流程的人照样拦得住坏树。
           npm publish --access public --ignore-scripts

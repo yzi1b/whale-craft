@@ -35,7 +35,7 @@
 
 ## 2. `release.yml` 行为（推 tag 后）
 
-1. 跑 `check-core` + `selfcheck`（全绿才继续）；
+1. 跑 `npm run check`：TypeScript 类型检查、`check-core`、`selfcheck`、TS 构建产物烟测（全绿才继续）；
 2. 校验 tag == `package.json.version`；
 3. `npm pack` → 解包 → 打 **zip**（不是 .tgz）；
 4. 用 `.notes.cjs` 从 `CHANGELOG.md` 提取 `## [<版本>]` 那一节当 Release 正文（**不用 `--generate-notes`**，不用 diff）；
@@ -45,9 +45,9 @@
 
 ## 3. `ci.yml` 行为（push main / dev / PR）
 
-- **check 矩阵**：ubuntu（Node 22 / 24）+ windows（Node 22）→ `npm ci` → `check-core` → `selfcheck`；
+- **check 矩阵**：ubuntu（Node 22 / 24）+ windows（Node 22）→ `npm ci` → `typecheck` → `check-core` → `selfcheck` → `build`；
 - **package job**（全绿后）：`npm pack` 核对 tarball —— 必含
-  `package.json/index.js/client.js/selfcheck.mjs/cordis.patch.yml/LICENSE/README.md/tools/check-core.mjs`；
+  `package.json/index.js/client.js/selfcheck.mjs/cordis.patch.yml/LICENSE/README.md/tools/check-core.mjs/src/types.ts/src/ts-platform.ts`；
   **不得**混进 `node_modules/`、`logs/`、`accounts.json`、`config.json`、`.whale-craft`；上传 artifact。
 
 ## 4. 落地 / 修工作流文件（workflow scope 坑）

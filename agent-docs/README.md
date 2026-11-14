@@ -28,7 +28,8 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 | `presets/*.patch.yml` | 「MC模式」「MC+模式」两个 preset 的**声明式**定义（DSH 0.2.2；经 `dsh.bundle.patch` 数组随包挂载） |
 | `client.js`（~1.8k 行） | **浏览器半端 bundle**（手写 factory，无构建步骤，HMR 热更）：状态条 / MC设置弹窗 / 新会话页 hero 入口 |
 | `src/core.mjs`（~2k 行） | `McBot`：mineflayer 封装（连接/重连/动作/观察/协议护栏）；**不依赖 DSH**，可独立测试 |
-| `src/*.mjs` | 协作模块（watchdog / memory / config / **wsconfig** / **protected** / accounts / agentsmd / **webfetch** / **webget** / image / png / lan / ping / wait / user-message / version-prompt / **resolver-shim** …），全部由 index.js 组装 |
+| `src/*.ts` | 新模块与逐步迁移后的模块；Node 24 原生执行可擦除类型语法，`tsc` 严格检查并构建到 `dist/`。共享类型见 `src/types.ts` |
+| `src/*.mjs` | 待逐步迁移的旧协作模块（watchdog / memory / config / accounts 等），仍由 index.js 组装 |
 | `tools/` | `check-core.mjs`（静态检查）、`dev.mjs`（隔离调试实例，**本机主用**）、`isolate.mjs`（老方式，需 DSH 源码 checkout） |
 | `selfcheck.mjs`（~3.5k 行） | 600+ 条离线断言：假 ctx 加载**真** `apply()`，不连 MC |
 | `scripts/` | `publish-npm.mjs`（本机手动发 npm）、`land-workflow-fix.mjs`（工作流文件落地）、`release.workflow.yml`（模板） |
@@ -57,7 +58,7 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 3. 🔴 **任何可能永不 settle 的 await 必须套 `withTimeout`/`raceAbort`**（mineflayer 的 dig/place/equip 等是等服务端 ack 的 promise）。宿主无法硬中断（"cannot hard-kill same-process code"），一个卡住的工具会让整轮 turn / 停止按钮 / 插话全部失效。
 4. 🔴 **工具必须用 `asTool()` 注册**（自动 lossless + 注入 `exec.signal`）；返回值里混进 Vec3 类实例会让宿主报 "not lossless JSON"，整条工具失败。
 5. 🔴 **唤醒/通知一律走"插件提示行"**（`userMessage()`，`source.kind='plugin'`/`form='notice'`），**不许**退回冒充用户来源的 fallback；看门狗在注入前**必须先 `interruptWait()`**（否则 `mc_events{waitSec}` 的等待会把唤醒压到等待结束才投递 —— 0.1.7 修的"等待堵住唤醒"）。
-6. 改 `src/core.mjs` / `src/config.mjs` 等大文件后**必跑** `node tools/check-core.mjs`（私有字段一致性会抓"少换行导致 class 提前结束"这类事故）；提交前 `npm run check`（check-core + selfcheck）。
+6. **新模块一律 TypeScript**；只用 Node 可原生擦除的类型语法（`erasableSyntaxOnly`）。改旧大文件后仍必跑 `check-core`；提交前跑 `npm run check`（typecheck + check-core + selfcheck + build）。
 7. 仓库统一 **LF 行尾**（`.gitattributes`）——自检里有大量按行匹配的断言，行尾漂移会红。
 8. **事件队列 `sess.events` 的唯一写入方是 `McSession.ensureWired`**；看门狗留档写自己的内存 `watchdog.log`。双写曾是 bug。
 9. 工作流文件（`.github/workflows/*`）的落地有 GitHub **workflow scope** 坑 —— 走 Contents API，别硬推（见 release.md §4）。
@@ -65,10 +66,13 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 ## 快速验证改动
 
 ```bash
-node tools/check-core.mjs     # 全树语法 + 动态 import + 私有字段一致性
-node selfcheck.mjs            # 600+ 条离线断言（不连 MC 服务器、不碰真实实例）
+npm run typecheck             # TypeScript 严格类型检查
+node tools/check-core.mjs     # 全树 JS/MJS/TS 语法 + 动态 import + 私有字段一致性
+node selfcheck.mjs            # 600+ 条离线断言（含原生加载 .ts）
+npm run build                 # TS → dist，生成声明/source map 并烟测产物
 npm run dev:web               # 起隔离调试实例验证"整树加载"（web 用 npm 全局 dsh）
-npm run check                 # = check-core + selfcheck
+npm run dev:types             # 监听类型错误；与 dev:web 分两个终端运行
+npm run check                 # = typecheck + check-core + selfcheck + build
 ```
 
 > 改完结构性内容（模块、工具、机制）后，**请同步更新本目录**。

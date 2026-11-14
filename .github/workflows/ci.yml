@@ -31,10 +31,14 @@ jobs:
           cache: npm
       - name: 装依赖（mineflayer 是插件的直接依赖，会被真拉下来）
         run: npm ci --no-audit --no-fund
+      - name: TypeScript 类型检查
+        run: npm run typecheck
       - name: 语法 + 动态 import + 私有字段一致性
         run: node tools/check-core.mjs
-      - name: 离线回归套件（280+ 断言，不需要 MC 服务器、不连网）
+      - name: 离线回归套件（600+ 断言，不需要 MC 服务器、不连网）
         run: node selfcheck.mjs
+      - name: TypeScript 构建产物
+        run: npm run build
 
   package:
     name: 打包产物
@@ -47,7 +51,7 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - name: 发布前必须全绿
-        run: node tools/check-core.mjs && node selfcheck.mjs
+        run: npm run check
       - name: npm pack
         run: npm pack
       - name: 核对 tarball 该有的都有、不该有的都没有
@@ -57,7 +61,7 @@ jobs:
           cat files.txt
           for f in package/index.js package/client.js package/selfcheck.mjs \
                    package/cordis.patch.yml package/LICENSE package/README.md \
-                   package/tools/check-core.mjs; do
+                   package/tools/check-core.mjs package/src/types.ts package/src/ts-platform.ts; do
             grep -qx "$f" files.txt || { echo "::error::tarball 缺文件：$f"; exit 1; }
           done
           if grep -qE 'node_modules|/logs/|accounts\.json|config\.json|\.whale-craft' files.txt; then

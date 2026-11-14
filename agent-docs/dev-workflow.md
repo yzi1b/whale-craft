@@ -36,11 +36,14 @@
 ## 2. 日常命令
 
 ```bash
-node tools/check-core.mjs     # ① 全树语法(node --check) ② 动态 import src 纯模块 ③ 私有字段(#x)声明/引用一致性
-node selfcheck.mjs            # 600+ 条离线断言（假 ctx 加载真 apply()；不连 MC、不碰真实实例；含"无宿主模拟"子进程）
-npm run check                 # = 上面两条
+npm run typecheck             # TS 严格检查；allowJs 只用于解析旧模块，暂不 checkJs
+node tools/check-core.mjs     # ① 全树 JS/MJS/TS 语法 ② 动态 import src 纯模块 ③ 私有字段一致性
+node selfcheck.mjs            # 600+ 条离线断言（含 Node 原生加载 .ts 与无宿主模拟）
+npm run build                 # TS → dist；声明文件 + source map + 构建产物动态 import
+npm run check                 # = typecheck + check-core + selfcheck + build
 node tools/check-standalone-import.mjs   # 干净环境回归（pack→独立目录 install→import；要联网装依赖，CI 跑）
 
+npm run dev:types             # tsc --watch；建议与 dev:web 分两个终端运行
 npm run dev:web               # 起隔离调试实例（web）——本机主用
 npm run dev:desktop           # 起隔离调试实例（desktop 壳；先完全退出日常桌面应用）
 npm run dev:link              # 把开发实例的 web profile 接到本仓库（link 安装）
@@ -48,12 +51,16 @@ npm run dev:status            # 看实例状态（link 是否接上 / pid / 端�
 npm run dev:stop              # 按 pidfile 停实例
 ```
 
+- **渐进迁移规则**：新模块一律 `.ts`；旧 `.mjs` 不要求一次搬完。TS 源码由 Node ≥24.9 原生执行，构建产物只用于校验/分发准备，不提交 `dist/`。
+- **只用可擦除语法**：禁止 `enum`、`namespace`、参数属性等需要转译才能运行的语法；`erasableSyntaxOnly` 会在类型检查时拦截。TS 内部相对导入写真实 `.ts` 后缀，构建时由 `rewriteRelativeImportExtensions` 改写为 `.js`。
+- **共享类型**：通用 JSON、坐标、游戏会话、看门狗事件与工具执行上下文先集中在 `src/types.ts`；迁移旧模块时再按领域拆分，避免先造一个巨型类型文件。
+
 - **改 `src/core.mjs` 等大文件后必跑 `check-core`**：它抓"私有方法失联"——少换行会让 V8 提前结束 class，报误导性的 `Private field must be declared…`，整树加载失败；`config.mjs` 两行粘连只有动态 import 才炸。失败 `exit 1`。
 - 提交/发版前 `npm run check` 必须全绿（CI 直接跑；`prepublishOnly` 只在绕过脚本裸跑 `npm publish` 时兜底 —— 官方两条发布路径都带 `--ignore-scripts`，不会再跑第二遍）。
 
 ## 3. `tools/dev.mjs` 细节
 
-- 子命令：`web`（默认/主用）、`desktop`、`link`、`status`、`stop`；`--watch` 附加：watch `index.js` + `src/` → 400ms 防抖重启实例（改 `client.js` 只提示——浏览器端是 HMR）。
+- 子命令：`web`（默认/主用）、`desktop`、`link`、`status`、`stop`；`--watch` 附加：watch `index.js` + `src/` 下的 JS/MJS/TS → 400ms 防抖重启实例（改 `client.js` 只提示——浏览器端是 HMR）。
 - 目录/常量：`DEV_HOME=.dev/home`、pidfile `.dev/web-instance.json`、`LINK_SPEC='link:'+仓库路径`、登记端口 39901 起（避开一组 FORBIDDEN 端口）。
 - 首次启动会 `seedDevHome`：从生产 `~/.dsh` **只拷缺失的**凭据/账户/配置进隔离 home（拷完生产不动）；`ensureRepoDeps` 会补 `npm install` 缺的 mineflayer。
 - `link` 校验是**双条件**：profile `dependencies.whale_craft === link:E:/Works/whale-craft` **且** `node_modules/whale_craft` realpath 指回仓库；Windows 上重装前要先摘旧软链（EPERM）。

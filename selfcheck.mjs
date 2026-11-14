@@ -3954,5 +3954,12 @@ if (process.env.WHALE_CRAFT_NO_HOST_SIM === '1') {
   try { rmSync(dir, { recursive: true, force: true }) } catch {}
 }
 
+console.log('\n--- TypeScript 渐进迁移平台 ---')
+{
+  const { TS_PLATFORM } = await import('./src/ts-platform.ts')
+  console.log(`  ${TS_PLATFORM.nativeTypeStripping === true ? '✅' : '❌'} Node 原生加载 .ts（开发/调试不依赖运行前转译）`)
+  console.log(`  ${TS_PLATFORM.buildOutput === 'dist' ? '✅' : '❌'} 构建产物目录固定为 dist`)
+}
+
 console.log('\n日志:', logs.slice(0, 6).join(' | ') || '(无)')
 process.exit(0)

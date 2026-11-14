@@ -110,12 +110,18 @@ dsh plugin --profile web add whale_craft@^0.2.0-beta.4
 ## 开发与自检
 
 ```bash
-node tools/check-core.mjs     # 全树语法 + 动态 import + 私有字段一致性（改 core.mjs 必跑）
-node selfcheck.mjs            # 800+ 条离线断言（假 ctx，不需要 MC 服务器、不连网）
+npm run typecheck             # 严格检查全部 TypeScript；旧 JS/MJS 暂不启用 checkJs
+npm run build                 # 编译 TS → dist（含声明文件与 source map），并加载产物烟测
+node tools/check-core.mjs     # 全树 JS/MJS/TS 语法 + 动态 import + 私有字段一致性
+node selfcheck.mjs            # 800+ 条离线断言（含 Node 原生加载 .ts；不连 MC）
+npm run check                 # 提交/发版前完整流水线：typecheck + check-core + selfcheck + build
 node tools/check-standalone-import.mjs   # 干净环境回归：pack → 独立目录 install → import 必须成功（慢，CI 跑）
-# 起一个隔离 DSH 实例验证"整树加载"（需要一份 DSH checkout）：
-DSH_ROOT=/path/to/deepseek-harness node tools/isolate.mjs start
+npm run dev:types             # 持续类型检查；另开终端运行 npm run dev:web 做隔离实例调试
 ```
+
+新模块一律使用 `.ts`。Node ≥24.9 原生执行可擦除类型语法，源码直接参与调试；禁止 `enum`、`namespace`、
+参数属性等需要生成运行时代码的 TypeScript 语法（`erasableSyntaxOnly` 会拦截）。旧 `.mjs` 按模块逐步迁移，
+共享的 JSON、坐标、会话和看门狗事件类型从 `src/types.ts` 引用。
 
 `selfcheck.mjs` 覆盖：工具面与参数、每会话实例隔离、超时/中断、放置判据（与 `minecraft-data` 真值表比对）、
 看门狗唤醒投递与 job 结算、未签名/系统位置聊天的识别、记忆树读写与路径穿越防护、**设置 HTTP 真路由与信任栅栏**、
@@ -294,12 +300,17 @@ Outside these two modes, other modes no longer expose MC-play tools (MC admin to
 ## Development and self-check
 
 ```bash
-node tools/check-core.mjs     # whole-tree syntax + dynamic import + private-field consistency
-node selfcheck.mjs            # 800+ offline assertions (fake ctx; no MC server, no network)
+npm run typecheck             # strict TypeScript check; legacy JS/MJS is not checked by checkJs yet
+npm run build                 # compile TS to dist with declarations/source maps, then smoke-test output
+node tools/check-core.mjs     # whole-tree JS/MJS/TS syntax + dynamic imports + private-field consistency
+node selfcheck.mjs            # 800+ offline assertions, including native .ts loading
+npm run check                 # complete pre-commit/release pipeline
 node tools/check-standalone-import.mjs   # clean-env regression: pack → install → import must succeed (slow; CI)
-# run an isolated DSH instance to check whole-tree loading (needs a DSH checkout):
-DSH_ROOT=/path/to/deepseek-harness node tools/isolate.mjs start
+npm run dev:types             # watch type errors; run npm run dev:web in another terminal
 ```
+
+All new modules use `.ts`. Node ≥24.9 executes erasable TypeScript directly during development; `tsc`
+provides strict checking and reproducible build artifacts. Legacy `.mjs` modules migrate incrementally.
 
 `selfcheck.mjs` covers: the tool surface and parameters, per-session instance isolation,
 timeouts/interruption, placement rules (checked against the real `minecraft-data` table), watchdog

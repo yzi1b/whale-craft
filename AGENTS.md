@@ -31,7 +31,7 @@ whale_craft 是 DSH（DeepSeek Harness）原生插件：把无头 Minecraft 机�
 3. 🔴 **任何可能永不 settle 的 await 必须套 `withTimeout`/`raceAbort`**（mineflayer 的 dig/place/equip 等要等服务端 ack）。宿主无法硬中断，一个卡住的工具会让整轮 turn 失效。
 4. 🔴 **工具必须用 `asTool()` 注册**；返回值里混进 Vec3 类实例会让宿主报 "not lossless JSON"，整条工具失败。
 5. 🔴 **唤醒/通知一律走"插件提示行"**（`source.kind='plugin'`/`form='notice'`），不许冒充用户来源；看门狗注入前必须先 `interruptWait()`。
-6. 改 `src/core.mjs` / `src/config.mjs` 等大文件后**必跑** `node tools/check-core.mjs`（会抓私有字段一致性事故）。
+6. **新模块一律使用 TypeScript**，并只用 Node 可原生擦除的类型语法；改 `src/core.mjs` / `src/config.mjs` 等旧大文件后仍必跑 `node tools/check-core.mjs`。
 7. 仓库统一 **LF 行尾**（`.gitattributes`）—— 自检里有大量按行匹配的断言，行尾漂移会红。
 
 > 完整铁律（含事件队列唯一写入方、workflow scope 坑等）见 `agent-docs/README.md`。
@@ -39,10 +39,12 @@ whale_craft 是 DSH（DeepSeek Harness）原生插件：把无头 Minecraft 机�
 ## 快速验证改动
 
 ```bash
-node tools/check-core.mjs     # 全树语法 + 动态 import + 私有字段一致性
-node selfcheck.mjs            # 600+ 条离线断言（不连 MC 服务器、不碰真实实例）
+npm run typecheck             # TypeScript 严格类型检查
+node tools/check-core.mjs     # 全树 JS/MJS/TS 语法 + 动态 import + 私有字段一致性
+node selfcheck.mjs            # 600+ 条离线断言（含原生加载 .ts）
+npm run build                 # TS → dist，生成声明/source map 并烟测
 npm run dev:web               # 起隔离调试实例验证"整树加载"（web 用 npm 全局 dsh）
-npm run check                 # = check-core + selfcheck
+npm run check                 # = typecheck + check-core + selfcheck + build
 ```
 
 ## 代码结构（顶层速览）
@@ -51,7 +53,8 @@ npm run check                 # = check-core + selfcheck
 | --- | --- |
 | `index.js` | host 半端入口：`apply()` 装配一切（会话/看门狗/33 个工具/HTTP/提示词注入/权限策略） |
 | `client.js` | 浏览器半端 bundle（手写 factory，无构建步骤，HMR 热更） |
-| `src/*.mjs` | 协作模块（core = mineflayer 封装，**不依赖 DSH**，可独立测试） |
+| `src/*.ts` | 新模块及逐步迁移后的模块；共享类型从 `src/types.ts` 起步 |
+| `src/*.mjs` | 逐步迁移中的旧协作模块（core = mineflayer 封装，**不依赖 DSH**） |
 | `presets/*.patch.yml` | 「MC模式」「MC+模式」两个 preset 的声明式定义 |
 | `selfcheck.mjs` | 600+ 条离线断言：假 ctx 加载**真** `apply()`，不连 MC |
 | `tools/` | `check-core.mjs`（静态检查）、`dev.mjs`（隔离调试实例） |
