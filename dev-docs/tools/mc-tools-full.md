@@ -4,6 +4,8 @@
 
 ## 示例
 
+> 本实例部分内容过时，支持新的写法。
+
 这是一个文档格式示例，不要在程序中实现它。
 
 ### example_tool
@@ -122,6 +124,7 @@
 **返回**
 
 - online: **boolean** 是否在线
+- gameSessionId: **string | null** 当前游戏会话 ID，为 16 字符十六进制串；尚未建立或已经彻底关闭游戏会话时为 null，自动重连期间保持不变
 - connection: **object | null** 最近一次连接信息
   - host: **string | null**
   - port: **number | null**
@@ -209,7 +212,7 @@
 
 **返回**
 
-同 `mc_status` 的在线返回对象（`online`、`connection`、`lastError`、`context`）。
+同 `mc_status` 的在线返回对象（`online`、`gameSessionId`、`connection`、`lastError`、`context`）；`gameSessionId` 是本次建立或复用的游戏会话 ID。
 
 **错误**
 
@@ -283,6 +286,7 @@ refresh 刷新某账户的登录状态，皮肤站会去认证服换新令牌。
 **返回**
 
 - online: **boolean** 固定为 false
+- gameSessionId: **string** 本次刚刚关闭的游戏会话 ID
 - quit: **object** `graceful`、`forced`、`ms`
 - watchdog: **string** `已关闭并已提醒` / `本来就没挂`
 
@@ -334,7 +338,7 @@ refresh 刷新某账户的登录状态，皮肤站会去认证服换新令牌。
 
 ## 观察
 
-### mc_context、
+### mc_context
 
 > 行为有更改，落实后删除本行。
 
@@ -537,94 +541,196 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 
 - **未在线** → `机器人不在线{{连接状态与上次错误}}`
 
-### mc_events
-
-> 临时使用，即将大幅变更。
-
-读取 / 消费当前会话的 MC 事件队列（**看门狗记下来的**：聊天、系统消息、受伤、上线 / 死亡 / 重连 / 断线）。默认消费掉；`peek=true` 只看不清。
-
-- limit: **number** 最多取几条（默认 20，上限 100）
-- kind: **string** 只看某类：chat / system / damage / lifecycle
-- peek: **boolean** true = 只看不消费
-- waitSec: **number** 先等最多几秒（默认 0 = 不等，上限 120）
-
-⚠️ **被传送 / 捡物 / 其他玩家上下线不在这个队列**（那些只在看门狗留档里，用 `mc_watch {action:"log"}` 看）。
-
-⚠️ `waitSec` 是**兜底**，别长时间空等：有人叫你（mention）/ 受击 / 死亡 / 断线时**看门狗会主动叫醒你并打断这个等待**。真需要盯某类事件时才给 waitSec（建议 ≤30）。
-
-**返回**
-
-- waitedMs: **number** 实际等待毫秒数
-- count: **number** 返回事件数
-- events: **array<object>** 原始事件对象
-- interrupted: **boolean** 仅被看门狗唤醒打断时出现并为 true
-- interruptReason: **string | null** 仅被打断时出现
-- hint: **string** 仅被打断时出现
-
 ## 看门狗控制
 
-### mc_watch
+看门狗随游戏会话自动启动，并在游戏会话彻底断开后销毁，不另设启动、停止工具。
 
-> 临时使用，即将大幅变更。
+### mc_watchdog_info
 
-看门狗控制（**唯一**的事件通知通道）。看门狗在**进服时自动挂载、退服时自动卸载**，整局游戏期间持续运行：记录所有事件，命中唤醒条件就在**同一个对话里**提醒你——你空闲时开新一轮；你正在跑时在下一步插话（不打断）。
+查询看门狗的可用事件列表，或某一事件事实、事件修饰的详细说明。可以获得触发条件、配置结构。
 
-- action: **string** status（默认）/ arm / disarm / log
-- reason: **string** disarm 时的原因（会写进日志）
+**参数**
 
-唤醒条件 / 近距半径 / 心跳 / 观察窗口等一律用 `mc_config` 调（有默认值）。
-
-**返回**
-
-1. `action` 为 status（以及未识别的 action）：
-
-- armed: **boolean**
-- jobId: **string | null**
-- startedAt / lastWakeAt: **number | null** 时间戳
-- uptimeSec / pending: **number**
-- lastWakeKind: **string | null**
-- stats: **object**
-- config: **object** 当前配置副本
-
-2. `action` 为 arm：同 status，并追加 `note`。
-3. `action` 为 disarm：同 status，并追加 `reason`；原本已关闭时还含 `alreadyOff:true`。
-4. `action` 为 log：
-
-- armed: **boolean**
-- stats: **object**
-- recent: **array<object>** 最近 30 条原始留档
-
-**错误**
-
-- **拿不到会话** → `拿不到当前会话（exec.agent 不可用），看门狗必须绑定会话`
-- 未知 action → `未知 action："{{action}}"（可用 status/arm/disarm/log）`
-
-### mc_config
-
-> 临时使用，即将大幅变更。
-
-读写本会话的 MC 配置（看门狗唤醒条件、近距半径、心跳间隔、观察窗口、叫法等）。不传参数 = 看当前配置 + 默认值。
-
-- patch: **object** 要改的配置项（浅合并）；不传 = 只读
-- reset: **boolean** true = 恢复默认配置
-
-嵌套项用**点号键**，如 `{"wakeOn.itemPickup":true,"nearRadius":24,"mentionPatterns":["ds","用户"]}`。叫法是**配置不是硬编码**——学到玩家的新称呼就加进 mentionPatterns。
+- name?：(undefined | string | string[]) 要查询的注册名。不传此参则为可用事件列表（全面概述）。传入字符串或其数组可以查询一个或多个。只查询事件事实（如 `message.chat`），只会获得其修饰列表而非详情来节省上下文。要查询事件修饰，则使用“事实名/修饰名”，如 `message.chat/mention`。特别地，可以使用“事实名/*”，如 `message.chat/*` 同时获取事件事实和全部事件修饰的详情。
 
 **返回**
 
-1. `reset:true`：
-
-- reset: **boolean** true
-- config: **object** 恢复后的配置
-
-2. 其他情况（包括只读和更新）：
-
-- config: **object** 当前配置
-- defaults: **object** 默认配置副本
+返回 Markdown 文本，格式见 [`events.md`](../watchdog/events.md#如何生成提示词)。
 
 **错误**
 
-- 未知配置项 → `未知配置项：{{key}}（可用：{{可用键列表}}）`
+- `查询语法错误：{{错误的元素}}`
+- `该事件或修饰不存在：{{不存在的元素}}`
+
+### mc_watchdog_global_settings
+
+编辑看门狗全局配置，几个固定的配置项。
+
+> 见 [`watchdog.md`](../watchdog/watchdog.md#全局看门狗配置)。每个字段可在此传入。不传则不修改。参数 schema 应当正确写入工具概述。
+
+**参数**
+
+- minInterval?: **number** 两次提醒的最小间隔，单位毫秒，必须大于等于 5_000。
+- interruptLevel?: **"never" | "llm" | "toolCall"** 提醒时允许打断到什么阶段。
+- minInterruptInterval?: **number** 两次主动打断的最小间隔，单位毫秒，必须大于等于 10_000。
+
+三个参数都不传时只读取，不修改。
+
+**返回**
+
+- ok: **true**
+- changed: **string[]** 本次实际修改的字段名；只读取时为空数组
+- global: **object** 修改后的完整全局配置，含 `minInterval`、`interruptLevel`、`minInterruptInterval`
+
+**错误**
+
+- `{{字段名}} 字段不存在`
+- `{{字段名}} 不接受值 {{值}}`
+
+### mc_watchdog_config
+
+编辑、读取和导入、导出看门狗的基础、场景配置，也可以读取合并三层配置（包括所有注意配置）后的最终生效配置。
+
+**参数-编辑**
+
+- action: ("edit") 编辑指定的配置项，或导入场景配置。
+- type: ("base" | "scene") 编辑基础还是场景配置。
+- config?: (object) 填入的配置正文。键为事件注册名或 `事件名/修饰名`，如 `message.chat` 或 `message.chat/player`，值为配置对象或 null。场景配置中的 null 表示删除该层覆盖；基础配置中的 null 表示恢复该项的内置默认值。此字段和 file 字段必须有且仅有一个填写。
+- file?: (string) 要导入的配置文件路径。后缀必须是 `.scene.wcwc.json`，且 type 必须为 "scene"。
+- merge?: (boolean) 仅用于场景配置。为 true 时把输入覆盖到原配置并保留未提及项；为 false 时先清空原场景配置，再应用输入。默认为 true。
+
+**参数-读取**
+
+- action: ("read") 读取指定的配置项，或导出场景配置。
+- type?: ("base" | "scene" | "effective") 读取基础层、场景层还是最终生效配置。默认值为 "scene"；"effective" 只读。
+- items: (string[]) 要获取的配置项注册名数组。传入空数组时选中该层全部配置项。
+- reply / dist: `dist` 仅支持场景配置；写出时自动补充 `wcwc`、`type` 元数据，文件后缀名必须是 `.scene.wcwc.json`。基础配置与最终生效配置不得导出。
+
+**返回**
+
+1. action 为 "edit"：
+
+- ok: **true**
+- type: **"base" | "scene"** 实际编辑的配置层
+- source: **"config" | "file"** 本次输入来源
+- merge: **boolean** 是否按合并方式编辑；基础配置固定为 true
+- changed: **string[]** 新增或修改的配置项注册名
+- removed: **string[]** 删除覆盖或恢复默认值的配置项注册名
+- config: **object** 编辑后该层的完整原始配置，不包含其他层合并结果
+
+2. action 为 "read"：
+
+- type: **"base" | "scene" | "effective"** 实际读取的配置层；"effective" 表示基础、场景及全部注意配置合并后的结果
+- itemCount: **number** 选中的配置项数量
+- config: **object** 选中的配置正文；`reply` 为 false 时省略
+
+写出文件时，按 [reply-dist](#reply-dist) 的约定在结果末尾报告路径与大小。
+
+**错误**
+
+- action 不是 "edit" / "read" → `action 参数无效`
+- edit 缺少 type，或 config / file 未恰好填写一个 → 对应参数错误
+- 基础配置使用 file，或基础 / 最终生效配置使用 dist → 对应配置不得导入导出
+- scene 导入文件后缀、`wcwc` 版本或 `type` 不符 → 对应文件格式错误
+- 配置项、修饰名或配置字段不存在 → 对应注册名或字段错误
+- 配置值类型、范围不符合事件定义 → 对应字段校验错误
+
+### mc_watchdog_focus
+
+列出、编辑（导入）、读取（导出）、清除看门狗注意配置。
+
+**参数-列出**
+
+- action: ("list") 列出每个注意项的名称和配置项数，以及敏感情况。
+
+**参数-编辑**
+
+- action: ("edit") 编辑、导入一个注意配置，或新建一个。
+- name: (string) 注意配置活动名称，可用小写字母、下划线、数字。不存在时将新建，存在时将编辑。
+- config?: (object) 填入的配置正文。键为事件注册名或 `事件名/修饰名`，值为配置对象或 null（清除本配置项）。此字段和 file 字段必须有且仅有一个填写。
+- file?: (string) 要导入的配置文件路径。后缀必须是 `.focus.wcwc.json`。
+- merge?: (boolean) 如果为 true，则覆盖新值并保留未提及项；否则先清除原有注意配置再应用新值。该注意配置原先不存在时此值无效。默认为 true。
+- sensitive?: (boolean) 为 true 则更敏感，为 false 则更钝感。导入时始终以文件内容为准；使用 config 编辑时，不填写则保留原值，新建时不填写会报错。
+
+**参数-读取**
+
+- action: ("read") 读取、导出一个注意配置。
+- name: (string) 注意配置名称。
+- items: (string[]) 要获取的配置项注册名数组。传入空数组则选中全部配置项，即导出完整配置。
+- reply / dist: 写出时自动补充 `wcwc`、`type`、`sensitive` 元数据，文件后缀名必须是 `.focus.wcwc.json`。
+
+**参数-移除**
+
+- action: ("remove")
+- names: (string | string[]) 要移除的注意配置名称或名称数组。如果是字符串且为 `*`，则清除全部。
+
+**返回**
+
+1. action 为 "list"：
+
+- focuses: **array<object>** 当前生效的注意配置；每项含 `name`、`sensitive`、`itemCount`
+
+2. action 为 "edit"：
+
+- ok: **true**
+- name: **string** 注意配置名称
+- created: **boolean** 是否为本次新建
+- source: **"config" | "file"** 本次输入来源
+- merge: **boolean** 是否按合并方式编辑
+- sensitive: **boolean** 编辑后的敏感性
+- changed: **string[]** 新增或修改的配置项注册名
+- removed: **string[]** 删除的配置项注册名
+- config: **object** 编辑后的完整注意配置正文
+
+3. action 为 "read"：
+
+- name: **string** 注意配置名称
+- sensitive: **boolean** 是否为敏感配置
+- itemCount: **number** 选中的配置项数量
+- config: **object** 选中的配置正文；`reply` 为 false 时省略
+
+写出文件时，按 [reply-dist](#reply-dist) 的约定在结果末尾报告路径与大小。
+
+4. action 为 "remove"：
+
+- removed: **string[]** 实际移除的注意配置名称
+- missing: **string[]** 请求移除但原本不存在的名称；使用 "*" 时为空数组
+- remainingCount: **number** 移除后仍生效的注意配置数量
+
+**错误**
+
+- action 不是 "list" / "edit" / "read" / "remove" → `action 参数无效`
+- name 不符合小写字母、数字、下划线规则 → `注意配置名称不合法`
+- edit 的 config / file 未恰好填写一个 → 对应参数错误
+- 新建注意配置但没有 sensitive → `新建注意配置时必须指定 sensitive`
+- read 的名称不存在 → `注意配置不存在：{{name}}`
+- 导入文件后缀、`wcwc` 版本或 `type` 不符 → 对应文件格式错误
+- 配置项、修饰名、字段值不符合事件定义 → 对应配置校验错误
+
+### mc_watchdog_queue
+
+查询队列中的事件或事件数量，可以消费队列以清除较早的元素以免堆积。
+
+**参数**
+
+- count?: (integer) 从头取指定数量的事件，大于事件总数则取完。若为 0，则只返回数量且不消费任何事件。若小于 0，则取全部。默认值为 -1。
+- consume?: (boolean) 是否消费，即从队列中清除本次取出的事件。默认值为 true。
+- reply / dist: 文件类型 .jsonl。只有队列正文会进入文件，数量固定进入上下文。指定已存在的文件会在末尾追加。可以设置 `reply:false` 且不填写 dist 来专门消费、清除队列而不把正文送进上下文或文件。
+
+**返回**
+
+- queueCountBeforeConsume: (number) 队列中的事件总数，按消费前的算。【之所以叫这个名，是怕 llm 理解错误。】
+- selectedCount: (number) 本次按 count 选中的事件数量
+- consumedCount: (number) 本次实际从队列移除的事件数量；consume 为 false 时是 0
+- queueCountAfterConsume: (number) 操作完成后的剩余事件数量
+- events: (object[]) 处理后的事件数组，从旧到新；reply 为 false 时省略。每项含 `time`、`name`、`content`、`modifiers`
+
+写出文件时，每行写一个处理后的事件对象，并按 [reply-dist](#reply-dist) 的约定在结果末尾报告路径与大小。
+
+**错误**
+
+- 当前没有游戏会话或事件队列 → `当前没有可读取的看门狗事件队列`
+- count 不是整数 → `count 必须是整数`
 
 ## 交互与动作
 
