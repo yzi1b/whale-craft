@@ -27,10 +27,10 @@
   - 已在线且同 sub+host → 直接返回；并发 connecting → 等同一个 promise；
   - 顶号（`already connected|already logged` 且建连 <9s）最多重试 4 次 × 3.5s；失败**保留原连接**；
   - yggdrasil 才设 `sessionServer`；`fakeHost: sub` 过 HAProxy 子服路由；等 spawn 超时 `connectTimeoutMs`（45s）。
-- **重连**：延迟 5s 起、失败翻倍上限 60s、成功复位；`reconnecting` 只覆盖两次尝试间窗口，`reconnectPending` 覆盖**整个断线期**（直到真重连成功/手动 connect 成功）。
+- **重连**：网络断开后固定等待 1s，最多尝试 3 次；被踢、认证失败不重连。`reconnecting` 覆盖等待与尝试，`reconnectPending` 覆盖**整个断线期**（直到真重连成功/尝试耗尽）。
 - **`offline` 事件**（`b.on('end')` 里 emit）：`{sub, reason: lastError ?? '连接结束', willReconnect, at}`；`willReconnect = autoReconnect && bot===b && !stopped`。**断线必须进上层队列**（0.1.7 修）。
 - `disconnect(reason)`：停重连/观察器 → `quit()` 宽限 3s（计时器故意不 unref）→ 没走掉才强断；返回 `{graceful,forced,ms}`。`authOnly()`：只认证不连接（账户 refresh 用）。
-- **事件清单**：`spawn {sub,position,gamemode}`、`offline`、`reconnect {sub}`、`death {position}`、`damage {health,position}`（health≤6）、`chat {who,text}`（不含自己；1.5s 同人同文去重）、`system {text}`、观察器 `playerJoin/playerLeave {who}`、`teleport`（>24 格/秒）、`pushed`（≥2 格且非自移）、`pickup {items}`、`log`。
+- **事件清单**：`spawn {sub,position,gamemode}`、`offline`、`reconnect {sub}`、`death {position}`、`damage {damage,type,source,health,position}`（每次实际掉血；1.20+ 从 `damage_event`/动态注册表解析类型）、`chat {who,text}`、`system {text}`、观察器 `playerJoin/playerLeave {who}`、`teleport`、`pushed`、`pickup`、`log`。
   - ⚠️ **core 没有 `heartbeat` 事件** —— 心跳是看门狗配置项，靠 `stats.lastEventAt` 判。
 - **聊天识别**（`wireChatEvents`/`#playerChatFrom`）：`player_chat` 包（签名）直接处理；`message` 事件里 `position==='chat'` 跳过防重复；`game_info` 必 system；其余先试玩家聊天判据（`chat.type.text` / `chat.type.team.*` / `commands.message.display.incoming` / 兜底渲染形状正则 `<who> text`）——覆盖"被服务端塞进 system 位置的玩家聊天"。
 - **按键上报兼容层（`player_input`，为 26.2 加的）已于 2026-10-02 整体移除**：上游还连不了 26.2（mineflayer 4.39.0 的 testedVersions 只到 26.1；minecraft-data 3.117.0 只有元数据、无数据目录），半吊子支持先撤。将来重建**必须**沿用"先查后发"护栏——教训见 [history.md](history.md)（protodef 对未知包名不报错，写出 `02 00 00` 会被服务端当 `accept_teleportation` → 秒踢）。
@@ -243,7 +243,7 @@
 - `defineTool(options)`：`toolDefKind()==='host'` 时用宿主的 defineTool（本机 CLI/源码安装行为完全不变）；解析不到用 `builtinDefineTool`。
 - 内置 compiler：`parameters`（属性表 DSL）→ JSON Schema，**key 顺序与宿主逐字一致**（标量 `{type,注解,enum,const}`；object `{type,注解,additionalProperties,properties(声明了才有),required(非空才有)}`；`type:'json'` → 仅注解无 type；属性 `required:true` 收进**父级** required）；`timeoutMs` 透传；oneOf / 未声明 additionalProperties 的 object / presenter 类选项 → **明确抛错**（防静默走样，自检会当场红）。
 - 内置 validator：宿主 `validateJsonSchemaValue` 的子集，违规文案/路径逐字对齐（`"arguments" must be an object` 等）；违规抛 `BuiltinToolArgsError`（name=`ToolArgsError`、code=`INVALID_ARGS`）。⚠️ 它不是宿主 `HarnessError` 子类（拿不到宿主类）——宿主显示层会退化成通用错误，文案保持一致（任务书认可的退化）。
-- 自检：段 A 直接与宿主编译器对拍；段 B 用 `tools/no-host-init.mjs`（module.register 解析钩子）屏蔽两个包，子进程**整树自检** + 33 个工具注册形状**逐字比对**。CI 另有 `tools/check-standalone-import.mjs`（干净安装 import 回归；改回静态 import 必红）。
+- 自检：段 A 直接与宿主编译器对拍；段 B 用 `tools/no-host-init.mjs`（module.register 解析钩子）屏蔽两个包，子进程**整树自检** + 38 个工具注册形状**逐字比对**。CI 另有 `tools/check-standalone-import.mjs`（干净安装 import 回归；改回静态 import 必红）。
 
 ## 16b. `src/resolver-shim.mjs` —— 宿主解析器兜底（绕过 DSH rc.2 的 bug；2026-10-06）
 

@@ -29,7 +29,7 @@ DSH host 进程
    ├─ McRegistry            agentId → McSession
    │   └─ McSession         McBot + events[]（≤200 条）+ Watchdog + selectedAccount
    │       └─ McBot         src/core.mjs：mineflayer 实例（一个游戏角色）
-   ├─ 工具注册（33 个）      mc_* 26 / mc_kit_* 4 / mc_admin_* 1 / mc_debug_* 2，全部经 asTool()
+   ├─ 工具注册（38 个）      mc_* 31 / mc_kit_* 4 / mc_admin_* 1 / mc_debug_* 2，全部经 asTool()
    ├─ HTTP（webServer）
    │   └─ /api/mc/*                     状态/停止/设置（账户/配置/提示词/preset 名单）
    ├─ agent/pre-step 监听   提示词注入（改写 decision.messages）+ MC 模式策略对账
@@ -67,7 +67,7 @@ DSH host 进程
 详见 [src-modules.md §1](src-modules.md)。要点：
 
 - `connect({host, port, auth, onAuth})`：`auth` 是唯一凭据入口（`{mode:'offline'|'yggdrasil',...}`，绝不出现在返回值）；**版本永远自动探测**，版本不受支持则**建连期间快速失败 + 明确错误**（`src/mcversion.mjs`；`error`/`end` 快速失败，不干等超时）；**顶号**（"already connected"且建连 <9s）最多重试 4 次；失败**保留原连接**。（2026-10-05：`subserver`/`version` 参数已删）
-- 自动重连：延迟 5s 起、失败翻倍上限 60s、成功复位；`offline` 事件在 `b.on('end')` 里 emit，payload `{sub, reason, willReconnect, at}`。
+- 自动重连：只对网络断开执行，固定等待 1s、最多 3 次；被踢/认证失败直接结束游戏会话。`offline` payload 为 `{sub, reason, willReconnect, at}`。
 - 事件：`spawn / offline / reconnect / death / damage / chat / system` + 观察器 `playerJoin / playerLeave / teleport / pushed / pickup`（后三类默认只留档，见看门狗矩阵）。`chat` 的识别覆盖 signed（`player_chat` 包）、unsigned、**以及被服务端塞进 system 位置的玩家聊天**（`#playerChatFrom` 兜底正则 `/^\s*<who>\s*text$/`）。
 - **按键上报层已移除（2026-10-02）**：原先为 26.2 加的 `player_input` 兼容层（含"先查后发"护栏）整体撤掉——上游还连不了 26.2（mineflayer 4.39.0 只到 26.1；minecraft-data 3.117.0 只有元数据、无数据目录）。将来重建的注意事项见 [history.md](history.md)（D1 / F10）。
 - 不变量：所有可能永不 settle 的 await 经 `#t()`（`withTimeout`+`raceAbort` 包裹）——超时/中断会松掉全部控制位；`placeBlock`/`breakBlock` **必须复验 `blockAt` 才报成功**（报假成功是历史教训）。

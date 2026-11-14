@@ -1,4 +1,4 @@
-# 工具目录（33 个）
+# 工具目录（38 个）
 
 > 快照：**0.2.0**（开发中，未发布）。注册全部在 `index.js` 的 `apply()` 内（`ctx.tools.register(asTool({...}))`），
 > 分四段：`mc_*`（游戏内，26）/ `mc_kit_*`（游戏外辅助，4）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
@@ -48,12 +48,17 @@
 | `mc_inventory` | 背包 | `held` 与 `items[]` 均为 `{name,count,slot?}` |
 | `mc_events` | 事件队列（拉） | `limit ≤100`、`waitSec ≤120`（阻塞等新事件，**只是兜底**）；被看门狗唤醒打断时返回 `interrupted:true` + `interruptReason` + "先别再 wait"提示；内部 `timeoutMs` 130s。⚠️ 被传送/捡物/上下线**不在这个队列**（只进看门狗留档） |
 
-## 三、看门狗控制（2）
+## 三、看门狗控制（7）
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
 | `mc_watch` | 唤醒通道的唯一控制面 | `action: status / arm / disarm / log`；`log` 返回 `{armed, stats, recent: 留档末 30 条}`；未知 action 明确抛错，不再静默退回 status。进服默认自动 arm |
 | `mc_config` | 改看门狗参数 | `patch`（点号键如 `wakeOn.pushed`）/ `reset`；响应附 `WATCH_DEFAULTS`。**只能改本会话的看门狗**，全局配置在 `mc_admin_config` |
+| `mc_watchdog_info` | 新版事件目录 | 总览或按 `事实名/修饰名` 查询；支持 `事实名/*` |
+| `mc_watchdog_global_settings` | 全局提醒配置 | 持久化 `minInterval` / `interruptLevel` / `minInterruptInterval` |
+| `mc_watchdog_config` | 三层配置 | 编辑/读取 base、scene、effective；base 落 `$DSH_HOME/whale_craft/watchdog.json` |
+| `mc_watchdog_focus` | 注意配置 | 会话内 list/edit/read/remove；支持敏感/钝感合并 |
+| `mc_watchdog_queue` | 结构化事件队列 | 与游戏会话同寿命；读取时本地化时间并精简重复修饰 |
 
 ## 四、交互与动作（8）
 

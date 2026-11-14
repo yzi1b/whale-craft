@@ -142,10 +142,11 @@ export class Watchdog {
    * @param {object} o.agent  当前会话的 agent（注入消息用）
    * @param {Function} o.onFire 事件回调钩子（用于同步到 sess.events）
    */
-  constructor ({ ctx, sess, agent, promptSignal = null, tickMs = 1000 }) {
+  constructor ({ ctx, sess, agent, promptSignal = null, tickMs = 1000, modern = false }) {
     this.ctx = ctx
     this.sess = sess
     this.agent = agent
+    this.modern = modern === true
     /** tick 周期：生产固定 1000ms；自检可调小，避免每条注入都真等 1 秒。 */
     this.tickMs = Number.isFinite(Number(tickMs)) && Number(tickMs) > 0 ? Number(tickMs) : 1000
     /**
@@ -229,6 +230,34 @@ export class Watchdog {
       stats: { ...this.stats },
       config: clone(this.config),
     }
+  }
+
+  /** 新版结构化事件引擎的统一提醒入口。 */
+  notifyEvent (event, pendingCount = 1, global = {}) {
+    const now = Date.now()
+    const minInterval = Math.max(5_000, Number(global.minInterval ?? 10_000))
+    const due = Math.max(now, Number(this._modernLastNotifyAt ?? 0) + minInterval)
+    if (due > now) {
+      if (this._modernPendingNotice) this._modernPendingNotice.count += pendingCount
+      else this._modernPendingNotice = { event, count: pendingCount }
+      if (!this._modernNotifyTimer) {
+        this._modernNotifyTimer = setTimeout(() => {
+          this._modernNotifyTimer = null
+          const pending = this._modernPendingNotice
+          this._modernPendingNotice = null
+          if (pending && this.armed) this.#sendModernEvent(pending.event, pending.count)
+        }, due - now)
+        this._modernNotifyTimer.unref?.()
+      }
+      return
+    }
+    this.#sendModernEvent(event, pendingCount)
+  }
+
+  #sendModernEvent (event, pendingCount) {
+    const extra = pendingCount > 1 ? `；另有 ${pendingCount - 1} 个事件一并到达` : ''
+    this.#inject(`【MC 看门狗｜${event.name}】${JSON.stringify(event.content)}${extra}\n请读取 mc_watchdog_queue 检查完整事件队列。`, event.name)
+    this._modernLastNotifyAt = Date.now()
   }
 
   /* ─────────────── 叫法判定 ─────────────── */
@@ -331,6 +360,8 @@ export class Watchdog {
     if (!this.armed) return
     this.armed = false
     if (this.tickTimer) { clearInterval(this.tickTimer); this.tickTimer = null }
+    if (this._modernNotifyTimer) { clearTimeout(this._modernNotifyTimer); this._modernNotifyTimer = null }
+    this._modernPendingNotice = null
     this.#unbind()
     this.pending = []
     this.pendingSince = 0
@@ -416,6 +447,10 @@ export class Watchdog {
      */
     on('offline', (e) => {
       const reason = String(e?.reason ?? '连接结束')
+      if (this.modern) {
+        if (!e?.willReconnect) { try { this.disarm(`连接断开：${reason}`) } catch {} }
+        return
+      }
       if (e?.willReconnect) {
         if (!this.config.wakeOn.disconnect) return
         this.#fire(['disconnect'], {
@@ -429,6 +464,7 @@ export class Watchdog {
     })
 
     on('chat', ({ who, text }) => {
+      if (this.modern) return
       const called = this.calledBy(text)
       const near = this.#isNearby(who)
       // 同话题延续：唤醒后 topicWindowSec 内的发言直接算延续
@@ -448,30 +484,37 @@ export class Watchdog {
     })
 
     on('damage', (e) => {
+      if (this.modern) return
       if (!this.config.wakeOn.damage) return
       this.#fire(['damage'], { kind: 'damage', text: `血量降到 ${e.health}` })
     })
     on('death', () => {
+      if (this.modern) return
       if (!this.config.wakeOn.death) return
       this.#fire(['death'], { kind: 'death', text: '我死了' })
     })
     on('teleport', (e) => {
+      if (this.modern) return
       if (!this.config.wakeOn.teleport) return
       this.#fire(['teleport'], { kind: 'teleport', text: `位置瞬移 ${e.distance} 格：${JSON.stringify(e.from)} → ${JSON.stringify(e.to)}` })
     })
     on('pushed', (e) => {
+      if (this.modern) return
       if (!this.config.wakeOn.pushed) return
       this.#fire(['pushed'], { kind: 'pushed', text: `被动移动 ${e.distance} 格` })
     })
     on('pickup', (e) => {
+      if (this.modern) return
       if (!this.config.wakeOn.itemPickup) return
       this.#fire(['itemPickup'], { kind: 'pickup', text: `捡到 ${e.items.join(', ')}` })
     })
     on('playerJoin', (e) => {
+      if (this.modern) return
       if (!this.config.wakeOn.playerJoin) return
       this.#fire(['playerJoin'], { kind: 'playerJoin', text: `${e.who} 上线了` })
     })
     on('playerLeave', (e) => {
+      if (this.modern) return
       if (!this.config.wakeOn.playerLeave) return
       this.#fire(['playerLeave'], { kind: 'playerLeave', text: `${e.who} 下线了` })
     })
@@ -508,6 +551,8 @@ export class Watchdog {
   #tick () {
     if (!this.armed) return
     const now = Date.now()
+    try { this.sess?.watchdogEngine?.tick(Boolean(this.sess?.bot?.online)) } catch (e) { this.#record('lifecycle', `新版事件引擎 tick 出错：${e?.message ?? e}`) }
+    if (this.modern) return
 
     // 观察窗口到期 → 结算成一次唤醒
     if (this.pending.length && this.pendingSince && (now - this.pendingSince) >= this.config.observeWindowMs) {

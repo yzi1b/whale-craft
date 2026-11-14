@@ -172,7 +172,7 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   const idx = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
   console.log(`  ${!tools.has('mc_kit_share') ? '✅' : '❌'} 🔴 mc_kit_share 已移除（它只是在调宿主**另装**的 dsh-file-host，插件本身没有文件服务器）`)
   console.log(`  ${!tools.has('mc_kit_express') ? '✅' : '❌'} 🔴 mc_kit_express 已移除（文件分享整体撤下，图片走回复内嵌）`)
-  console.log(`  ${tools.size === 33 ? '✅' : '❌'} 工具数 33（实际 ${tools.size}）：mc_* 26 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 2`)
+  console.log(`  ${tools.size === 38 ? '✅' : '❌'} 工具数 38（实际 ${tools.size}）：mc_* 31 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 2`)
   // 只看**代码**，不看注释：注释里留着"为什么删"的说明（那是要留的）
   const codeOnly = idx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
   console.log(`  ${!/uploadToFileHost|dsh-file-host|\/serve\/file-host/.test(codeOnly) ? '✅' : '❌'} 源码里没有上传/文件服务器残留（注释里保留"为什么删"的说明）`)
@@ -3959,6 +3959,40 @@ console.log('\n--- TypeScript 渐进迁移平台 ---')
   const { TS_PLATFORM } = await import('./src/ts-platform.ts')
   console.log(`  ${TS_PLATFORM.nativeTypeStripping === true ? '✅' : '❌'} Node 原生加载 .ts（开发/调试不依赖运行前转译）`)
   console.log(`  ${TS_PLATFORM.buildOutput === 'dist' ? '✅' : '❌'} 构建产物目录固定为 dist`)
+}
+
+console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
+{
+  const { GameSessionState, GAME_SESSION_ID_PATTERN } = await import('./src/game-session.ts')
+  const { WatchdogEngine } = await import('./src/watchdog-engine.ts')
+  const { cloneWatchdogDefaults } = await import('./src/watchdog-catalog.ts')
+  const game = new GameSessionState(100)
+  console.log(`  ${GAME_SESSION_ID_PATTERN.test(game.id) && game.active ? '✅' : '❌'} 游戏会话 ID 为 16 位 hex，创建后 active`)
+  game.end('自检', 200)
+  console.log(`  ${!game.active && game.endedAt === 200 && game.endReason === '自检' ? '✅' : '❌'} 游戏会话结束幂等记录时间与原因`)
+
+  let now = 1_000
+  const wakes = []
+  const engine = new WatchdogEngine(cloneWatchdogDefaults(), (event, count) => wakes.push({ event, count }), () => now)
+  const first = engine.observe('self.damage', { damage: 1, type: 'minecraft:in_fire', source: null, health: 19, position: null })
+  now += 100
+  const repeated = engine.observe('self.damage', { damage: 2, type: 'minecraft:in_fire', source: null, health: 17, position: null })
+  now += 4_100
+  const nextRound = engine.observe('self.damage', { damage: 3, type: 'minecraft:in_fire', source: null, health: 14, position: null })
+  console.log(`  ${first.modifiers['type.once']?.count === -1 && !repeated.modifiers['type.once'] ? '✅' : '❌'} type.once 首次命中，连续伤害不重复命中`)
+  console.log(`  ${nextRound.modifiers['type.once']?.count === 2 && nextRound.modifiers['type.once']?.damageSum === 3 ? '✅' : '❌'} 静默 4s 后新一轮携带上一轮 count/damageSum`)
+  console.log(`  ${wakes.length === 2 ? '✅' : '❌'} 两轮持续伤害只提醒两次（实际 ${wakes.length}）`)
+
+  const exactConfig = cloneWatchdogDefaults()
+  exactConfig['self.damage'].modifiers.type.types = ['minecraft:player_attack']
+  const exact = new WatchdogEngine(exactConfig, undefined, () => now)
+    .observe('self.damage', { damage: 4, type: 'minecraft:player_attack', source: 'Tester', health: 10, position: null })
+  console.log(`  ${exact.modifiers.type?.type === 'minecraft:player_attack' && !exact.modifiers['type.once'] ? '✅' : '❌'} type 命中优先，type.once 不重复命中`)
+
+  const system = engine.observe('message.system', { content: 'Tester joined the game' })
+  console.log(`  ${system.modifiers.playerConnection?.player === 'Tester' ? '✅' : '❌'} 系统消息识别玩家连接修饰`)
+  const read = engine.read(2, true)
+  console.log(`  ${read.selectedCount === 2 && read.consumedCount === 2 && read.queueCountAfterConsume === engine.queue.length ? '✅' : '❌'} 结构化队列按数量读取并消费`)
 }
 
 console.log('\n日志:', logs.slice(0, 6).join(' | ') || '(无)')

@@ -424,7 +424,9 @@ export class McBot extends EventEmitter {
     this.connectedAt = 0
     this.lastError = null
     this.autoReconnect = true
-    this.reconnectDelay = 5000
+    this.reconnectDelay = 1000
+    this.reconnectAttempts = 0
+    this.maxReconnectAttempts = 3
     this.reconnecting = false
     /** 断线期（从掉线一直置到**真重连成功**）：前端据此显示"重连中…"，见 end 处理里的说明 */
     this.reconnectPending = false
@@ -706,6 +708,23 @@ export class McBot extends EventEmitter {
         },
       })
       b._createdAt = Date.now()
+      let lastHealth = null
+      let pendingDamage = null
+      const damageTypes = new Map()
+
+      // 1.20.5+ 的伤害类型注册表是动态下发的；按 entry 顺序建立协议 id → 注册名映射。
+      b._client.on('registry_data', (packet) => {
+        if (String(packet?.id ?? '').replace(/^minecraft:/, '') !== 'damage_type' || !Array.isArray(packet?.entries)) return
+        packet.entries.forEach((entry, index) => damageTypes.set(index, entry?.key ?? null))
+      })
+      b._client.on('damage_event', (packet) => {
+        if (packet?.entityId !== b.entity?.id) return
+        const sourceEntity = b.entities?.[Number(packet.sourceCauseId) - 1] ?? b.entities?.[Number(packet.sourceDirectId) - 1] ?? null
+        pendingDamage = {
+          type: damageTypes.get(Number(packet.sourceTypeId)) ?? damageTypes.get(Number(packet.sourceTypeId) - 1) ?? null,
+          source: sourceEntity?.username ?? sourceEntity?.displayName ?? sourceEntity?.name ?? sourceEntity?.type ?? null,
+        }
+      })
 
       let dupe = false
       b.on('error', (e) => { this.#reportError(e) })
@@ -732,7 +751,19 @@ export class McBot extends EventEmitter {
       })
       b.on('death', () => { this.stats.deaths++; this.emit('death', { position: this.position }) })
       b.on('health', () => {
-        if (b.health !== undefined && b.health <= 6) this.emit('damage', { health: b.health, position: this.position })
+        const health = Number(b.health)
+        if (!Number.isFinite(health)) return
+        if (lastHealth !== null && health < lastHealth) {
+          this.emit('damage', {
+            damage: lastHealth - health,
+            type: pendingDamage?.type ?? null,
+            source: pendingDamage?.source ?? null,
+            health,
+            position: this.position,
+          })
+        }
+        lastHealth = health
+        pendingDamage = null
       })
       this.wireChatEvents(b)
 
@@ -799,6 +830,7 @@ export class McBot extends EventEmitter {
       this.connectedAt = Date.now()
       this.stats.connects++
       this.autoReconnect = true
+      this.reconnectAttempts = 0
       this.reconnectPending = false      // 进来了就算"断线期"结束（手动 mc_connect 也算）
       this.startObserver()
       this.writeLock()
@@ -816,19 +848,27 @@ export class McBot extends EventEmitter {
 
   #scheduleReconnect (sub) {
     if (this.reconnecting || this.stopped) return
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this.autoReconnect = false
+      this.reconnectPending = false
+      this.emit('offline', { sub, reason: `自动重连 ${this.maxReconnectAttempts} 次均失败`, willReconnect: false, at: Date.now() })
+      return
+    }
     this.reconnecting = true
-    this.log(`断线，${this.reconnectDelay / 1000}s 后重连 ${sub}`)
+    const attempt = ++this.reconnectAttempts
+    this.log(`断线，${this.reconnectDelay / 1000}s 后重连 ${sub}（${attempt}/${this.maxReconnectAttempts}）`)
     setTimeout(async () => {
-      this.reconnecting = false
       try {
         await this.connect(sub)
-        this.reconnectDelay = 5000
+        this.reconnecting = false
+        this.reconnectDelay = 1000
+        this.reconnectAttempts = 0
         // 真回来了才算"断线期"结束（前端/状态据此从"重连中…"切回"在游戏中"）
         this.reconnectPending = false
         this.emit('reconnect', { sub })
       } catch (e) {
+        this.reconnecting = false
         this.log('重连失败：' + e.message)
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
         this.#scheduleReconnect(sub)
       }
     }, this.reconnectDelay).unref?.()

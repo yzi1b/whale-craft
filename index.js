@@ -51,6 +51,10 @@ import { isVersionSupported } from './src/mcversion.mjs'
 import { ServerHistory } from './src/serverhistory.mjs'
 import { buildConnectPrompt } from './src/connect-prompt.mjs'
 import { waitForEvents } from './src/wait.mjs'
+import { GameSessionState } from './src/game-session.ts'
+import { WatchdogEngine } from './src/watchdog-engine.ts'
+import { WatchdogConfigStore, editWatchdogLayer } from './src/watchdog-config.ts'
+import { eventCatalogMarkdown, cloneWatchdogDefaults } from './src/watchdog-catalog.ts'
 
 export const name = 'whale_craft'
 export const inject = ['webServer', 'tools', 'profileContext', 'agentPresets']
@@ -201,6 +205,10 @@ class McSession {
     this.events = []                // 未消费的 MC 事件
     this.maxEvents = 200
     this.watchdog = null            // 看门狗（Watchdog 实例，进服自动挂载）
+    this.gameSession = null         // 成功进服后建立；可重连期间保持同一个 ID
+    this.watchdogEngine = null      // 新版结构化事件队列（与游戏会话同寿命）
+    this.watchdogScene = {}
+    this.watchdogFocuses = new Map()
     this.selectedAccount = null     // 本会话选定的账户 innerID（mc_accounts{action:"use"}）
     // 「正在等待」被打断的标记（看门狗要唤醒 AI 时置位）——见 src/wait.mjs 的文件头说明：
     // 宿主把 steer 放在下一个 step 边界投递，而 step 边界要等当前工具返回 ⇒
@@ -227,15 +235,37 @@ class McSession {
     const self = this
 
     this.bot.on('log', (line) => pluginCtx.logger?.info?.(`[${self.agentId}] ${line}`))
-    this.bot.on('spawn', (e) => self.#pushEvent('lifecycle', `已上线 ${e.sub} @ ${JSON.stringify(e.position)}`))
-    this.bot.on('death', (e) => self.#pushEvent('lifecycle', `我死了 @ ${JSON.stringify(e.position)}`))
+    this.bot.on('spawn', (e) => {
+      self.#pushEvent('lifecycle', `已上线 ${e.sub} @ ${JSON.stringify(e.position)}`)
+      self.observeWatchdog('connection.spawn', { sub: e.sub ?? '', gameMode: e.gamemode ?? '', position: e.position ?? null, isReconnect: true })
+    })
+    this.bot.on('death', (e) => {
+      self.#pushEvent('lifecycle', `我死了 @ ${JSON.stringify(e.position)}`)
+      self.observeWatchdog('self.death', { message: '我死了', position: e.position ?? null, allowRespawn: true })
+    })
     this.bot.on('reconnect', (e) => self.#pushEvent('lifecycle', `已重连 ${e.sub}`))
     // 🔴 断线也要进事件队列（2026-09-19）：`mc_events` 里看得见，AI 才不会以为"一直在线"。
-    this.bot.on('offline', (e) => self.#pushEvent('lifecycle',
-      `连接断开：${e?.reason ?? '连接结束'}${e?.willReconnect ? '（正在自动重连）' : '（不会自动重连）'}`))
-    this.bot.on('chat', ({ who, text }) => self.#pushEvent('chat', `<${who}> ${text}`, { who }))
-    this.bot.on('system', ({ text }) => self.#pushEvent('system', text))
-    this.bot.on('damage', (e) => self.#pushEvent('damage', `血量降到 ${e.health} @ ${JSON.stringify(e.position)}`))
+    this.bot.on('offline', (e) => {
+      self.#pushEvent('lifecycle', `连接断开：${e?.reason ?? '连接结束'}${e?.willReconnect ? '（正在自动重连）' : '（不会自动重连）'}`)
+      self.observeWatchdog('connection.disconnect', { sub: self.bot.sub ?? '', reason: String(e?.reason ?? '连接结束'), willReconnect: Boolean(e?.willReconnect), at: Number(e?.at ?? Date.now()) })
+      if (!e?.willReconnect) self.gameSession?.end(String(e?.reason ?? '连接结束'))
+    })
+    this.bot.on('chat', ({ who, text }) => {
+      self.#pushEvent('chat', `<${who}> ${text}`, { who })
+      const raw = self.bot.bot
+      const me = raw?.entity?.position
+      const them = raw?.players?.[who]?.entity?.position
+      const distance = me && them ? Math.hypot(me.x - them.x, me.y - them.y, me.z - them.z) : null
+      self.observeWatchdog('message.chat', { player: { name: who, uuid: raw?.players?.[who]?.uuid ?? null }, isSystem: false, type: null, content: text }, { distance, onlineCount: Object.keys(raw?.players ?? {}).length })
+    })
+    this.bot.on('system', ({ text }) => { self.#pushEvent('system', text); self.observeWatchdog('message.system', { content: text }) })
+    this.bot.on('damage', (e) => {
+      self.#pushEvent('damage', `血量降到 ${e.health} @ ${JSON.stringify(e.position)}`)
+      self.observeWatchdog('self.damage', { damage: Number(e.damage ?? 0), type: e.type ?? null, source: e.source ?? null, health: Number(e.health), position: e.position ?? null })
+    })
+    this.bot.on('teleport', (e) => self.observeWatchdog('self.teleport', e))
+    this.bot.on('pushed', (e) => self.observeWatchdog('self.pushed', e))
+    this.bot.on('pickup', (e) => self.observeWatchdog('self.pickup', e))
   }
 
   /* ── 清理 ── */
@@ -265,12 +295,17 @@ class McSession {
     return taken
   }
 
+  observeWatchdog(name, content, context = {}) {
+    try { return this.watchdogEngine?.observe(name, content, context) ?? null } catch { return null }
+  }
+
   /* ── 模式 ── */
 
   modeView() {
     return {
       mode: this.mode,
       online: this.bot.online,
+      gameSessionId: this.gameSession?.active ? this.gameSession.id : null,
       // 断了但还要重连（含"正在尝试连接"那段，最长 45s）：前端要能显示"重连中"，AI 也别以为还能操作角色
       reconnecting: Boolean(this.bot.reconnecting || this.bot.reconnectPending),
       sub: this.bot.sub,
@@ -374,7 +409,7 @@ function ensureWatchdog (ctx, sess, agent, promptSignal = null, gate = null) {
   if (!sess.watchdog) {
     // 注意：看门狗**不**往 sess.events 写（唯一写入方是 McSession.ensureWired）——
     // 两边都写会让同一句话进队列两遍。
-    sess.watchdog = new Watchdog({ ctx, sess, agent, promptSignal })
+    sess.watchdog = new Watchdog({ ctx, sess, agent, promptSignal, modern: true })
   } else {
     if (agent) sess.watchdog.agent = agent
     if (promptSignal) sess.watchdog.promptSignal = promptSignal
@@ -401,6 +436,7 @@ export function apply(ctx, rawConfig) {
    * ------------------------------------------------------------------------ */
   const stateDir = resolveStateDir({ whaleDir: process.env.WHALE_CRAFT_DIR })
   registry.lockDir = stateDir      // 会话锁文件也放插件自己的家（别写进插件包目录）
+  const watchdogConfigStore = new WatchdogConfigStore(stateDir)
 
   /* ── 记忆 / 提示词：挂在**会话工作区**下，不再假设"插件装在工作区里" ──────────────
    * 抽取成标准插件后，包可能装在 `node_modules/` 或任意目录，**不能**再用 `__dirname/..` 推工作区。
@@ -741,6 +777,8 @@ export function apply(ctx, rawConfig) {
         out.quit = await sess.bot.disconnect(reason)
         out.kicked = true
       } catch (e) { out.quitError = String(e?.message ?? e) }
+      sess.gameSession?.end(reason)
+      sess.watchdogEngine = null
       sess.mode = 'standby'
       out.order.push('quit-game')
     }
@@ -1588,12 +1626,29 @@ export function apply(ctx, rawConfig) {
     const s = sess.bot.status()
     const base = {
       online: s.online,
+      gameSessionId: sess.gameSession?.active ? sess.gameSession.id : null,
       connection: s.connection,        // { host, port, version }
       lastError: s.lastError ?? null,
       ...(s.reconnecting ? { reconnecting: true } : {}),
       ...(s.ghost ? { ghost: true, hint: s.hint } : {}),
     }
     return s.online ? { ...base, context: sess.bot.context({ survival: false }) } : base
+  }
+
+  const refreshWatchdogConfig = (sess) => {
+    const effective = watchdogConfigStore.effective(sess.watchdogScene, sess.watchdogFocuses)
+    sess.watchdogEngine?.setConfig(effective)
+    return effective
+  }
+
+  const flattenEffectiveWatchdogConfig = (config) => {
+    const out = {}
+    for (const [name, fact] of Object.entries(config)) {
+      const { modifiers = {}, ...fields } = fact
+      out[name] = fields
+      for (const [modifier, value] of Object.entries(modifiers)) out[`${name}/${modifier}`] = value
+    }
+    return out
   }
 
   /* ── 状态与开关 ── */
@@ -1698,6 +1753,14 @@ export function apply(ctx, rawConfig) {
       if (wd.config.autoArm && !wd.armed) {
         try { wd.arm() } catch (e) { ctx.logger?.warn?.(`[whale_craft] 看门狗自动挂载失败：${e.message}`) }
       }
+      if (!sess.gameSession?.active) sess.gameSession = new GameSessionState()
+      sess.watchdogEngine = new WatchdogEngine(
+        watchdogConfigStore.effective(sess.watchdogScene, sess.watchdogFocuses),
+        (event, count) => wd.notifyEvent?.(event, count, watchdogConfigStore.global),
+      )
+      sess.observeWatchdog('connection.spawn', {
+        sub: sess.bot.sub ?? '', gameMode: sess.bot.bot?.game?.gameMode ?? '', position: sess.bot.position ?? null, isReconnect: false,
+      })
       // 连接完成 → 返回 mc_status 的内容（用户 2026-10-05 定）
       return mcStatusPayload(sess)
     },
@@ -1790,12 +1853,15 @@ export function apply(ctx, rawConfig) {
     async execute(args, exec) {
       const sess = getSession(exec)
       const why = args.reason ? String(args.reason) : 'agent 主动下线'
+      const gameSessionId = sess.gameSession?.id ?? null
       // 退服自动关看门狗 + 提醒（用户要求：退出游戏会提醒 AI）
       let watchOff = null
       if (sess.watchdog) { try { watchOff = sess.watchdog.disarm(`下线：${why}`, { notify: true }) } catch {} }
       const quit = await sess.bot.disconnect(why)      // 优雅优先，走不掉才强断
+      sess.gameSession?.end(why)
+      sess.watchdogEngine = null
       sess.mode = 'standby'
-      return { online: false, quit, watchdog: watchOff ? '已关闭并已提醒' : '本来就没挂' }
+      return { online: false, gameSessionId, quit, watchdog: watchOff ? '已关闭并已提醒' : '本来就没挂' }
     },
   }))
 
@@ -1868,6 +1934,131 @@ export function apply(ctx, rawConfig) {
       }
       if (Object.keys(patch).length) wd.updateConfig(patch)
       return { config: wd.config, defaults: clone(WATCH_DEFAULTS) }
+    },
+  }))
+
+  ctx.tools.register(asTool({
+    name: 'mc_watchdog_info',
+    description: '查询新版看门狗可用事件，或事件事实/修饰的配置结构。修饰使用“事实名/修饰名”，`事实名/*` 获取全部。',
+    parameters: {
+      name: { type: 'json', description: '注册名、注册名数组；不传返回总览' },
+    },
+    output: text(),
+    async execute(args) { return eventCatalogMarkdown(args.name) },
+  }))
+
+  ctx.tools.register(asTool({
+    name: 'mc_watchdog_global_settings',
+    description: '读取或编辑看门狗全局提醒间隔与打断等级。不传参数只读。',
+    parameters: {
+      minInterval: { type: 'number', description: '两次提醒最小间隔，≥5000ms' },
+      interruptLevel: { type: 'string', description: 'never / llm / toolCall' },
+      minInterruptInterval: { type: 'number', description: '两次主动打断最小间隔，≥10000ms' },
+    },
+    output: text(),
+    async execute(args) { return watchdogConfigStore.editGlobal(args) },
+  }))
+
+  ctx.tools.register(asTool({
+    name: 'mc_watchdog_config',
+    description: '编辑或读取看门狗 base / scene / effective 配置。配置键为事件注册名或“事实名/修饰名”。',
+    parameters: {
+      action: { type: 'string', required: true, description: 'edit / read' },
+      type: { type: 'string', description: 'base / scene / effective' },
+      config: { type: 'object', additionalProperties: true, description: 'edit 时的配置正文' },
+      merge: { type: 'boolean', description: 'scene 是否保留未提及项，默认 true' },
+      items: { type: 'array', items: { type: 'string' }, description: 'read 时筛选的注册名；空数组=全部' },
+    },
+    output: text(),
+    async execute(args, exec) {
+      const sess = getSession(exec)
+      const action = String(args.action)
+      const type = String(args.type ?? 'scene')
+      if (action === 'edit') {
+        if (!['base', 'scene'].includes(type)) throw new Error('edit 的 type 必须是 base 或 scene')
+        if (!args.config || typeof args.config !== 'object' || Array.isArray(args.config)) throw new Error('edit 必须提供 config 对象')
+        const result = type === 'base'
+          ? watchdogConfigStore.editBase(args.config)
+          : (() => {
+              const changed = editWatchdogLayer(sess.watchdogScene, args.config, args.merge !== false)
+              return { ...changed, config: JSON.parse(JSON.stringify(sess.watchdogScene)) }
+            })()
+        refreshWatchdogConfig(sess)
+        return { ok: true, type, source: 'config', merge: type === 'base' ? true : args.merge !== false, ...result }
+      }
+      if (action !== 'read') throw new Error('action 参数无效')
+      if (!['base', 'scene', 'effective'].includes(type)) throw new Error('read 的 type 必须是 base、scene 或 effective')
+      const raw = type === 'base' ? watchdogConfigStore.base : type === 'scene' ? sess.watchdogScene : flattenEffectiveWatchdogConfig(refreshWatchdogConfig(sess))
+      const items = Array.isArray(args.items) ? args.items.map(String) : []
+      const selected = items.length ? Object.fromEntries(items.filter((item) => Object.hasOwn(raw, item)).map((item) => [item, raw[item]])) : raw
+      return { type, itemCount: Object.keys(selected).length, config: selected }
+    },
+  }))
+
+  ctx.tools.register(asTool({
+    name: 'mc_watchdog_focus',
+    description: '列出、编辑、读取或移除当前游戏会话的注意配置。名称只允许小写字母、数字和下划线。',
+    parameters: {
+      action: { type: 'string', required: true, description: 'list / edit / read / remove' },
+      name: { type: 'string', description: '注意配置名称' },
+      names: { type: 'json', description: 'remove 的名称、名称数组或 *' },
+      config: { type: 'object', additionalProperties: true, description: 'edit 的配置正文' },
+      merge: { type: 'boolean', description: '是否保留未提及项，默认 true' },
+      sensitive: { type: 'boolean', description: '敏感=true，钝感=false' },
+      items: { type: 'array', items: { type: 'string' }, description: 'read 时筛选项' },
+    },
+    output: text(),
+    async execute(args, exec) {
+      const sess = getSession(exec)
+      const action = String(args.action)
+      if (action === 'list') return { focuses: [...sess.watchdogFocuses].map(([name, value]) => ({ name, sensitive: value.sensitive, itemCount: Object.keys(value.config).length })) }
+      if (action === 'edit') {
+        const name = String(args.name ?? '')
+        if (!/^[a-z][a-z0-9_]*$/.test(name)) throw new Error('注意配置名称不合法')
+        const previous = sess.watchdogFocuses.get(name)
+        if (!previous && typeof args.sensitive !== 'boolean') throw new Error('新建注意配置时必须指定 sensitive')
+        if (!args.config || typeof args.config !== 'object' || Array.isArray(args.config)) throw new Error('edit 必须提供 config 对象')
+        const focus = previous ?? { sensitive: args.sensitive, config: {} }
+        const changes = editWatchdogLayer(focus.config, args.config, args.merge !== false)
+        if (typeof args.sensitive === 'boolean') focus.sensitive = args.sensitive
+        sess.watchdogFocuses.set(name, focus)
+        refreshWatchdogConfig(sess)
+        return { ok: true, name, created: !previous, source: 'config', merge: args.merge !== false, sensitive: focus.sensitive, ...changes, config: focus.config }
+      }
+      if (action === 'read') {
+        const name = String(args.name ?? '')
+        const focus = sess.watchdogFocuses.get(name)
+        if (!focus) throw new Error(`注意配置不存在：${name}`)
+        const items = Array.isArray(args.items) ? args.items.map(String) : []
+        const config = items.length ? Object.fromEntries(items.filter((item) => Object.hasOwn(focus.config, item)).map((item) => [item, focus.config[item]])) : focus.config
+        return { name, sensitive: focus.sensitive, itemCount: Object.keys(config).length, config }
+      }
+      if (action === 'remove') {
+        const requested = args.names === '*' ? [...sess.watchdogFocuses.keys()] : (Array.isArray(args.names) ? args.names : [args.names]).filter(Boolean).map(String)
+        const removed = []; const missing = []
+        for (const name of requested) (sess.watchdogFocuses.delete(name) ? removed : missing).push(name)
+        refreshWatchdogConfig(sess)
+        return { removed, missing: args.names === '*' ? [] : missing, remainingCount: sess.watchdogFocuses.size }
+      }
+      throw new Error('action 参数无效')
+    },
+  }))
+
+  ctx.tools.register(asTool({
+    name: 'mc_watchdog_queue',
+    description: '读取或消费当前游戏会话的结构化看门狗事件队列。count=0 只看数量，负数取全部。',
+    parameters: {
+      count: { type: 'number', description: '整数；默认 -1=全部，0=只看数量' },
+      consume: { type: 'boolean', description: '是否消费，默认 true' },
+      reply: { type: 'boolean', description: '是否返回事件正文，默认 true' },
+    },
+    output: text(),
+    async execute(args, exec) {
+      const sess = getSession(exec)
+      if (!sess.gameSession?.active || !sess.watchdogEngine) throw new Error('当前没有可读取的看门狗事件队列')
+      const result = sess.watchdogEngine.read(Number(args.count ?? -1), args.consume !== false)
+      if (args.reply === false) delete result.events
+      return result
     },
   }))
 

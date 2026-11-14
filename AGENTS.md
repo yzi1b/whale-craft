@@ -51,7 +51,7 @@ npm run check                 # = typecheck + check-core + selfcheck + build
 
 | 位置 | 角色 |
 | --- | --- |
-| `index.js` | host 半端入口：`apply()` 装配一切（会话/看门狗/33 个工具/HTTP/提示词注入/权限策略） |
+| `index.js` | host 半端入口：`apply()` 装配一切（会话/看门狗/38 个工具/HTTP/提示词注入/权限策略） |
 | `client.js` | 浏览器半端 bundle（手写 factory，无构建步骤，HMR 热更） |
 | `src/*.ts` | 新模块及逐步迁移后的模块；共享类型从 `src/types.ts` 起步 |
 | `src/*.mjs` | 逐步迁移中的旧协作模块（core = mineflayer 封装，**不依赖 DSH**） |
