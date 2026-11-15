@@ -3603,6 +3603,9 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
     ['UI 无"当前来源 / 默认版"之类', !/当前来源|默认版/.test(code)],
     ['提示词那页就叫「提示词」（不写"行事准则"）', /label: '提示词'/.test(code) && !/行事准则/.test(code)],
     ['停止按钮不泄露后端实现细节', !/先停 LLM/.test(code)],
+    ['状态条使用轻量背景而非偏亮 overlay', /\[data-mc-status\][\s\S]{0,260}interactive-bg-hover/.test(code) && !/\[data-mc-status\][\s\S]{0,260}background:var\(--dsw-alias-bg-overlay/.test(code)],
+    ['停止区 28×28、零内边距且与文字之间有分隔线', /\[data-mc-btn\]\[data-mc-stop\]\{width:28px;height:28px;flex:0 0 28px;padding:0;[\s\S]{0,140}border-left:1px/.test(code)],
+    ['停止 hover 使用轻微红底而非实心危险色', /\[data-mc-btn\]\[data-mc-danger\]\[data-mc-stop\]:hover\{background:rgba\(239,68,68,\.12\);color:var\(--dsw-alias-state-error-primary\);\}/.test(code)],
     // 🔴 用户 2026-09-16："状态条是不是只显示'在游戏中'？应该显示服务器地址，太长则截断。"
     // 🔴 2026-10-05：不再有 subserver（用户只填一个 address）——只显示 host[:port]
     ['状态条显示服务器地址（host[:port]）', /function mcAddress\(state\)/.test(code) && /conn\?\.host/.test(code) && !/subserver/.test(code)],

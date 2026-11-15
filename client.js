@@ -83,15 +83,16 @@ window.__ModuleLoader__.load({
     let clientCtx = null
 
     const CSS = `
-[data-mc-status]{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 6px 0 10px;
-  border-radius:999px;background:var(--dsw-alias-bg-overlay);
+[data-mc-status]{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 0 0 10px;overflow:hidden;
+  border-radius:999px;background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.08));
   color:var(--dsw-alias-label-primary);font-size:12px;line-height:1;white-space:nowrap;
-  box-shadow:var(--dsw-elevation-panel,0 1px 2px rgba(0,0,0,.12));}
+  box-shadow:none;}
 [data-mc-status][data-mc-busy]{opacity:.6;pointer-events:none;}
 [data-mc-dot]{width:7px;height:7px;border-radius:999px;background:var(--dsw-alias-state-success-primary);flex:none;}
 [data-mc-dot][data-mc-warn]{background:var(--dsw-alias-state-warn-primary,#eab308);}
 [data-mc-dot][data-mc-error]{background:var(--dsw-alias-state-error-primary,#ef4444);}
-[data-mc-btn][data-mc-stop]{width:22px;padding:0;}
+[data-mc-btn][data-mc-stop]{width:28px;height:28px;flex:0 0 28px;padding:0;
+  border-left:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.24));border-radius:0 999px 999px 0;}
 [data-mc-stop-square]{display:block;flex:none;width:9px;height:9px;background:currentColor;border-radius:1px;}
 [data-mc-text]{color:var(--dsw-alias-label-secondary);}
 [data-mc-sub]{color:var(--dsw-alias-label-tertiary);max-width:24ch;overflow:hidden;text-overflow:ellipsis;}
@@ -101,6 +102,7 @@ window.__ModuleLoader__.load({
 [data-mc-btn]:hover{background:var(--dsw-alias-border-inverted);color:var(--dsw-alias-label-primary);}
 [data-mc-btn][data-mc-danger]{color:var(--dsw-alias-state-error-primary);}
 [data-mc-btn][data-mc-danger]:hover{background:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-label-primary-foreground,#fff);}
+[data-mc-btn][data-mc-danger][data-mc-stop]:hover{background:rgba(239,68,68,.12);color:var(--dsw-alias-state-error-primary);}
 
 /* ── 「MC设置」按钮：普通次级按钮（**不**照搬状态条药丸外形）──────────────────
    只由 React 插槽渲染（标题条），**没有任何 DOM 注入**。 */
