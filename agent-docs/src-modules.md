@@ -52,7 +52,7 @@
 - 构造 `{ctx, sess, agent, promptSignal, tickMs}`（promptSignal **必传**，`sessionController.prompt` 是 @Remote；`tickMs` 生产默认 1000，自检传小值避免每条注入真等 1 秒）。
 - `arm()` 幂等：`learnName(sess.bot.username)`（**从登录档案现学游戏名**，不写进源码——防私人名字随开源副本泄露）→ 绑 bot 事件 → `#startJob()`（宿主 jobs，`kind:'mc-watch'`，`owner:agent`；无 jobs 服务降级"无 job 模式"）→ `setInterval(#tick, tickMs)`。
 - `disarm(reason, {notify, fromJob})`：先 teardown，再把 job 结算（**幂等**，只结算一次；`readOutput` = 留档末 30 条）；`notify` 时注入"你已经不在 MC 里了…"。自动关闭时机：offline 且不重连 / `mc_disconnect{notify}` / stopSession / 会话 destroy / 宿主 kill job（`fromJob:true`）。
-- **唤醒矩阵**（`wakeOn`，`mc_config` 可改）：
+- **旧唤醒矩阵**（`wakeOn`）：仅供 `Watchdog` 的非 modern 兼容分支；生产由 `ensureWatchdog(... modern:true)` 跳过这些事件判断，对外配置统一走 `src/watchdog-catalog.ts` / `mc_watchdog_config`。
 
 | 项 | 默认 | 判定 | 文案要点 |
 | --- | --- | --- | --- |
@@ -243,7 +243,7 @@
 - `defineTool(options)`：`toolDefKind()==='host'` 时用宿主的 defineTool（本机 CLI/源码安装行为完全不变）；解析不到用 `builtinDefineTool`。
 - 内置 compiler：`parameters`（属性表 DSL）→ JSON Schema，**key 顺序与宿主逐字一致**（标量 `{type,注解,enum,const}`；object `{type,注解,additionalProperties,properties(声明了才有),required(非空才有)}`；`type:'json'` → 仅注解无 type；属性 `required:true` 收进**父级** required）；`timeoutMs` 透传；oneOf / 未声明 additionalProperties 的 object / presenter 类选项 → **明确抛错**（防静默走样，自检会当场红）。
 - 内置 validator：宿主 `validateJsonSchemaValue` 的子集，违规文案/路径逐字对齐（`"arguments" must be an object` 等）；违规抛 `BuiltinToolArgsError`（name=`ToolArgsError`、code=`INVALID_ARGS`）。⚠️ 它不是宿主 `HarnessError` 子类（拿不到宿主类）——宿主显示层会退化成通用错误，文案保持一致（任务书认可的退化）。
-- 自检：段 A 直接与宿主编译器对拍；段 B 用 `tools/no-host-init.mjs`（module.register 解析钩子）屏蔽两个包，子进程**整树自检** + 38 个工具注册形状**逐字比对**。CI 另有 `tools/check-standalone-import.mjs`（干净安装 import 回归；改回静态 import 必红）。
+- 自检：段 A 直接与宿主编译器对拍；段 B 用 `tools/no-host-init.mjs`（module.register 解析钩子）屏蔽两个包，子进程**整树自检** + 37 个工具注册形状**逐字比对**。CI 另有 `tools/check-standalone-import.mjs`（干净安装 import 回归；改回静态 import 必红）。
 
 ## 16b. `src/resolver-shim.mjs` —— 宿主解析器兜底（绕过 DSH rc.2 的 bug；2026-10-06）
 

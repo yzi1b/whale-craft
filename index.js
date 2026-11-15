@@ -32,7 +32,7 @@ import { resolve, sep, join, isAbsolute, dirname, basename, relative } from 'nod
 import { McBot, lossless, logLine, libraryInfo } from './src/core.mjs'
 import { defineTool, toolDefKind } from './src/tool-def.mjs'
 import { versionPromptText, versionPromptTitle, versionPromptSource } from './src/version-prompt.mjs'
-import { Watchdog, WATCH_DEFAULTS } from './src/watchdog.mjs'
+import { Watchdog } from './src/watchdog.mjs'
 import { MemoryStore } from './src/memory.mjs'
 import { PluginConfig, DEFAULT_CONFIG, resolveStateDir } from './src/config.mjs'
 import { renderFetchText, WEB_FETCH_MAX_OUTPUT_CHARS } from './src/webfetch.mjs'
@@ -173,7 +173,7 @@ try { z = (await import('@deepseek-ai/schemastery')).default ?? null } catch { /
  * 🔴 2026-09-16 用户投诉："为什么这台服务器上会有那种叫法的记忆？你暴露了些什么东西出去了！"
  *    根因就是这里**曾经把私人的账号名/昵称写成了默认值**——那串名字跟着代码进了**公开的开源副本**。
  *    默认值只留**通用叫法**；具体账号名由插件在连接成功后**从登录档案里现学**
- *    （见 `Watchdog.learnName`），外号用 `mc_config {patch:{mentionPatterns:[…]}}` 加
+ *    （见 `Watchdog.learnName`）；可配置叫法由新版看门狗的 `message.chat/mention.keywords` 管理
  *    —— **代码里永不再出现私人名字**。
  */
 export const DEFAULT_MENTIONS = [
@@ -1883,8 +1883,8 @@ export function apply(ctx, rawConfig) {
     description: '看门狗控制（**唯一**的事件通知通道）。看门狗在**进服时自动挂载、退服时自动卸载**，'
       + '整局游戏期间持续运行：记录所有事件，命中唤醒条件就在**同一个对话里**提醒你——'
       + '你空闲时开新一轮；你正在跑时在下一步插话（不打断）。'
-      + 'action="status"（默认）看状态与配置；"arm" 手动挂载；"disarm" 关闭；"log" 看最近事件留档。'
-      + '唤醒条件/近距半径/心跳/观察窗口等一律用 mc_config 调（有默认值）。',
+      + 'action="status"（默认）看运行状态；"arm" 手动挂载；"disarm" 关闭；"log" 看最近事件留档。'
+      + '事件配置请用 mc_watchdog_config，提醒间隔请用 mc_watchdog_global_settings。',
     parameters: {
       action: { type: 'string', description: 'status（默认）/ arm / disarm / log' },
       reason: { type: 'string', description: 'disarm 时的原因（会写进日志）' },
@@ -1905,46 +1905,22 @@ export function apply(ctx, rawConfig) {
   }))
 
   ctx.tools.register(asTool({
-    name: 'mc_config',
-    description: '读写本会话的 MC 配置（看门狗唤醒条件、近距半径、心跳间隔、观察窗口、叫法等）。'
-      + '不传参数 = 看当前配置 + 默认值。改配置传 patch；嵌套项用点号键，'
-      + '如 {"wakeOn.itemPickup":true,"nearRadius":24,"mentionPatterns":["ds","用户"]}。'
-      + '叫法是**配置不是硬编码**——学到玩家的新称呼就加进 mentionPatterns。',
-    parameters: {
-      patch: { type: 'object', additionalProperties: true, description: '要改的配置项（浅合并）；不传=只读' },
-      reset: { type: 'boolean', description: 'true=恢复默认配置' },
-    },
-    output: text(),
-    async execute(args, exec) {
-      const sess = getSession(exec)
-      const wd = ensureWatchdog(ctx, sess, exec?.agent, promptAbort.signal, watchdogGate(sess))
-      const clone = (v) => JSON.parse(JSON.stringify(v))
-      if (args.reset) {
-        wd.config = clone(WATCH_DEFAULTS)
-        return { reset: true, config: wd.config }
-      }
-      // 把 "wakeOn.itemPickup": true 这种点号键拆成嵌套补丁
-      const patch = {}
-      for (const [k, v] of Object.entries(args.patch ?? {})) {
-        const dot = k.indexOf('.')
-        if (dot > 0) {
-          const head = k.slice(0, dot)
-          patch[head] = { ...(patch[head] ?? {}), [k.slice(dot + 1)]: v }
-        } else patch[k] = v
-      }
-      if (Object.keys(patch).length) wd.updateConfig(patch)
-      return { config: wd.config, defaults: clone(WATCH_DEFAULTS) }
-    },
-  }))
-
-  ctx.tools.register(asTool({
     name: 'mc_watchdog_info',
     description: '查询新版看门狗可用事件，或事件事实/修饰的配置结构。修饰使用“事实名/修饰名”，`事实名/*` 获取全部。',
     parameters: {
       name: { type: 'json', description: '注册名、注册名数组；不传返回总览' },
     },
-    output: text(),
-    async execute(args) { return eventCatalogMarkdown(args.name) },
+    output: text(undefined, (_args, value) => String(value?.markdown ?? '')),
+    async execute(args) {
+      let query = args.name
+      if (typeof query === 'string' && /^\s*\[/.test(query)) {
+        try {
+          const parsed = JSON.parse(query)
+          if (Array.isArray(parsed)) query = parsed
+        } catch { /* 普通注册名交给目录校验报错 */ }
+      }
+      return { markdown: eventCatalogMarkdown(query) }
+    },
   }))
 
   ctx.tools.register(asTool({
@@ -2034,11 +2010,13 @@ export function apply(ctx, rawConfig) {
         return { name, sensitive: focus.sensitive, itemCount: Object.keys(config).length, config }
       }
       if (action === 'remove') {
-        const requested = args.names === '*' ? [...sess.watchdogFocuses.keys()] : (Array.isArray(args.names) ? args.names : [args.names]).filter(Boolean).map(String)
+        const input = args.names ?? args.name
+        if (input === undefined || input === null || input === '') throw new Error('remove 必须提供 name 或 names')
+        const requested = input === '*' ? [...sess.watchdogFocuses.keys()] : (Array.isArray(input) ? input : [input]).filter(Boolean).map(String)
         const removed = []; const missing = []
         for (const name of requested) (sess.watchdogFocuses.delete(name) ? removed : missing).push(name)
         refreshWatchdogConfig(sess)
-        return { removed, missing: args.names === '*' ? [] : missing, remainingCount: sess.watchdogFocuses.size }
+        return { removed, missing: input === '*' ? [] : missing, remainingCount: sess.watchdogFocuses.size }
       }
       throw new Error('action 参数无效')
     },

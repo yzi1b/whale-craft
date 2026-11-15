@@ -1,7 +1,7 @@
-# 工具目录（38 个）
+# 工具目录（37 个）
 
 > 快照：**0.2.0**（开发中，未发布）。注册全部在 `index.js` 的 `apply()` 内（`ctx.tools.register(asTool({...}))`），
-> 分四段：`mc_*`（游戏内，26）/ `mc_kit_*`（游戏外辅助，4）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
+> 分四段：`mc_*`（游戏内，30）/ `mc_kit_*`（游戏外辅助，4）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
 > 可见性按模式分档（2026-10-04）：**MC模式** 只见 mc/mckit + 文件工具 + `job_*`/`goal_*`/`todo_write` + 宿主 `web_search` + 文件交付 `present`；**MC+模式** 全量可见（含 admin）；
 > **其他模式** 隐藏 mc_* / mc_kit_*（仅保留 `mc_admin_*`），另有 guard 硬拒兜底。
 > 🔴 **调试工具（`mc_debug_*`）另受「MC设置 → 调试」的 `exposeDebugTools` 开关门控**（2026-10-05）：关时在 MC/MC+ 也不暴露（白名单 / MC+ deny / guard 三处）。
@@ -48,16 +48,15 @@
 | `mc_inventory` | 背包 | `held` 与 `items[]` 均为 `{name,count,slot?}` |
 | `mc_events` | 事件队列（拉） | `limit ≤100`、`waitSec ≤120`（阻塞等新事件，**只是兜底**）；被看门狗唤醒打断时返回 `interrupted:true` + `interruptReason` + "先别再 wait"提示；内部 `timeoutMs` 130s。⚠️ 被传送/捡物/上下线**不在这个队列**（只进看门狗留档） |
 
-## 三、看门狗控制（7）
+## 三、看门狗控制（6）
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
-| `mc_watch` | 唤醒通道的唯一控制面 | `action: status / arm / disarm / log`；`log` 返回 `{armed, stats, recent: 留档末 30 条}`；未知 action 明确抛错，不再静默退回 status。进服默认自动 arm |
-| `mc_config` | 改看门狗参数 | `patch`（点号键如 `wakeOn.pushed`）/ `reset`；响应附 `WATCH_DEFAULTS`。**只能改本会话的看门狗**，全局配置在 `mc_admin_config` |
-| `mc_watchdog_info` | 新版事件目录 | 总览或按 `事实名/修饰名` 查询；支持 `事实名/*` |
+| `mc_watch` | 唤醒通道的唯一控制面 | `action: status / arm / disarm / log`；status 只回运行状态，不再夹带旧版配置；`log` 返回 `{armed, stats, recent: 留档末 30 条}`。进服默认自动 arm |
+| `mc_watchdog_info` | 事件目录 | 总览或按 `事实名/修饰名` 查询；支持 `事实名/*` 与数组；顶层返回 `{markdown}` 对象并直接渲染 Markdown |
 | `mc_watchdog_global_settings` | 全局提醒配置 | 持久化 `minInterval` / `interruptLevel` / `minInterruptInterval` |
 | `mc_watchdog_config` | 三层配置 | 编辑/读取 base、scene、effective；base 落 `$DSH_HOME/whale_craft/watchdog.json` |
-| `mc_watchdog_focus` | 注意配置 | 会话内 list/edit/read/remove；支持敏感/钝感合并 |
+| `mc_watchdog_focus` | 注意配置 | 会话内 list/edit/read/remove；remove 单项同时接受 `name` 与 `names`；支持敏感/钝感合并 |
 | `mc_watchdog_queue` | 结构化事件队列 | 与游戏会话同寿命；读取时本地化时间并精简重复修饰 |
 
 ## 四、交互与动作（8）
@@ -118,4 +117,4 @@
 - **`mc_kit_share`（及 `mc_map` 的 `share` 参数）已删除**（2026-09-16）：它只是在调宿主**另装**的 `dsh-file-host`，插件本身没有文件服务器。后来短暂用过 `present` + `mc_kit_express`，2026-11-08 起全部收束到宿主原生交付。自检里有"mc_kit_share / mc_kit_express 已移除 / 源码无文件服务器残留"的断言——老名字不要再出现。
 - ~~文件分享 2026-10-04 起是开关 / 2026-10-07 按宿主模式拆键~~：该功能已于 2026-11-08 整体移除；`PluginConfig.migrate()` 会删除所有 express 旧键。
 - **2026-10-08 网页抓取 `mc_kit_web_fetch`（新工具）**：宿主 `web_fetch` 在 MC 模式被我们关掉（preset 的 tool-web 只挂 search），这个补位。初版是「文本走宿主 `ctx.web` seam、图片走自己的下载器」；**当天用户定「全改成自己的可控逻辑，宿主的强关联就不要了」** ⇒ 文本与图片统一到 `src/webget.mjs`（唯一出网口；防 SSRF 规则照宿主但**更严**：tunnelling / 转换前缀按内嵌 IPv4 复核；不依赖 ipaddr.js）。收益：**一次请求**（按真实 Content-Type 判型，不用先试一次宿主）、不依赖宿主 `web` 服务、类型判定精确；代价：charset / 解压 / 分类 / 上限自己扛，且**没有代理支持**。HTML→markdown 仍用 `src/webfetch.mjs` 的轻量转换（**不引 turndown**：实测宿主对非 link 插件的 CJS 依赖树有解析 bug）。内置图片格式**不可配置**（用户：「只有内置的格式和未知的格式」）。参数另加 `reply` / `dist`（语义照 `mc_map`）。
-- **2026-10-05 工具面改动**：① `mc_connect`/`mc_ping` 收成单一 `address`（删 `host/port/subserver/version`；版本永远自动探测，连上后版本不支持则强制断开）② `mc_accounts` 删 `use` ③ `mc_lan` 删 `mode` ④ 新增 `mc_context`/`mc_players` ⑤ `mc_sessions`/`mc_diag` → `mc_debug_sessions`/`mc_debug_diag`（受 `exposeDebugTools` 门控）⑥ `mc_status` 改为"连接态 + 在线内联 context" ⑦ `mc_map` 改版：`out`→`dist` + `reply`、去 `both`、无默认输出目录、相对路径以工作区根为基准、chars 存 .txt、附图前查视觉；新增 **`mc_height`**（高度/地势图，chars/image/full）。工具总数 29 → **32**。
+- **2026-11-15 看门狗配置面收口**：移除旧 `mc_config`；`mc_watch status` 不再返回旧 `wakeOn/nearRadius/mentionPatterns`。事件配置统一走 `mc_watchdog_config` / `mc_watchdog_global_settings` / `mc_watchdog_focus`。

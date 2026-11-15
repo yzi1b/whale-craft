@@ -172,7 +172,8 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   const idx = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
   console.log(`  ${!tools.has('mc_kit_share') ? '✅' : '❌'} 🔴 mc_kit_share 已移除（它只是在调宿主**另装**的 dsh-file-host，插件本身没有文件服务器）`)
   console.log(`  ${!tools.has('mc_kit_express') ? '✅' : '❌'} 🔴 mc_kit_express 已移除（文件分享整体撤下，图片走回复内嵌）`)
-  console.log(`  ${tools.size === 38 ? '✅' : '❌'} 工具数 38（实际 ${tools.size}）：mc_* 31 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 2`)
+  console.log(`  ${tools.size === 37 ? '✅' : '❌'} 工具数 37（实际 ${tools.size}）：mc_* 30 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 2`)
+  console.log(`  ${!tools.has('mc_config') ? '✅' : '❌'} 🔴 旧配置工具 mc_config 已移除（只保留 mc_watchdog_* 配置面）`)
   // 只看**代码**，不看注释：注释里留着"为什么删"的说明（那是要留的）
   const codeOnly = idx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
   console.log(`  ${!/uploadToFileHost|dsh-file-host|\/serve\/file-host/.test(codeOnly) ? '✅' : '❌'} 源码里没有上传/文件服务器残留（注释里保留"为什么删"的说明）`)
@@ -263,36 +264,42 @@ for (const n of ['mc_status', 'mc_map', 'mc_say', 'mc_connect']) {
   }
 }
 
-// ── 看门狗（v2）：挂载 / 配置 / 叫法 / 卸载 ──
+// ── 看门狗：挂载 / 新版配置面 / 卸载 ──
 console.log('\n--- 看门狗 v2 ---')
 {
-  // 没挂时：status 应是 armed:false，且能看清默认配置
+  // 没挂时：status 应是 armed:false，且不再泄露旧版 config 结构
   const s0 = await tools.get('mc_watch').execute({}, A)
-  console.log(`  ${s0.armed === false ? '✅' : '❌'} 初始未挂载；配置项 ${Object.keys(s0.config ?? {}).length} 个`)
-
-  // 唤醒矩阵默认值抽查（用户逐条问过的那些）
-  const w = s0.config.wakeOn
-  const want = {
-    damage: true, death: true, teleport: true,   // 默认叫醒
-    pushed: false, itemPickup: false,            // 默认只记档
-  }
-  const bad = Object.entries(want).filter(([k, v]) => w[k] !== v)
-  console.log(bad.length
-    ? `  ❌ 唤醒矩阵默认值不符：${bad.map(([k]) => k).join(', ')}`
-    : `  ✅ 唤醒矩阵默认值正确（受击/死亡/被传送叫醒；被推/捡物只记档）`)
-  console.log(`  ✅ 近距说话半径默认 ${s0.config.nearRadius} 格；观察窗口 ${s0.config.observeWindowMs}ms；限流 ${s0.config.maxWakePerMinute}/分`)
+  console.log(`  ${s0.armed === false && s0.config === undefined ? '✅' : '❌'} 初始未挂载；status 不再返回旧版 config`)
 
   // 挂载（宿主无 jobs → 降级为"无 job 模式"，但必须仍然武装成功）
   const s1 = await tools.get('mc_watch').execute({ action: 'arm' }, A)
   console.log(`  ${s1.armed === true ? '✅' : '❌'} arm 成功（无 jobs 服务时降级运行，不抛错）`)
 
-  // 改配置：点号键 + 数组
-  const c1 = await tools.get('mc_config').execute({
-    patch: { 'wakeOn.itemPickup': true, nearRadius: 24, mentionPatterns: ['ds', '用户'] },
+  // 新版 scene 配置必须直接反映到 effective，不再经过旧 mc_config。
+  await tools.get('mc_watchdog_config').execute({
+    action: 'edit', type: 'scene', merge: false,
+    config: { 'self.pickup': { wake: true }, 'message.chat/nearby': { distance: 20 } },
   }, A)
-  const ok = c1.config.wakeOn.itemPickup === true && c1.config.nearRadius === 24
-    && c1.config.mentionPatterns.length === 2 && c1.config.wakeOn.damage === true
-  console.log(`  ${ok ? '✅' : '❌'} mc_config 点号键浅合并正确（未提及的项保持默认）`)
+  const effective = await tools.get('mc_watchdog_config').execute({ action: 'read', type: 'effective', items: [] }, A)
+  console.log(`  ${effective.config['self.pickup']?.wake === true && effective.config['message.chat/nearby']?.distance === 20 ? '✅' : '❌'} scene 配置直接进入新版 effective（pickup.wake / nearby.distance）`)
+
+  // 目录工具的四条路径：总览、单项、通配、数组（含被宿主转成 JSON 字符串的数组）。
+  const info = tools.get('mc_watchdog_info')
+  const infoAll = await info.execute({}, A)
+  const infoOne = await info.execute({ name: 'self.damage' }, A)
+  const infoStar = await info.execute({ name: 'self.damage/*' }, A)
+  const infoArray = await info.execute({ name: ['message.chat', 'self.teleport'] }, A)
+  const infoJsonArray = await info.execute({ name: '["message.chat","self.teleport"]' }, A)
+  console.log(`  ${[infoAll, infoOne, infoStar, infoArray, infoJsonArray].every((value) => value && typeof value === 'object' && typeof value.markdown === 'string') ? '✅' : '❌'} mc_watchdog_info 所有查询路径都返回对象`)
+  console.log(`  ${/message\.chat/.test(infoArray.markdown) && /self\.teleport/.test(infoArray.markdown) && infoJsonArray.markdown === infoArray.markdown ? '✅' : '❌'} mc_watchdog_info 数组与 JSON 字符串数组都按多项查询`)
+
+  // remove 同时接受文档主参数 names 与单项便捷参数 name；不得静默空操作。
+  const focus = tools.get('mc_watchdog_focus')
+  await focus.execute({ action: 'edit', name: 'test_probe', sensitive: true, config: { 'self.pickup': { wake: true } } }, A)
+  const removedByName = await focus.execute({ action: 'remove', name: 'test_probe' }, A)
+  const removeWithoutName = await focus.execute({ action: 'remove' }, A).then(() => null, (error) => error.message)
+  console.log(`  ${removedByName.removed?.[0] === 'test_probe' && removedByName.remainingCount === 0 ? '✅' : '❌'} mc_watchdog_focus remove{name} 真正删除单项`)
+  console.log(`  ${/必须提供 name 或 names/.test(String(removeWithoutName)) ? '✅' : '❌'} mc_watchdog_focus remove 缺名称明确报错`)
 
   // 叫法判定（**配置不是硬编码**）——直接构造 Watchdog 测，不依赖 registry
   const { Watchdog } = await import('./src/watchdog.mjs')
@@ -428,15 +435,14 @@ console.log('\n--- 看门狗 v2 ---')
     console.log(`  ${/被传送 \/ 捡物 \/ 其他玩家上下线不在这里/.test(idxSrc2) ? '✅' : '❌'} 工具描述不再谎称"含被传送/捡物/上下线"（那些只在 mc_watch log 里）`)
   }
 
-  // 非法配置项要清晰报错
+  // 新版非法配置项要清晰报错
   try {
-    await tools.get('mc_config').execute({ patch: { 不存在的项: 1 } }, A)
+    await tools.get('mc_watchdog_config').execute({ action: 'edit', type: 'scene', config: { '不存在的项': { wake: true } } }, A)
     console.log('  ❌ 非法配置项竟然被接受')
   } catch (e) { console.log(`  ✅ 非法配置项清晰报错：${e.message.slice(0, 50)}…`) }
 
-  // 恢复默认
-  const c2 = await tools.get('mc_config').execute({ reset: true }, A)
-  console.log(`  ${c2.config.nearRadius === 16 && c2.config.mentionPatterns.length > 2 ? '✅' : '❌'} reset 恢复默认`)
+  // 清空本次 scene 覆盖
+  await tools.get('mc_watchdog_config').execute({ action: 'edit', type: 'scene', merge: false, config: {} }, A)
 
   // 卸载
   const s2 = await tools.get('mc_watch').execute({ action: 'disarm', reason: '自检' }, A)

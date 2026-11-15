@@ -73,7 +73,7 @@ export const DEFAULT_AGENTS_MD = `# Whale Craft 行事准则
 
 看门狗监听游戏内事件，适时**唤醒**你，或在当前生成中**插话**（以提示词注入的形式，不是用户发言）。
 
-用 \`mc_watch {action:"status"|"arm"|"disarm"|"log"}\` 管理，用 \`mc_config\` 调参（唤醒条件、近距半径、心跳、观察窗口、称呼）。
+用 \`mc_watch {action:"status"|"arm"|"disarm"|"log"}\` 管理运行状态。用 \`mc_watchdog_info\` 查询事件目录，\`mc_watchdog_config\` 配置 base / scene / effective，\`mc_watchdog_global_settings\` 配置提醒间隔，\`mc_watchdog_focus\` 管理注意配置。
 
 在进入游戏前，你需要先配置看门狗，设置唤醒条件。你需要把你的名字以及缩写等相关联想词都传入看门狗，以便在用户提到你时能将你唤醒。根据实际情况设置相关触发条件，保证需要时能唤醒，又不会频繁意外唤醒浪费算力。
 

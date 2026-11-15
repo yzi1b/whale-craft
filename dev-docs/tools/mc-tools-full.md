@@ -555,7 +555,7 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 
 **返回**
 
-返回 Markdown 文本，格式见 [`events.md`](../watchdog/events.md#如何生成提示词)。
+- markdown: **string** Markdown 格式的目录或详情，格式见 [`events.md`](../watchdog/events.md#如何生成提示词)。工具的顶层返回值始终是对象；渲染时直接显示此 Markdown。
 
 **错误**
 
@@ -663,6 +663,7 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 
 - action: ("remove")
 - names: (string | string[]) 要移除的注意配置名称或名称数组。如果是字符串且为 `*`，则清除全部。
+- name?: (string) 移除单个注意配置时可用的便捷别名；与 `names:"该名称"` 等价。`name` 与 `names` 至少提供一个。
 
 **返回**
 
@@ -704,6 +705,7 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 - edit 的 config / file 未恰好填写一个 → 对应参数错误
 - 新建注意配置但没有 sensitive → `新建注意配置时必须指定 sensitive`
 - read 的名称不存在 → `注意配置不存在：{{name}}`
+- remove 未提供 name / names → `remove 必须提供 name 或 names`
 - 导入文件后缀、`wcwc` 版本或 `type` 不符 → 对应文件格式错误
 - 配置项、修饰名、字段值不符合事件定义 → 对应配置校验错误
 

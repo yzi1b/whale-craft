@@ -9,13 +9,13 @@
  *        job 存活期 = 整局游戏（不再是"醒来一次就结算"）。
  *
  *  · "高度可配置，有默认配置，AI 调用工具修改"
- *      → WATCH_DEFAULTS + updateConfig(patch)，经 mc_config 工具读写。
+ *      → 新版事件配置由 mc_watchdog_config 管理；WATCH_DEFAULTS 只保留给旧投递器内部兼容。
  *
  *  · "受击/位置被动移动/捡到物品/死亡/被传送 是否唤醒"
  *      → wakeOn 矩阵，逐项开关（默认值见 WATCH_DEFAULTS，附理由）。
  *
  *  · "玩家提到什么唤醒（不硬编码）"
- *      → mentionPatterns 是**配置项**，AI 可用 mc_config 增删（学到新外号就记下来）。
+ *      → 新版 `message.chat/mention.keywords` 对外配置；mentionPatterns 只供旧投递器内部兼容。
  *
  *  · "唤醒后短时间内再发话算同话题，继续唤醒"
  *      → topicWindowSec：唤醒后这段时间内的发言按"延续话题"处理，直接再叫醒。
@@ -93,8 +93,8 @@ export const WATCH_DEFAULTS = {  /** 进服自动挂载（用户要求：进游�
   maxWakePerMinute: 6,
 
   /**
-   * 叫法（正则片段，大小写不敏感）。**这是配置不是代码**——AI 可以用 mc_config
-   * 增删（例如玩家给它起了外号，它记下来）。
+   * 叫法（正则片段，大小写不敏感）。仅供旧投递器内部兼容；对外由新版
+   * `message.chat/mention.keywords` 管理。
    *
    * 🔴 这里**只放通用叫法**。2026-09-16 用户投诉过："为什么这台服务器上叫'auth'的记忆它有？"
    *    —— 之前默认值里写死了他私人的账号名/昵称，跟着开源副本一起公开了。
@@ -228,7 +228,6 @@ export class Watchdog {
       lastWakeAt: this.lastWakeAt || null,
       lastWakeKind: this.lastWakeKind,
       stats: { ...this.stats },
-      config: clone(this.config),
     }
   }
 
@@ -443,7 +442,7 @@ export class Watchdog {
      *   · **会重连** → 叫醒 AI 说清"断了、正在自动重连"，看门狗继续挂着（重连成功后照常工作）；
      *   · **不重连了**（主动下线 / 重连没戏）→ 关掉看门狗，它的关闭通知本来就会告诉 AI
      *     "你已经不在 Minecraft 里了，要用 mc_connect 重新进服"。
-     * 想安静点就把 `wakeOn.disconnect` 关掉（mc_config 改），但仍然会记档到事件队列里。
+     * 新版模式下是否提醒由 `connection.disconnect` 配置控制；这里仅保留旧模式兼容分支。
      */
     on('offline', (e) => {
       const reason = String(e?.reason ?? '连接结束')

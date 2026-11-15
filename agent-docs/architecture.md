@@ -29,7 +29,7 @@ DSH host 进程
    ├─ McRegistry            agentId → McSession
    │   └─ McSession         McBot + events[]（≤200 条）+ Watchdog + selectedAccount
    │       └─ McBot         src/core.mjs：mineflayer 实例（一个游戏角色）
-   ├─ 工具注册（38 个）      mc_* 31 / mc_kit_* 4 / mc_admin_* 1 / mc_debug_* 2，全部经 asTool()
+   ├─ 工具注册（37 个）      mc_* 30 / mc_kit_* 4 / mc_admin_* 1 / mc_debug_* 2，全部经 asTool()
    ├─ HTTP（webServer）
    │   └─ /api/mc/*                     状态/停止/设置（账户/配置/提示词/preset 名单）
    ├─ agent/pre-step 监听   提示词注入（改写 decision.messages）+ MC 模式策略对账
@@ -91,7 +91,7 @@ DSH host 进程
 
 - 看门狗挂宿主 job（`jobs.start({kind:'mc-watch', label:'MC 看门狗（整局存活）', owner:agent, run})`）：job 存活期=整局游戏；`disarm` 幂等结算（`#settleJob`），宿主 kill job 时 `cancel → disarm(fromJob:true)`。
 - 断线矩阵：`offline` 且 `willReconnect` → 唤醒"正在自动重连"（不关看门狗）；`willReconnect=false` → **自动关看门狗** + 关闭通知（"你已经不在 MC 里了"）。
-- 看门狗配置（`WATCH_DEFAULTS`，`mc_config` 可改）见 [src-modules.md §3](src-modules.md)。
+- 对外事件配置统一由 `mc_watchdog_config`（base / scene / effective）、`mc_watchdog_global_settings` 与 `mc_watchdog_focus` 管理；旧 `WATCH_DEFAULTS` 仅留在投递器内部兼容分支，不再暴露为工具配置。
 
 ## 6. 提示词注入体系（唯一通道 = 插件提示行）
 
