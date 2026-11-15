@@ -443,7 +443,7 @@ AI 调用工具获得指定修饰的全面概述：
 - resetAfterMs: (number) 连续推动静默多久后视为新一轮，必须大于等于 1_000。默认 `4_000`。
 - record: `true`
 - wake: `true`
-- delay: `-1`
+- delay: `-1` 
 
 **载荷：**
 

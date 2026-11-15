@@ -687,7 +687,7 @@ export function apply(ctx, rawConfig) {
 
   ctx.effect(() => async () => { await registry.destroyAll() })
 
-  /* ─────────── HTTP API：状态条 UI 用（状态查询 / 强制停止 / 普通停止）─────────── */
+  /* ─────────── HTTP API：状态条 UI 用（状态查询 / 游戏会话停止）─────────── */
 
   /**
    * 运行期信任列表：宿主 `connection` 服务持有与本插件相同的 Host/Origin 栅栏
@@ -703,120 +703,6 @@ export function apply(ctx, rawConfig) {
   /** listener 绑定地址（宿主栅栏也放行它；浏览器直连局域网 IP 时 Host 就是它）。 */
   const liveBindHost = () => ctx.webServer?.host
   const liveProtocol = () => ctx.webServer?.protocol ?? 'http:'
-
-  /**
-   * **强制停止**某个会话的 MC —— 用户 2026-09-16 定的语义与顺序：
-   *
-   *   ① **先停 LLM**（如果它正在输出）。不先停的话：它还会继续调工具、甚至把刚退掉的游戏重连回来。
-   *      中断之所以有效，靠的是工具侧 raceAbort 监听 exec.signal —— 宿主自己**没有**硬中断能力
-   *      （`tools/index.ts:219` 原话 "cannot hard-kill same-process code"），所以"让工具必然结算"是唯一出路。
-   *   ② **先尝试优雅退出游戏**（`bot.quit` + 宽限期，真走不掉才强断；见 src/core.mjs 的 disconnect）。
-   *   ③ **再强清该会话全部后台任务**（看门狗就在里面）。
-   *   ④ **最后再停一次 LLM**：②③期间会有退服事件或工具被 abort 的结算；结束提示词按强停策略延后到下一步，
-   *      收尾再停一次，避免会话停在异常状态。
-   *
-   * ⚠️ **普通停止已移除**（用户要求："移除停止，只剩强行停止"）。唯一的例外是 `cancelTurn:false`：
-   * 给 **AI 自己调 `mc_stop`** 用——工具就跑在被停的那一轮里，cancel 会 abort 掉它自己所在的 turn
-   * （表现为 "tool call aborted"，真机报告过）。UI 的按钮走 HTTP，用默认的 cancelTurn:true。
-   *
-   * @param {string} sessionId
-   * @param {{reason?: string, cancelTurn?: boolean}} [opts]
-   */
-  const stopSession = async (sessionId, { reason = '用户强制停止', cancelTurn = true, closeKind = cancelTurn ? 'user-force-stop' : 'assistant-stop' } = {}) => {
-    const sess = registry.peek(sessionId)
-    const agents = ctx.get('agents')
-    const agent = agents?.get?.(sessionId)
-    const out = {
-      sessionId, reason, order: [],
-      stoppedLLM: false, finalStopLLM: false, stopLLMError: null,
-      quit: null, kicked: false, killedJobs: [],
-    }
-
-    /** 停 LLM：优先 sessionController.cancel（宿主正路），退到 agent.cancel */
-    const cancelLLM = (keepInbox = false) => {
-      try {
-        if (keepInbox && typeof agent?.cancel === 'function') {
-          agent.cancel({ kind: 'user' }, { keepInbox: true })
-          return true
-        }
-        const sc = ctx.get('sessionController')
-        if (typeof sc?.cancel === 'function') { sc.cancel({ sessionId }); return true }
-        if (typeof agent?.cancel === 'function') { agent.cancel({ kind: 'user' }, { keepInbox: true }); return true }
-      } catch (e) { out.stopLLMError = String(e?.message ?? e) }
-      return false
-    }
-
-    /**
-     * 等它真的停下来（running → 其它）。拿不到 status 就只给一小段缓冲，别白等。
-     * 详见 packages/core/agent-loop/src/agent.ts 的 `get status()`。
-     */
-    const waitIdle = async (ms) => {
-      const known = agent?.status !== undefined
-      const budget = known ? ms : Math.min(ms, 120)
-      const t0 = Date.now()
-      while (Date.now() - t0 < budget) {
-        if (known && agent.status !== 'running') return true
-        await new Promise((r) => setTimeout(r, 50))
-      }
-      return !known
-    }
-
-    // ① 先停 LLM
-    if (cancelTurn) {
-      out.stoppedLLM = cancelLLM()
-      out.order.push('stop-llm')
-      await waitIdle(1500)
-    }
-
-    // ② 退出游戏；游戏会话与看门狗只经同一个关闭入口同步销毁
-    if (sess) {
-      try {
-        const closed = await sess.closeGameSession(reason, { kind: closeKind })
-        out.quit = closed.quit
-        if (closed.quitError) out.quitError = closed.quitError
-        out.kicked = true
-      } catch (e) { out.quitError = String(e?.message ?? e) }
-      out.order.push('quit-game')
-    }
-
-    // ③ 再强清该会话全部后台任务
-    //
-    // 🔴 2026-09-24：**只杀属于本会话的 job**。宿主 `jobs-local` 的 `list(caller)` 口径是
-    //    `job.owner === undefined || job.owner.id === session` —— 除了自己的，它**还会把
-    //    `owner === undefined` 的"无主 job"（宿主自己起的后台任务）一起列出来**；
-    //    而 `assertAccess()` 是 `if (job.owner !== undefined && ...) throw`，**对无主 job 不设防**。
-    //    照旧代码那样"列出来就全杀"，点一次「强制停止」会顺手清掉跟这个会话毫无关系的宿主任务。
-    //    （同一个坑 PR #2 的作者也报过，见 <user>/whale-craft#2。）
-    //    🔴 2026-10-04（同 PR #2）：`caller` 必须是**会话 id 字符串**——`list(caller)` 内部
-    //    按 `job.owner.id === caller` 过滤、`kill(id, caller)` 的 `assertAccess` 也一样；
-    //    传 agent 对象时"自己的 job 一个都列不出来、也杀不掉"（还会把无主 job 列出来）。
-    //    判据用**快照里带的 owner 身份**，两种宿主版本的字段名都认：
-    //    `ownerSession`（本版）/ `owner`（0.1.7 起）。
-    const jobs = ctx.get('jobs')
-    if (jobs && typeof sessionId === 'string' && sessionId) {
-      try {
-        for (const j of jobs.list(sessionId) ?? []) {
-          const id = j?.id ?? j?.jobId
-          if (!id) continue
-          const ownerOf = j?.ownerSession ?? j?.owner
-          if (ownerOf !== sessionId) continue          // 无主 job / 别人的 job：不归我们管
-          try { jobs.kill(id, sessionId, reason); out.killedJobs.push(id) } catch {}
-        }
-      } catch (e) { out.jobsError = String(e?.message ?? e) }
-    }
-    out.order.push('kill-jobs')
-
-    // ④ 最后再停一次 LLM（收尾，避免状态异常）
-    if (cancelTurn) {
-      // 结束提示词已由 GameSession 以 defer 方式放入 next-step；收尾取消必须保留 inbox。
-      out.finalStopLLM = cancelLLM(true)
-      out.order.push('stop-llm-final')
-      await waitIdle(800)
-    }
-
-    ctx.logger?.info?.(`[whale_craft] 强制停止 ${sessionId}｜${JSON.stringify(out)}`)
-    return out
-  }
 
   /* ─────────── 归档保护（DSH 0.2.2 官方归档准入接缝）───────────
    * "会话归档前要自动强行停止，或者阻止归档。"
@@ -1383,12 +1269,11 @@ export function apply(ctx, rawConfig) {
       const body = await readJsonBody(req)
       const sessionId = String(body.sessionId ?? '')
       if (!sessionId) return sendJson(res, 400, { ok: false, error: 'sessionId 必填' })
-      // 用户 2026-09-16：**普通停止已移除**，这里只有强制停止一种语义
-      // （顺序：停 LLM → 优雅退游戏 → 清该会话后台任务 → 再停一次 LLM）。
-      // body.hard 不再有意义，传了也忽略（旧前端/旧脚本兼容）。
-      const result = await stopSession(sessionId, {
-        reason: body.reason ? String(body.reason) : '用户强制停止',
-      })
+      const sess = registry.peek(sessionId)
+      const reason = body.reason ? String(body.reason) : '用户手动停止'
+      const result = sess
+        ? await sess.closeGameSession(reason, { kind: 'user-stop' })
+        : { closed: false, gameSessionId: null, quit: null }
       return sendJson(res, 200, { ok: true, ...result })
     }
 
@@ -1903,24 +1788,17 @@ export function apply(ctx, rawConfig) {
 
   ctx.tools.register(asTool({
     name: 'mc_stop',
-    description: '停止本会话的 Minecraft：**先尝试优雅退出游戏，再清空本会话全部后台任务（看门狗在里面）**。\n'
-      + '⚠️ 它**不会中断你自己当前这一轮**（你正跑在这轮里，自我 abort 会表现为 "tool call aborted"）。'
-      + '所以它适合"我不想玩了，下线"——想停掉自己正在跑的动作，直接别再调工具就行。\n'
-      + '页面上标题旁只剩一个「强制停止」按钮，它比这个工具更狠：**先停 LLM → 再优雅退游戏 → '
-      + '再清后台任务 → 最后再停一次 LLM**（那是给人按的）。',
+    description: '停止当前 Minecraft 游戏会话。机器人连接、看门狗、结构化事件队列与会话配置会同步关闭，并立即插入游戏会话结束提示词。',
     parameters: {
       reason: { type: 'string', description: '原因（写进日志）' },
     },
     output: text(),
     async execute(args, exec) {
-      const sessionId = exec?.agent?.id
-      if (!sessionId) throw new Error('拿不到当前会话')
-      // cancelTurn:false —— 工具就跑在被停的这一轮里，绝不能让 stop 把这一轮 abort 掉
-      return stopSession(sessionId, {
-        reason: args.reason ? String(args.reason) : 'AI 主动下线',
-        cancelTurn: false,
-        closeKind: 'assistant-stop',
-      })
+      const sess = getSession(exec)
+      if (!sess.gameSession?.active) throw new Error('当前没有游戏会话')
+      const reason = args.reason ? String(args.reason) : 'AI 主动停止'
+      const closed = await sess.closeGameSession(reason, { kind: 'assistant-stop' })
+      return { online: false, gameSessionId: closed.gameSessionId, quit: closed.quit, watchdog: '已随游戏会话关闭' }
     },
   }))
 

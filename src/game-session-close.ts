@@ -4,7 +4,7 @@ import type { GameSessionId } from './types.ts'
 export type GameSessionCloseKind =
   | 'assistant-disconnect'
   | 'assistant-stop'
-  | 'user-force-stop'
+  | 'user-stop'
   | 'kicked'
   | 'connection-lost'
   | 'reconnect-failed'
@@ -32,7 +32,7 @@ export interface GameSessionCloseNotice extends GameSessionCloseInput {
   text: string
 }
 
-const DEFERRED_KINDS = new Set<GameSessionCloseKind>(['user-force-stop', 'archived', 'runtime-shutdown'])
+const DEFERRED_KINDS = new Set<GameSessionCloseKind>(['archived', 'runtime-shutdown'])
 
 export function sanitizeGameSessionCloseText (value: unknown, maxLength = 500): string {
   const text = String(value ?? '')
@@ -59,9 +59,9 @@ function kindText (input: GameSessionCloseInput): string {
     case 'assistant-disconnect':
       return '这是你主动执行的退出。停止仍以本局在线状态为前提的子代理或后台任务；不要自行重新连接。只有用户再次要求进入服务器时，才建立新的游戏会话。向用户简短确认已经退出。'
     case 'assistant-stop':
-      return '这是你主动停止的游戏会话，插件拥有的本会话后台任务也会被清理。不要自行重新连接，也不要继续刚才的游戏任务。向用户简短确认游戏会话和相关后台任务已经停止。'
-    case 'user-force-stop':
-      return '这是用户主动执行的强制停止。不要恢复刚才的任务，不要自行重新连接，也不要把这次停止当作需要排障的异常。'
+      return '这是你主动停止的游戏会话。不要自行重新连接，也不要继续刚才的游戏任务。向用户简短确认游戏会话已经停止。'
+    case 'user-stop':
+      return '这是用户主动停止了游戏会话。立即停止刚才的游戏任务，不要自行重新连接，也不要把这次停止当作需要排障的异常。向用户简短确认游戏会话已经停止。'
     case 'kicked':
       return '你被服务器踢出了游戏。向用户说明服务器给出的原因；不要假装仍然在线，也不要自行反复重连。如果原因表明需要用户处理（白名单、封禁、登录冲突、认证失效等），明确告诉用户需要做什么；否则询问用户是否要重新连接。'
     case 'connection-lost':

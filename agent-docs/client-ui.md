@@ -8,7 +8,7 @@
 
 `client.js` 是**手写 factory bundle**（无构建步骤，`exports["./client"]` 直接指向它；
 改完由 `@deepseek-ai/dsh-client-hmr` 热换，**不需要**重启实例，刷新页面即可）。
-它做几件事：会话状态条 / 强制停止、**「设置」与「连接到MC」两个模态框**、以及往宿主插槽注册入口。
+它做几件事：会话状态条 / 游戏会话停止、**「设置」与「连接到MC」两个模态框**、以及往宿主插槽注册入口。
 
 ## 插槽扩展点清单
 
@@ -174,4 +174,4 @@ npm run dev:web               # 隔离调试实例；改 client.js 只需刷新�
 
 标题条 order 40 的 `McConnectEntry` 在 `gameSessionId` 存在时改为渲染 `McStatusBar`，否则显示连接按钮，二者互斥；不再单独注册 order 50 状态条。绿点表示在线，文字直接显示服务器地址；黄点表示重连，文字为「正在重连」；游戏会话仍存在但离线且未重连时为红点「连接异常」。地址过长省略，完整内容在 tooltip 中。
 
-右侧停止按钮为实心正方形，tooltip 和无障碍名称均为「停止」。调用 `POST /api/mc/stop`，由后端 `stopSession → closeGameSession` 使用 `user-force-stop` 类型关闭游戏会话并延后投放用户手动停止提示词。成功后立即切回连接入口，失败弹错并保留状态条。用户可见约定见 [状态条设计](../dev-docs/ui/game-session-status.md)。
+右侧停止按钮为实心正方形，tooltip 和无障碍名称均为「停止」。调用 `POST /api/mc/stop`，由后端直接调用 `closeGameSession`，使用 `user-stop` 类型关闭游戏会话并立即 `steer` 结束提示词；不得调用宿主 LLM cancel。成功后立即切回连接入口，失败弹错并保留状态条。用户可见约定见 [状态条设计](../dev-docs/ui/game-session-status.md)。

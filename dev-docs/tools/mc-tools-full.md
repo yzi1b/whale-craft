@@ -292,25 +292,16 @@ refresh 刷新某账户的登录状态，皮肤站会去认证服换新令牌。
 
 ### mc_stop
 
-> 临时使用，即将大幅变更。
-
-停止本会话的 Minecraft：**先尝试优雅退出游戏，再清空本会话全部后台任务（看门狗在里面）**。
+停止当前 Minecraft 游戏会话。机器人连接、看门狗、结构化事件队列与会话配置会同步关闭，并立即插入游戏会话结束提示词。
 
 - reason: **string** 原因（写进日志，默认「AI 主动下线」）
 
-⚠️ 它**不会中断你自己当前这一轮**（你正跑在这轮里，自我 abort 会表现为 "tool call aborted"）。适合"我不想玩了，下线"；想停掉自己正在跑的动作，直接别再调工具就行。
-
 **返回**
 
-- sessionId: **string**
-- reason: **string**
-- order: **array<string>** 实际执行顺序；本工具不会停止当前 LLM 轮次，因此通常为 `quit-game`、`kill-jobs`
-- stoppedLLM / finalStopLLM: **boolean** 本工具调用路径固定为 false
-- stopLLMError: **string | null**
+- online: **boolean** 固定为 false
+- gameSessionId: **string** 本次刚刚关闭的游戏会话 ID
 - quit: **object | null** 下线结果
-- kicked: **boolean** 是否执行了下线
-- killedJobs: **array<string>** 清理的本会话后台任务 id
-- quitError / jobsError: **string** 对应步骤失败时出现；步骤失败会记在返回对象中而非抛错
+- watchdog: **string** 固定为 `已随游戏会话关闭`
 
 **错误**
 

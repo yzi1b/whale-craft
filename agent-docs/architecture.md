@@ -40,7 +40,7 @@ DSH host 进程
 
 浏览器
 └─ client.js
-   ├─ McStatusBar           会话标题条状态 + 「强制停止」
+   ├─ McStatusBar           会话标题条状态 + 「停止」
    ├─ McSettingsModal       账户 / 指令白名单 / 提示词 / 联网搜索 / 调试 标签页
    └─ McSettingsDockEntry   新会话页（hero 区）的入口按钮
 ```
@@ -165,7 +165,7 @@ kind 变化先 release 再套新）：
 | GET `/api/mc/sessions` | 会话列表（调试） |
 | GET `/api/mc/mode?sessionId=` | preset 判据（`mcMode` / `mcPlus`）+ hasWorkspace + 注入诊断（**可重试兜底**用，前端主判据在本地） |
 | GET `/api/mc/presets` | preset 名单（**必须在 settingsGate 之前**，否则前端静默兜底） |
-| POST `/api/mc/stop` | 强制停止（`cancelTurn: true`） |
+| POST `/api/mc/stop` | 用户停止当前游戏会话；直接进入 `closeGameSession`，不取消 LLM turn |
 | `/api/mc/accounts`（GET/POST/PATCH/DELETE）+ `/accounts/refresh` | 账户 CRUD / 改名 / 探测刷新（`probeBot.authOnly`）。**全局数据，不绑工作区**（不走闸门） |
 | `/api/mc/authservers`（POST/DELETE） | 认证服务器增删（`parseAuthlibCard` 解析卡片）。同样**不绑工作区** |
 | `/api/mc/config`（GET/PATCH） | 配置读写（**分流**：全局键 → PluginConfig；提示词三开关 → 该工作区的 config.json）。**可无工作区**：工作区键回 `null` / PATCH 丢弃工作区键 |
@@ -211,7 +211,7 @@ kind 变化先 release 再套新）：
 
 ## 11. 停止、归档与保护
 
-- **`stopSession` 四步顺序**（状态条“强制停止”专用）：停 LLM → `closeGameSession()` 同步关闭游戏连接与看门狗 → **只杀 `ownerSession` / `owner===sessionId` 的 job**（无主的不设防，**误杀宿主任务的坑**）→ 再停一次 LLM。HTTP 的 `/api/mc/stop` 默认 `cancelTurn: true`；工具 `mc_stop` 必须 `cancelTurn: false`（否则自我 abort 卡死）。
+- 状态条 `/api/mc/stop`、`mc_stop` 与 `mc_disconnect` 都直接调用 `closeGameSession()`，由游戏会话管理器关闭连接与看门狗并 `steer` 结束提示词；不存在另一套强停或后台任务清理流程。
 - **归档保护**：使用 DSH 0.2.2 官方接缝。`workspace/session-activity` 是 waterfall：MC 在线、重连中或看门狗挂着时，在 `await next()` 的结果前追加 `{kind:'minecraft'}`，普通归档因此拒绝；调用方选择 `archiveSession(id,{stopActivity:true})` 后，宿主先持久化归档再派发 `workspace/session-stop`，插件只关闭自己拥有的看门狗和机器人。LLM、通用 job、subagent 由各自 provider 停止；**不得再包装 `workspaceRegistry.archiveSession`**。
 
 ## 12. 落盘地图
@@ -239,7 +239,7 @@ kind 变化先 release 再套新）：
 6. `@deepseek-ai/dsh-llm` 的 `createUserMessage` 可用性（缺失时走自带兜底，但**依赖声明不能少**）。
 7. `sessionController.prompt` 是 @Remote（必传 signal）；`agent.steer` 在 step 边界的消费语义。
 8. **信任栅栏来源**：`connection.trustedHosts`（← `webStartup.trustedHosts` / `--trusted-host`）+ `webServer.host` 绑定地址；`webRuntime` 已在 0.2.1 删除。另核对 `hosts`/`trustedHosts`、`webServer` 最长前缀路由。
-9. jobs 服务的 `owner`/`caller` 语义：**只认会话 id 字符串**（`resolveOwner()` 拿它查 agents 注册表、`assertAccess()` 按 `job.owner.id === caller` 比对）；`stopSession` 只杀自己名下的（无主 job 对所有会话可见，别碰）。
+9. jobs 服务的 `owner`/`caller` 语义：**只认会话 id 字符串**（`resolveOwner()` 拿它查 agents 注册表、`assertAccess()` 按 `job.owner.id === caller` 比对）；游戏会话关闭不枚举或清理通用 jobs。
 10. 会话消息 `source.kind`：**v4 格式拒绝裸露的 `'plugin'`**，规范值是 `plugin:<插件名>`（= 宿主 v3→v4 迁移的产出，`plugin` 字段随之去掉）；宿主 `createUserMessage` 对传进来的 source **原样透传**、不会替我们修正。
 11. **「创建MC+分支」的改模式**（2026-10-05）：`sessionController.fork`（会**继承父 preset**）、`agentPresets.recompose(ctx, id)`（返回 `{id}`；文档说"caller owns the blank-session check"，即它自己**不**拦已开聊）、`agent.session.append('agent-preset/selected', {agentPreset})`（宿主唯一会**拦** preset 变更的是 `select` 里的 `agent-preset/locked`，`append` 本身不拦）。三者任一改名/改语义就要跟。`AgentPresetRegistry` 的 preset 投影/事件仍是 `agent-preset/selected`。
 

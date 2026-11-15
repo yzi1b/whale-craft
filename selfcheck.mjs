@@ -474,8 +474,8 @@ for (const [label, args, want] of [
   console.log(`  ${r.failed === 1 && r.results.length === 1 && r.results[0]?.ok === false ? '✅' : '❌'} 🔴 序列不再把 arrived:false 记成成功`)
 }
 
-// ── 强制停止：语义与**顺序**（用户 2026-09-16：移除普通停止，只剩强制停止）──
-console.log('\n--- 强制停止（顺序：停LLM → 优雅退游戏 → 清后台任务 → 再停LLM）---')
+// ── mc_stop：与其它来源共用唯一的游戏会话关闭入口 ──
+console.log('\n--- mc_stop（直接进入游戏会话关闭）---')
 try {
   await tools.get('mc_stop').execute({})
   console.log('  ❌ mc_stop 无 exec 竟然成功')
@@ -483,39 +483,37 @@ try {
   console.log(`  ${/拿不到当前会话/.test(e.message) ? '✅' : '❌'} mc_stop 无 exec 清晰报错：${e.message.slice(0, 30)}`)
 }
 {
-  // 普通停止已移除：参数面只剩 reason（不再有 hard）
+  // 参数面只剩 reason（不再有 hard）
   // ⚠️ 注册表里的 `parameters` 是包好的 JSON schema，参数名在 .properties 下
   const params = Object.keys(tools.get('mc_stop').parameters?.properties ?? {})
-  console.log(`  ${!params.includes('hard') && params.includes('reason') ? '✅' : '❌'} mc_stop 参数面已无 hard（普通停止移除）：[${params.join(', ')}]`)
-  const r = await tools.get('mc_stop').execute({ reason: '自检' }, A)
-  const ok = r && 'kicked' in r && 'killedJobs' in r && 'stoppedLLM' in r && 'finalStopLLM' in r && Array.isArray(r.order)
-  console.log(`  ${ok ? '✅' : '❌'} mc_stop 返回结构完整（kicked/killedJobs/stoppedLLM/finalStopLLM/order）：${JSON.stringify(r).slice(0, 110)}`)
-  console.log(`  ${r?.order?.join(' → ') === 'quit-game → kill-jobs' ? '✅' : '❌'} AI 自己调（cancelTurn:false）不动 LLM、顺序 = 退游戏 → 清任务：${r?.order?.join(' → ')}`)
+  console.log(`  ${!params.includes('hard') && params.includes('reason') ? '✅' : '❌'} mc_stop 参数面只有 reason：[${params.join(', ')}]`)
+  try {
+    await tools.get('mc_stop').execute({ reason: '自检' }, A)
+    console.log('  ❌ 没有游戏会话时 mc_stop 竟然成功')
+  } catch (e) {
+    console.log(`  ${/当前没有游戏会话/.test(e.message) ? '✅' : '❌'} mc_stop 不再走会话外强停兜底：${e.message}`)
+  }
+  const { readFileSync } = await import('node:fs')
+  const indexSource = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+  const legacyGone = !indexSource.includes('const stopSession')
+    && !indexSource.includes('killedJobs')
+    && !indexSource.includes("out.order.push('kill-jobs')")
+  console.log(`  ${legacyGone ? '✅' : '❌'} 旧 stopSession / jobs 强清 / 强停返回字段已从生产代码删除`)
 }
 
-// 🔴 强制停止的**后端顺序**：用第二套"服务齐全的假 ctx"跑一遍 apply()，
-//    再走 UI 那条路（POST /api/mc/stop）——工具路径强制 cancelTurn:false，验不到"先停 LLM"。
-console.log('\n--- 强制停止：UI 路径的真实顺序（停LLM → 退游戏 → 清任务 → 再停LLM）---')
+// 状态条停止直接进入游戏会话关闭；不能调用 LLM cancel，也不能枚举或清理通用 jobs。
+console.log('\n--- 状态条停止：只关闭游戏会话并投递结束提示 ---')
 {
   const { EventEmitter } = await import('node:events')
-  const side = []                       // 副作用调用顺序（cancel / kill）
+  const side = []                       // 不应出现 cancel / kill 副作用
   const tools2 = new Map()
   let route2 = null
   const fakeAgent2 = { id: 'sess-STOP', status: 'running' }
   // 这第二套 ctx 的 agents 服务要**可替换**：下面的「MC设置」接口测试需要换成"带工作区的会话"
   let agents2 = { get: () => fakeAgent2 }
-  // 🔴 2026-09-24：快照里要**带 owner 身份**（宿主 `JobSnapshot.ownerSession`）—— 宿主
-  //    `list(caller)` 的口径是 `owner === undefined || owner.id === session`，也就是说它
-  //    **还会把"无主 job"（宿主自己起的后台任务）列出来**，而 `assertAccess()` 对无主 job 不设防。
-  //    旧代码"列出来就全杀"⇒ 点一次「强制停止」会顺手清掉跟本会话无关的宿主任务。
-  const jobsCallers = []                 // 钉宿主契约：caller 必须是会话 id 字符串
+  const jobsCallers = []
   const jobs2 = {
-    list: (caller) => { jobsCallers.push(caller); return [
-      { id: 'job-watch', ownerSession: 'sess-STOP' },        // 本会话：该杀
-      { id: 'job-other', ownerSession: 'sess-STOP' },        // 本会话：该杀
-      { id: 'job-host', ownerSession: undefined },           // 宿主自己的无主 job：**不许动**
-      { id: 'job-other-sess', ownerSession: 'sess-OTHER' },  // 别的会话的 job：**不许动**
-    ] },
+    list: (caller) => { jobsCallers.push(caller); return [] },
     kill: (id, caller) => { jobsCallers.push(caller); side.push(`kill:${id}`) },
   }
   const sc2 = { cancel: ({ sessionId }) => side.push(`cancel:${sessionId}`) }
@@ -557,20 +555,10 @@ console.log('\n--- 强制停止：UI 路径的真实顺序（停LLM → 退游�
   const body = JSON.parse(res.body || '{}')
 
   console.log(`  ${route2?.path === '/api/mc' ? '✅' : '❌'} 路由注册为 ${route2?.path}（prefix）`)
-  console.log(`  ${body.ok ? '✅' : '❌'} UI 路径返回 ok：${JSON.stringify(body).slice(0, 100)}`)
-  const want = 'stop-llm → quit-game → kill-jobs → stop-llm-final'
-  console.log(`  ${body.order?.join(' → ') === want ? '✅' : '❌'} 后端顺序 = ${want}${body.order?.join(' → ') === want ? '' : `｜实际：${body.order?.join(' → ')}`}`)
-  console.log(`  ${body.stoppedLLM === true && body.finalStopLLM === true ? '✅' : '❌'} 停了两遍 LLM（首 + 尾，避免状态异常）：首=${body.stoppedLLM} 尾=${body.finalStopLLM}`)
-  console.log(`  ${body.kicked === true ? '✅' : '❌'} 先尝试退出游戏（bot.disconnect 被调用）：${JSON.stringify(body.quit)}`)
-  console.log(`  ${body.killedJobs?.length === 2 ? '✅' : '❌'} 该会话后台任务被清空：${JSON.stringify(body.killedJobs)}`)
-  // 🔴 2026-09-24（PR #2 报的隐患）：**只准杀自己的** —— 无主 job 与别的会话的 job 一个都不许碰
-  console.log(`  ${body.killedJobs?.includes('job-watch') && body.killedJobs?.includes('job-other') ? '✅' : '❌'} 自己的两个 job 都被清掉`)
-  console.log(`  ${!body.killedJobs?.includes('job-host') && !body.killedJobs?.includes('job-other-sess') ? '✅' : '❌'} 🔴 宿主无主 job / 别的会话的 job **一个都没动**（旧代码会把它们一起杀掉）`)
-  const sideWant = ['cancel:sess-STOP', 'kill:job-watch', 'kill:job-other', 'cancel:sess-STOP']
-  console.log(`  ${side.join(' → ') === sideWant.join(' → ') ? '✅' : '❌'} 副作用真实顺序 = 先停LLM → 清任务 → 再停LLM：${side.join(' → ')}`)
-  // 🔴 2026-10-04（PR #2 @swan3146）：caller 必须是**会话 id 字符串**——宿主 `list/kill/assertAccess`
-  //    都按 `job.owner.id === caller` 比对；传 agent 对象 ⇒ "自己的 job 一个都列不出来、也杀不掉"。
-  console.log(`  ${jobsCallers.length === 3 && jobsCallers.every((c) => c === 'sess-STOP') ? '✅' : '❌'} 🔴 list/kill 的 caller 都是**会话 id 字符串**（收到：${JSON.stringify(jobsCallers)}）`)
+  console.log(`  ${body.ok && body.closed === false && body.gameSessionId === null ? '✅' : '❌'} UI 路径直接返回游戏会话关闭结果：${JSON.stringify(body).slice(0, 100)}`)
+  console.log(`  ${!('order' in body) && !('stoppedLLM' in body) && !('finalStopLLM' in body) ? '✅' : '❌'} UI 路径不再暴露旧强停流程字段`)
+  console.log(`  ${side.length === 0 ? '✅' : '❌'} UI 停止不调用宿主 LLM cancel 或 jobs.kill：${side.join(' → ')}`)
+  console.log(`  ${jobsCallers.length === 0 ? '✅' : '❌'} UI 停止不枚举通用后台任务（调用：${JSON.stringify(jobsCallers)}）`)
 
   // ── 「创建MC+分支」（2026-10-05）：fork 源会话 + 把**新会话**改成 minecraft-plus ──
   // 🔴 改模式必须绕开 `agentPresets.select` 的"已开聊就锁"（分支带继承历史必中锁）——
@@ -3614,7 +3602,7 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
     ['UI 无"一拨就生效 / 即时保存"之类', !/一拨就生效|即时保存/.test(code)],
     ['UI 无"当前来源 / 默认版"之类', !/当前来源|默认版/.test(code)],
     ['提示词那页就叫「提示词」（不写"行事准则"）', /label: '提示词'/.test(code) && !/行事准则/.test(code)],
-    ['强制停止的 tooltip 说人话（不写四步实现）', !/先停 LLM/.test(code)],
+    ['停止按钮不泄露后端实现细节', !/先停 LLM/.test(code)],
     // 🔴 用户 2026-09-16："状态条是不是只显示'在游戏中'？应该显示服务器地址，太长则截断。"
     // 🔴 2026-10-05：不再有 subserver（用户只填一个 address）——只显示 host[:port]
     ['状态条显示服务器地址（host[:port]）', /function mcAddress\(state\)/.test(code) && /conn\?\.host/.test(code) && !/subserver/.test(code)],
@@ -3946,12 +3934,12 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
   console.log(`  ${disarms.length === 1 && disarms[0].reason === '自检' && lifecycleWatchdog.armed === false ? '✅' : '❌'} 游戏会话关闭与唯一看门狗同步发生且只执行一次`)
   console.log(`  ${notices.length === 1 && notices[0].gameSessionId === game.id && notices[0].delivery === 'wake' && /mc\.example:25566/.test(notices[0].text) ? '✅' : '❌'} 游戏会话管理器只投一次带 ID/服务器的结束提示词`)
 
-  const deferred = buildGameSessionCloseNotice({ gameSessionId: game.id, kind: 'user-force-stop', reason: '用户强制停止', startedAt: 0, endedAt: 65_000 })
+  const userStopped = buildGameSessionCloseNotice({ gameSessionId: game.id, kind: 'user-stop', reason: '用户手动停止', startedAt: 0, endedAt: 65_000 })
   const redacted = sanitizeGameSessionCloseText('password=secret access_token=abc\n连接断开')
-  console.log(`  ${deferred.delivery === 'defer' && /持续时间：1 分 5 秒/.test(deferred.text) && /仍可使用 mc_status、mc_connect/.test(deferred.text) ? '✅' : '❌'} 强停提示延后投放，且不会误禁离线可用工具`)
+  console.log(`  ${userStopped.delivery === 'wake' && /持续时间：1 分 5 秒/.test(userStopped.text) && /仍可使用 mc_status、mc_connect/.test(userStopped.text) ? '✅' : '❌'} 用户停止立即投放结束提示，且不会误禁离线可用工具`)
   console.log(`  ${!redacted.includes('secret') && !redacted.includes('abc') && redacted.includes('[已隐藏]') ? '✅' : '❌'} 结束原因中的凭据字段会被遮蔽`)
 
-  const closeKinds = ['assistant-disconnect', 'assistant-stop', 'user-force-stop', 'kicked', 'connection-lost', 'reconnect-failed', 'archived', 'runtime-shutdown', 'watchdog-cancelled', 'server-switch']
+  const closeKinds = ['assistant-disconnect', 'assistant-stop', 'user-stop', 'kicked', 'connection-lost', 'reconnect-failed', 'archived', 'runtime-shutdown', 'watchdog-cancelled', 'server-switch']
   const renderedKinds = closeKinds.map((kind) => buildGameSessionCloseNotice({ gameSessionId: game.id, kind, reason: '测试原因', startedAt: 0, endedAt: 1_000, attempts: 3, lastReconnectError: '超时' }))
   console.log(`  ${renderedKinds.every((notice) => notice.text.includes('【Minecraft 游戏会话已结束】') && !notice.text.includes('${')) ? '✅' : '❌'} 十种关闭情形都能生成无残留占位符的提示词`)
 

@@ -47,7 +47,7 @@
 
 ## 3. `src/game-session.ts` + `src/watchdog.ts` —— 游戏会话与单脑看门狗
 
-`GameSessionState` 是生产生命周期聚合根：每个实例独占一个 `Watchdog`、一个 `WatchdogEngine`、场景配置和注意配置；看门狗不能脱离游戏会话单独存在、启停或复用。`McSession.closeGameSession()` 是唯一关闭入口，自动重连期间保留原聚合；彻底断开、主动退出、强停、归档、实例销毁、换服或看门狗 job 被取消都会关闭整个聚合。首次 `close()` 还会经 `src/game-session-close.ts` 构造一次结束提示词；重复关闭不会重复投放，初始化失败可显式 `notify:false`。
+`GameSessionState` 是生产生命周期聚合根：每个实例独占一个 `Watchdog`、一个 `WatchdogEngine`、场景配置和注意配置；看门狗不能脱离游戏会话单独存在、启停或复用。`McSession.closeGameSession()` 是唯一关闭入口，自动重连期间保留原聚合；彻底断开、主动退出、用户停止、归档、实例销毁、换服或看门狗 job 被取消都会关闭整个聚合。首次 `close()` 还会经 `src/game-session-close.ts` 构造一次结束提示词；重复关闭不会重复投放，初始化失败可显式 `notify:false`。
 
 `src/game-session-close.ts` 是结束提示词的唯一文案与策略源：清理/遮蔽原因，补游戏会话 ID、服务器和持续时间，并按关闭类型选择 `wake` 或 `defer`。传输层只接受渲染完成的 notice，不得在工具或事件监听器里另拼文案。
 
