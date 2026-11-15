@@ -889,9 +889,26 @@ console.log('\n--- 聊天识别（未签名 system_chat 也要算玩家说话）
   forcedRaw.entity.position = { x: 13.3, y: 64, z: 10 }
   forcedInventory = [{ name: 'stone', count: 2 }, { name: 'stone', count: 3 }, { name: 'dirt', count: 1 }]
   await new Promise((resolve) => setTimeout(resolve, 1_100))
+  const pushedAfterTeleport = pushedMoves.length
+  forcedRaw.entity.position = { x: 13.3, y: 63.1, z: 10 }
+  await new Promise((resolve) => setTimeout(resolve, 1_100))
+  const pushedAfterFall = pushedMoves.length
+  forcedBot._selfMovingAt = Date.now()
+  forcedRaw.entity.position = { x: 13.6, y: 63.1, z: 10 }
+  await new Promise((resolve) => setTimeout(resolve, 1_100))
+  const pushedAfterSelfMove = pushedMoves.length
+  forcedBot._selfMovingAt = 0
+  forcedRaw.entity.position = { x: 14, y: 63.1, z: 10 }
+  await new Promise((resolve) => setTimeout(resolve, 1_100))
   forcedBot.stopObserver()
   console.log(`  ${forcedMoves.length === 1 && forcedMoves[0].distance === 3 && forcedMoves[0].serverForced === true ? '✅' : '❌'} 服务端 forcedMove 无距离阈值地识别为传送`)
-  console.log(`  ${pushedMoves.length === 1 && pushedMoves[0].distance === 0.3 ? '✅' : '❌'} 非自主位置变化会产出 pushed 事实，由事件配置决定最小距离`)
+  console.log(`  ${pushedAfterTeleport === 0 ? '✅' : '❌'} 传送优先，同一次位置变化不再产出 pushed`)
+  console.log(`  ${pushedAfterFall === 0 ? '✅' : '❌'} 纯垂直移动不属于 pushed（留给后续坠落事件）`)
+  console.log(`  ${pushedAfterSelfMove === 0 ? '✅' : '❌'} 自主移动收尾窗口内不产出 pushed`)
+  console.log(`  ${pushedMoves.length === 1 && pushedMoves[0].distance === 0.4 ? '✅' : '❌'} 真实水平非自主位移产出 pushed，距离只计 X/Z`)
+  const { readFileSync: readCoreSource } = await import('node:fs')
+  const coreSource = readCoreSource(new URL('./src/core.mjs', import.meta.url), 'utf8')
+  console.log(`  ${/async walkTo[\s\S]{0,700}this\._selfMovingAt = Date\.now\(\)/.test(coreSource) ? '✅' : '❌'} walkTo 持续标记自主移动，松键后采样不会误报`)
   console.log(`  ${pickups.length === 1 && pickups[0].items.includes('stone*5') && pickups[0].items.includes('dirt*1') ? '✅' : '❌'} 拾取载荷按同名物品合并并使用“名称*数量”格式`)
 
   chats.length = 0

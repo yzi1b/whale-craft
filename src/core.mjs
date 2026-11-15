@@ -553,6 +553,7 @@ export class McBot extends EventEmitter {
       lastPos: this.#observerPosition(),
       lastPlayers: new Set(Object.keys(this.bot?.players ?? {})),
       lastInv: this.#invSignature(),
+      skipPushedOnce: false,
     }
     this._forcedMoveBot = this.bot
     this._forcedMoveHandler = () => {
@@ -562,6 +563,7 @@ export class McBot extends EventEmitter {
       if (!from || !to) return
       const distance = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z)
       this._obs.lastPos = to
+      this._obs.skipPushedOnce = true
       if (distance > 0) this.emit('teleport', { from, to, distance: Number(distance.toFixed(1)), serverForced: true })
     }
     this._forcedMoveBot?.on?.('forcedMove', this._forcedMoveHandler)
@@ -614,10 +616,12 @@ export class McBot extends EventEmitter {
     }
     obs.lastPlayers = players
 
-    // ② 位置突变（排除我们自己飞/走造成的变化——那由 _selfMovingAt 标记）
+    // ② 水平非自主位移。传送优先于推动；垂直位移留给后续的坠落事件。
     const selfMovedRecently = now - (this._selfMovingAt ?? 0) < 3000
-    if (obs.lastPos && pos && !selfMovedRecently) {
-      const d = Math.hypot(pos.x - obs.lastPos.x, pos.y - obs.lastPos.y, pos.z - obs.lastPos.z)
+    const teleported = obs.skipPushedOnce === true
+    obs.skipPushedOnce = false
+    if (obs.lastPos && pos && !selfMovedRecently && !teleported) {
+      const d = Math.hypot(pos.x - obs.lastPos.x, pos.z - obs.lastPos.z)
       const cs = b.controlState ?? {}
       const pressing = Boolean(cs.forward || cs.back || cs.left || cs.right || cs.jump)
       if (d > 0 && !pressing) this.emit('pushed', { from: obs.lastPos, to: pos, distance: Number(d.toFixed(1)) })
@@ -1639,6 +1643,7 @@ export class McBot extends EventEmitter {
   async walkTo (target, { arrive = 1.6, budget = this.cfg.moveBudgetMs } = {}) {
     const b = this.requireBot()
     const t0 = Date.now()
+    this._selfMovingAt = t0
     let last = b.entity.position.clone()
     let lastProgress = Date.now()
     let jumpUntil = 0
@@ -1653,6 +1658,7 @@ export class McBot extends EventEmitter {
     b.setControlState('forward', true)     // ⚠️ 一直按住
     try {
       while (Date.now() - t0 < budget) {
+        this._selfMovingAt = Date.now()
         if (this.abortSignal?.aborted) throw abortError('走路', this.abortSignal)
         const pos = b.entity.position
         const dx = target.x - pos.x, dy = target.y - pos.y, dz = target.z - pos.z
@@ -1680,6 +1686,7 @@ export class McBot extends EventEmitter {
       }
     } finally {
       for (const k of ['forward', 'jump', 'back', 'left', 'right']) b.setControlState(k, false)
+      this._selfMovingAt = Date.now()
     }
   }
 
