@@ -935,6 +935,13 @@ console.log('\n--- 聊天识别（未签名 system_chat 也要算玩家说话）
   fake.emit('message', { translate: 'chat.type.text', with: [{ text: '<user>' }, { text: '签名的这句' }], toString: () => '<<user>> 签名的这句' }, 'chat')
   console.log(`  ${chats.length === 1 ? '✅' : '❌'} 签名聊天在 message 里的那条被跳过（不重复投递）`)
 
+  // 1.19.3+ 的 /say 等无玩家身份广播使用 profileless_chat；mineflayer 同样把它映射成 position='chat'。
+  const saySystemsBefore = systems.length
+  fake.emit('message', { toString: () => '[Server] 测试广播' }, 'chat')
+  fake._client.emit('profileless_chat', {})
+  console.log(`  ${systems.length === saySystemsBefore + 1 && systems.at(-1)?.text === '[Server] 测试广播' ? '✅' : '❌'} /say 的 profileless_chat 进入 system 事件`)
+  console.log(`  ${chats.length === 1 ? '✅' : '❌'} /say 不冒充玩家聊天，也不重复进入 chat`)
+
 }
 
 // McBot.status 要带上**连的哪个服**（用户 2026-09-16："状态条应该显示服务器地址，太长则截断"）

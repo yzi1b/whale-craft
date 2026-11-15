@@ -1140,8 +1140,9 @@ export class McBot extends EventEmitter {
    *    只剩 damage / death / teleport 能用（`stats.chats === 0`、看门狗日志里一条 chat 都没有）。
    *
    * 现在按 mineflayer 的约定分流（`lib/plugins/chat.js` 里两种包的 emit 签名）：
-   *    · `position === 'chat'`  → 来自 playerChat（签名）→ 由下面的 `player_chat` handler 处理，
-   *      这里**直接跳过**（否则同一条进两遍）
+   *    · `position === 'chat'`  → mineflayer 的 playerChat 高层事件：既可能来自玩家的
+   *      `player_chat`，也可能来自 `/say` 等服务器广播使用的 `profileless_chat`。这里先缓存
+   *      渲染文本，再由下面对应的原始包 handler 唯一归类，避免重复或漏掉广播。
    *    · `position === undefined`→ 来自 systemChat 的 **positionId 0 = 聊天**（未签名）
    *    · `position === 'system'` → 来自 systemChat 的 **positionId 1**：**也要按"内容"再判一次**
    *      —— 有的服务端（LAN 开放世界 / 某些插件）把玩家聊天塞进 system 位置，渲染出来仍是
@@ -1155,9 +1156,15 @@ export class McBot extends EventEmitter {
    * @param {object} b mineflayer bot（`on` + `_client`）
    */
   wireChatEvents (b) {
+    let pendingPositionChat = null
     b.on('message', (msg, position) => {
       const text = this.#plain(msg)
-      if (position === 'chat') return                    // 签名聊天：player_chat 那条路已处理
+      if (position === 'chat') {
+        // mineflayer 把 player_chat 与 profileless_chat 都统一映射成这里的 `chat`。
+        // 先缓存渲染结果，再由同一次原始包事件决定它是玩家聊天还是 /say 等服务器广播。
+        pendingPositionChat = { text }
+        return
+      }
       if (position !== 'game_info') {                    // 动作栏除外，其余都按内容再判一次
         const parsed = this.#playerChatFrom(msg, text)
         if (parsed) {
@@ -1169,9 +1176,17 @@ export class McBot extends EventEmitter {
       this.emit('system', { text })
     })
     b._client?.on?.('player_chat', (p) => {
+      pendingPositionChat = null
       const who = String(p?.networkName?.value ?? p?.networkName ?? '?')
       const text = p?.plainMessage ?? ''
       this.#emitPlayerChat(who, text, b.username)
+    })
+    b._client?.on?.('profileless_chat', () => {
+      const text = pendingPositionChat?.text
+      pendingPositionChat = null
+      if (!text) return
+      this.#pushChat('system', null, text)
+      this.emit('system', { text })
     })
     return b
   }
