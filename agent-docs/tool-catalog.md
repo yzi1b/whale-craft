@@ -29,7 +29,7 @@
 | `mc_ping` | **已知地址**的探路 | 发一次 STATUS ping（握手+状态请求），**不登录、不用账户、不进服**；参数只有 `address`（host[:port]，端口默认 25565）+ `timeoutMs`（默认 5s 上限 30s）；拿通不通/版本/协议号/MOTD/人数/延迟；错误说人话。**`subserver`/`port` 已删**（2026-10-05：地址自带端口；无子服概念） |
 | `mc_connect` | 进服（唯一连接入口） | 参数只有 `address`（host[:port]）+ `account`（innerID）。**不再有 `host/port/subserver/version`**；地址内部 `parseAddress`，握手 serverHost 就用该地址（DNS+Velocity 自行路由）；**版本永远自动探测**；版本不受支持（mineflayer 无该版本协议数据）→ **建连期间快速失败 + 明确版本错误**（不是"连接超时"；另有 spawn 后 `isVersionSupported` 兜底，复用 `src/mcversion.mjs`）；连接后等区块、**自动挂看门狗**、`learnName`；**返回 = `mc_status` 的内容** |
 | `mc_accounts` | 账户管理（会话内） | `list/search/refresh`（**`use` 已删**，2026-10-05）；`refresh` 走 `bot.authOnly`（只认证不连接），`innerID` 缺省用本会话选定/默认；返回值**永不含密码/token** |
-| `mc_disconnect` | 主动退服 | 看门狗 `disarm(notify:true)`（提醒 AI 已不在游戏）+ 优雅 quit |
+| `mc_disconnect` | 主动退服 | 经唯一的游戏会话关闭入口优雅 quit；看门狗、结构化队列和会话配置同步销毁 |
 | `mc_stop` | 停本会话 | 等价强制停止但 `cancelTurn: false`（**防自我 abort**；HTTP 的 `/api/mc/stop` 用 `cancelTurn:true`） |
 | `mc_capabilities` | 能力/限制自述 | 报 plugin 版本、mineflayer testedVersions、超时上限、指令白名单等；不返回插件安装目录，配置路径用 `$DSH_HOME` 占位符或工作区相对路径 |
 
@@ -52,12 +52,12 @@
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
-| `mc_watch` | 唤醒通道的唯一控制面 | `action: status / arm / disarm / log`；status 只回运行状态，不再夹带旧版配置；`log` 返回 `{armed, stats, recent: 留档末 30 条}`。进服默认自动 arm |
+| `mc_watch` | 看门狗只读状态面 | `action: status / log`；看门狗随游戏会话自动建立、关闭，不提供独立 arm/disarm；status 只回运行状态，`log` 返回 `{gameSessionId, armed, stats, recent}` |
 | `mc_watchdog_info` | 事件目录 | 总览或按 `事实名/修饰名` 查询；支持 `事实名/*` 与数组；顶层返回 `{markdown}` 对象并直接渲染 Markdown |
 | `mc_watchdog_global_settings` | 全局提醒配置 | 持久化 `minInterval` / `interruptLevel` / `minInterruptInterval` |
-| `mc_watchdog_config` | 三层配置 | 编辑/读取 base、scene、effective；base 落 `$DSH_HOME/whale_craft/watchdog.json` |
-| `mc_watchdog_focus` | 注意配置 | 会话内 list/edit/read/remove；remove 单项同时接受 `name` 与 `names`；支持敏感/钝感合并 |
-| `mc_watchdog_queue` | 结构化事件队列 | 与游戏会话同寿命；读取时本地化时间并精简重复修饰 |
+| `mc_watchdog_config` | 三层配置 | 编辑/读取 base、scene、effective；base 落 `$DSH_HOME/whale_craft/watchdog.json`；返回 `gameSessionId`（无会话的 base 操作为 null） |
+| `mc_watchdog_focus` | 注意配置 | 会话内 list/edit/read/remove；remove 单项同时接受 `name` 与 `names`；支持敏感/钝感合并；返回 `gameSessionId` |
+| `mc_watchdog_queue` | 结构化事件队列 | 与游戏会话同寿命；读取时本地化时间并精简重复修饰；返回 `gameSessionId` |
 
 ## 四、交互与动作（8）
 

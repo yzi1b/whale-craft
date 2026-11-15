@@ -4,8 +4,8 @@
  * ============================================================================
  * 用户 2026-09-15 的要求，逐条对应到实现：
  *
- *  · "从进游戏到离开前保持运行，进服自动打开、退服自动关闭，退服提醒 AI"
- *      → arm() / disarm()，由 mc_connect / mc_disconnect 自动调用；disarm 默认通知 AI。
+ *  · "从进游戏到离开前保持运行，进服自动打开、退服自动关闭"
+ *      → 生产中由游戏会话统一创建和关闭，不提供独立启停入口。
  *        job 存活期 = 整局游戏（不再是"醒来一次就结算"）。
  *
  *  · "高度可配置，有默认配置，AI 调用工具修改"
@@ -142,11 +142,12 @@ export class Watchdog {
    * @param {object} o.agent  当前会话的 agent（注入消息用）
    * @param {Function} o.onFire 事件回调钩子（用于同步到 sess.events）
    */
-  constructor ({ ctx, sess, agent, promptSignal = null, tickMs = 1000, modern = false }) {
+  constructor ({ ctx, sess, agent, promptSignal = null, tickMs = 1000, modern = false, onCancel = null }) {
     this.ctx = ctx
     this.sess = sess
     this.agent = agent
     this.modern = modern === true
+    this.onCancel = typeof onCancel === 'function' ? onCancel : null
     /** tick 周期：生产固定 1000ms；自检可调小，避免每条注入都真等 1 秒。 */
     this.tickMs = Number.isFinite(Number(tickMs)) && Number(tickMs) > 0 ? Number(tickMs) : 1000
     /**
@@ -193,7 +194,7 @@ export class Watchdog {
      * 🔴 同类残留事故：看门狗的 `armed` 挂在**会话实例**上，切模式不会自动关它 ——
      *    从「MC模式」切回普通模式后，它仍会把"游戏里有人叫你/你被打了一下"这类 MC 事件
      *    注进一个**已经不在 MC 模式**的会话（用户："开到 mc 模式再开回去标准，
-     *    居然注入了 mc 模式提示词"）。插件在 `ensureWatchdog` 后挂上这个回调（现场判 preset），
+     *    居然注入了 mc 模式提示词"）。游戏会话建立时挂上这个回调（现场判 preset），
      *    闸门关着时**只记账不注入**；切回 MC 模式**自动恢复**（不必重新 arm）。
      * @type {(() => boolean) | null}
      */
@@ -408,9 +409,12 @@ export class Watchdog {
         label: `MC 看门狗（整局存活）`,
         owner: ownerId,
         run: () => ({
-          // 宿主 job_kill → 这里。走 fromJob:true：拆除但**不回头 kill 自己**，
-          // 并结算 done（否则 job 卡在 stopping）。
-          cancel: (r) => { self.disarm(r ? `被取消（${r}）` : '被取消', { fromJob: true }) },
+          // 宿主 job_kill → 关闭整个游戏会话；看门狗不允许脱离游戏会话单独关闭。
+          cancel: (r) => {
+            const reason = r ? `被取消（${r}）` : '被取消'
+            if (self.onCancel) self.onCancel(reason)
+            else self.#record('lifecycle', `后台 job 请求关闭，但没有游戏会话关闭入口：${reason}`)
+          },
           done: new Promise((resolve) => { self._resolveJob = resolve }),
           readOutput: () => {
             const text = self.log.slice(-30).map((e) => `[${new Date(e.at).toISOString().slice(11, 19)}] (${e.kind}) ${e.text}`).join('\n')
@@ -440,14 +444,12 @@ export class Watchdog {
      *   · 直到 AI 下一次调工具才撞上"不在线"。
      * 现在分两种：
      *   · **会重连** → 叫醒 AI 说清"断了、正在自动重连"，看门狗继续挂着（重连成功后照常工作）；
-     *   · **不重连了**（主动下线 / 重连没戏）→ 关掉看门狗，它的关闭通知本来就会告诉 AI
-     *     "你已经不在 Minecraft 里了，要用 mc_connect 重新进服"。
+     *   · **不重连了**（主动下线 / 重连没戏）→ 上层关闭整个游戏会话，看门狗随之销毁。
      * 新版模式下是否提醒由 `connection.disconnect` 配置控制；这里仅保留旧模式兼容分支。
      */
     on('offline', (e) => {
       const reason = String(e?.reason ?? '连接结束')
       if (this.modern) {
-        if (!e?.willReconnect) { try { this.disarm(`连接断开：${reason}`) } catch {} }
         return
       }
       if (e?.willReconnect) {
@@ -458,7 +460,7 @@ export class Watchdog {
         })
         return
       }
-      // 不会重连了：关掉看门狗（notify 默认开 → AI 会收到"你已不在 MC 里"的提示）
+      // 旧模式兼容：生产的 modern 模式由游戏会话统一关闭。
       try { this.disarm(`连接断开：${reason}`) } catch { /* 关不掉也不能让它把流程带走 */ }
     })
 

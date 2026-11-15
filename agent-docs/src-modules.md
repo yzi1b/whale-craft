@@ -45,14 +45,16 @@
 - 返回 `{waitedMs, interrupted, reason}`。收工条件按序检查：① `signal.aborted` → `reason:'用户停止'`（interrupted:false）；② `sess.waitInterruptedAt > startedAt` → `interrupted:true, reason: waitInterruptReason`；③ 新事件出现 → `reason:'有事件'`；④ 超时 → `reason:null`。
 - **存在的理由**：宿主 `agent.steer` 在**下一步 step 边界**消费，而 step 边界要等当前工具调用返回 —— 没有打断机制时，`mc_events{waitSec:120}` 会把看门狗的唤醒文案**压到等待结束**才投递（"等待堵住了它正在等的那件事"，0.1.7 事故）。
 
-## 3. `src/watchdog.mjs` —— 单脑看门狗
+## 3. `src/game-session.ts` + `src/watchdog.mjs` —— 游戏会话与单脑看门狗
+
+`GameSessionState` 是生产生命周期聚合根：每个实例独占一个 `Watchdog`、一个 `WatchdogEngine`、场景配置和注意配置；看门狗不能脱离游戏会话单独存在、启停或复用。`McSession.closeGameSession()` 是唯一关闭入口，自动重连期间保留原聚合；彻底断开、主动退出、强停、归档、实例销毁或看门狗 job 被取消都会关闭整个聚合。
 
 **导出**：`Watchdog`、`WATCH_DEFAULTS`。
 
 - 构造 `{ctx, sess, agent, promptSignal, tickMs}`（promptSignal **必传**，`sessionController.prompt` 是 @Remote；`tickMs` 生产默认 1000，自检传小值避免每条注入真等 1 秒）。
 - `arm()` 幂等：`learnName(sess.bot.username)`（**从登录档案现学游戏名**，不写进源码——防私人名字随开源副本泄露）→ 绑 bot 事件 → `#startJob()`（宿主 jobs，`kind:'mc-watch'`，`owner:agent`；无 jobs 服务降级"无 job 模式"）→ `setInterval(#tick, tickMs)`。
-- `disarm(reason, {notify, fromJob})`：先 teardown，再把 job 结算（**幂等**，只结算一次；`readOutput` = 留档末 30 条）；`notify` 时注入"你已经不在 MC 里了…"。自动关闭时机：offline 且不重连 / `mc_disconnect{notify}` / stopSession / 会话 destroy / 宿主 kill job（`fromJob:true`）。
-- **旧唤醒矩阵**（`wakeOn`）：仅供 `Watchdog` 的非 modern 兼容分支；生产由 `ensureWatchdog(... modern:true)` 跳过这些事件判断，对外配置统一走 `src/watchdog-catalog.ts` / `mc_watchdog_config`。
+- `disarm(reason, {notify, fromJob})`：底层幂等 teardown，并结算 job（`readOutput` = 留档末 30 条）；生产只由 `GameSessionState.close()` 调用且不独立通知。job cancel 反向请求关闭整个游戏会话。
+- **旧唤醒矩阵**（`wakeOn`）：仅供 `Watchdog` 的非 modern 兼容分支；生产使用 `modern:true` 跳过这些事件判断，对外配置统一走 `src/watchdog-catalog.ts` / `mc_watchdog_config`。
 
 | 项 | 默认 | 判定 | 文案要点 |
 | --- | --- | --- | --- |

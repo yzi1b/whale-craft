@@ -264,24 +264,26 @@ for (const n of ['mc_status', 'mc_map', 'mc_say', 'mc_connect']) {
   }
 }
 
-// ── 看门狗：挂载 / 新版配置面 / 卸载 ──
+// ── 看门狗：与游戏会话强绑定 / 新版配置面 ──
 console.log('\n--- 看门狗 v2 ---')
 {
-  // 没挂时：status 应是 armed:false，且不再泄露旧版 config 结构
+  // 没有游戏会话时，看门狗不存在，也不能单独启动或关闭。
   const s0 = await tools.get('mc_watch').execute({}, A)
-  console.log(`  ${s0.armed === false && s0.config === undefined ? '✅' : '❌'} 初始未挂载；status 不再返回旧版 config`)
+  console.log(`  ${s0.active === false && s0.gameSessionId === null ? '✅' : '❌'} 没有游戏会话时没有看门狗实例`)
 
-  // 挂载（宿主无 jobs → 降级为"无 job 模式"，但必须仍然武装成功）
-  const s1 = await tools.get('mc_watch').execute({ action: 'arm' }, A)
-  console.log(`  ${s1.armed === true ? '✅' : '❌'} arm 成功（无 jobs 服务时降级运行，不抛错）`)
+  const armError = await tools.get('mc_watch').execute({ action: 'arm' }, A).then(() => null, (error) => error.message)
+  const disarmError = await tools.get('mc_watch').execute({ action: 'disarm' }, A).then(() => null, (error) => error.message)
+  console.log(`  ${/可用 status\/log/.test(String(armError)) && /可用 status\/log/.test(String(disarmError)) ? '✅' : '❌'} mc_watch 不再提供独立 arm/disarm`)
 
-  // 新版 scene 配置必须直接反映到 effective，不再经过旧 mc_config。
-  await tools.get('mc_watchdog_config').execute({
+  // scene/effective/focus 都属于游戏会话；离线时不得预建或跨局残留。
+  const sceneWithoutGame = await tools.get('mc_watchdog_config').execute({
     action: 'edit', type: 'scene', merge: false,
     config: { 'self.pickup': { wake: true }, 'message.chat/nearby': { distance: 20 } },
-  }, A)
-  const effective = await tools.get('mc_watchdog_config').execute({ action: 'read', type: 'effective', items: [] }, A)
-  console.log(`  ${effective.config['self.pickup']?.wake === true && effective.config['message.chat/nearby']?.distance === 20 ? '✅' : '❌'} scene 配置直接进入新版 effective（pickup.wake / nearby.distance）`)
+  }, A).then(() => null, (error) => error.message)
+  const focusWithoutGame = await tools.get('mc_watchdog_focus').execute({ action: 'list' }, A).then(() => null, (error) => error.message)
+  console.log(`  ${/当前没有游戏会话/.test(String(sceneWithoutGame)) && /当前没有游戏会话/.test(String(focusWithoutGame)) ? '✅' : '❌'} scene/effective/focus 不能脱离游戏会话存在`)
+  const baseWithoutGame = await tools.get('mc_watchdog_config').execute({ action: 'read', type: 'base' }, A)
+  console.log(`  ${baseWithoutGame.gameSessionId === null ? '✅' : '❌'} 全局 base 配置离线可读且 gameSessionId=null`)
 
   // 目录工具的四条路径：总览、单项、通配、数组（含被宿主转成 JSON 字符串的数组）。
   const info = tools.get('mc_watchdog_info')
@@ -292,14 +294,6 @@ console.log('\n--- 看门狗 v2 ---')
   const infoJsonArray = await info.execute({ name: '["message.chat","self.teleport"]' }, A)
   console.log(`  ${[infoAll, infoOne, infoStar, infoArray, infoJsonArray].every((value) => value && typeof value === 'object' && typeof value.markdown === 'string') ? '✅' : '❌'} mc_watchdog_info 所有查询路径都返回对象`)
   console.log(`  ${/message\.chat/.test(infoArray.markdown) && /self\.teleport/.test(infoArray.markdown) && infoJsonArray.markdown === infoArray.markdown ? '✅' : '❌'} mc_watchdog_info 数组与 JSON 字符串数组都按多项查询`)
-
-  // remove 同时接受文档主参数 names 与单项便捷参数 name；不得静默空操作。
-  const focus = tools.get('mc_watchdog_focus')
-  await focus.execute({ action: 'edit', name: 'test_probe', sensitive: true, config: { 'self.pickup': { wake: true } } }, A)
-  const removedByName = await focus.execute({ action: 'remove', name: 'test_probe' }, A)
-  const removeWithoutName = await focus.execute({ action: 'remove' }, A).then(() => null, (error) => error.message)
-  console.log(`  ${removedByName.removed?.[0] === 'test_probe' && removedByName.remainingCount === 0 ? '✅' : '❌'} mc_watchdog_focus remove{name} 真正删除单项`)
-  console.log(`  ${/必须提供 name 或 names/.test(String(removeWithoutName)) ? '✅' : '❌'} mc_watchdog_focus remove 缺名称明确报错`)
 
   // 叫法判定（**配置不是硬编码**）——直接构造 Watchdog 测，不依赖 registry
   const { Watchdog } = await import('./src/watchdog.mjs')
@@ -435,18 +429,11 @@ console.log('\n--- 看门狗 v2 ---')
     console.log(`  ${/被传送 \/ 捡物 \/ 其他玩家上下线不在这里/.test(idxSrc2) ? '✅' : '❌'} 工具描述不再谎称"含被传送/捡物/上下线"（那些只在 mc_watch log 里）`)
   }
 
-  // 新版非法配置项要清晰报错
+  // base 是全局持久配置，不依赖具体游戏会话；非法项仍要清晰报错。
   try {
-    await tools.get('mc_watchdog_config').execute({ action: 'edit', type: 'scene', config: { '不存在的项': { wake: true } } }, A)
+    await tools.get('mc_watchdog_config').execute({ action: 'edit', type: 'base', config: { '不存在的项': { wake: true } } }, A)
     console.log('  ❌ 非法配置项竟然被接受')
   } catch (e) { console.log(`  ✅ 非法配置项清晰报错：${e.message.slice(0, 50)}…`) }
-
-  // 清空本次 scene 覆盖
-  await tools.get('mc_watchdog_config').execute({ action: 'edit', type: 'scene', merge: false, config: {} }, A)
-
-  // 卸载
-  const s2 = await tools.get('mc_watch').execute({ action: 'disarm', reason: '自检' }, A)
-  console.log(`  ${s2.armed === false ? '✅' : '❌'} disarm 成功`)
 
   const badAction = await tools.get('mc_watch').execute({ action: 'stats' }, A).then(() => null).catch((e) => e.message)
   console.log(`  ${/未知 action/.test(String(badAction)) ? '✅' : '❌'} mc_watch 未知 action 明确报错`)
@@ -1268,17 +1255,8 @@ console.log('\n--- 归档保护（官方生命周期）---')
   const plain = await activity({ sessionId: 'plain-session' }, async () => rest)
   console.log(`  ${plain === rest ? '✅' : '❌'} 无 MC 活动时原样交棒，不阻止普通归档`)
 
-  await tools.get('mc_watch').execute({ action: 'arm' }, A)
-  const armed = (await tools.get('mc_watch').execute({}, A)).armed
-  const active = await activity({ sessionId: 'sess-A' }, async () => rest)
-  console.log(`  ${armed === true ? '✅' : '❌'} 前置条件：归档前看门狗挂着`)
-  console.log(`  ${active[0]?.kind === 'minecraft' && active[1] === rest[0] ? '✅' : '❌'} MC 活动排在其余 provider 结果前，并且调用 next()`)
-
-  await stop({ sessionId: 'sess-A' })
-  const armedAfter = (await tools.get('mc_watch').execute({}, A)).armed
-  console.log(`  ${armedAfter === false ? '✅' : '❌'} stopActivity 派发后关闭看门狗（armed: ${armed} → ${armedAfter}）`)
-
   const idx = (await import('node:fs')).readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+  console.log(`  ${/await sess\.closeGameSession\('会话被归档'\)/.test(idx) ? '✅' : '❌'} stopActivity 统一关闭游戏会话（看门狗随会话关闭）`)
   console.log(`  ${!idx.includes('wsRegistry.archiveSession =') && !idx.includes('installArchiveGuard') ? '✅' : '❌'} 不再劫持 workspaceRegistry.archiveSession`)
 }
 
@@ -2780,12 +2758,18 @@ console.log('\n--- 看门狗 job 结算 ---')
         }
       : undefined),
   }
-  const mk = () => new Watchdog({
-    ctx: wdCtx,
-    sess: { bot: new EventEmitter(), events: [], agentId: 's', config: {} },
-    agent: { id: 's' },
-    onFire: () => {},
-  })
+  const mk = () => {
+    let watchdog
+    watchdog = new Watchdog({
+      ctx: wdCtx,
+      sess: { bot: new EventEmitter(), events: [], agentId: 's', config: {} },
+      agent: { id: 's' },
+      onFire: () => {},
+      // 生产中该回调关闭整个 GameSession；本单元只代行聚合对象最终调用的底层拆除。
+      onCancel: (reason) => watchdog.disarm(reason, { fromJob: true }),
+    })
+    return watchdog
+  }
 
   const wd = mk()
   wd.arm()
@@ -3972,10 +3956,16 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
   const { GameSessionState, GAME_SESSION_ID_PATTERN } = await import('./src/game-session.ts')
   const { WatchdogEngine } = await import('./src/watchdog-engine.ts')
   const { cloneWatchdogDefaults } = await import('./src/watchdog-catalog.ts')
-  const game = new GameSessionState(100)
+  const lifecycleEngine = new WatchdogEngine(cloneWatchdogDefaults())
+  const disarms = []
+  const lifecycleWatchdog = { armed: true, status: () => ({ armed: true }), disarm: (reason, options) => { disarms.push({ reason, options }); lifecycleWatchdog.armed = false } }
+  const game = new GameSessionState({ watchdog: lifecycleWatchdog, watchdogEngine: lifecycleEngine }, 100)
   console.log(`  ${GAME_SESSION_ID_PATTERN.test(game.id) && game.active ? '✅' : '❌'} 游戏会话 ID 为 16 位 hex，创建后 active`)
-  game.end('自检', 200)
-  console.log(`  ${!game.active && game.endedAt === 200 && game.endReason === '自检' ? '✅' : '❌'} 游戏会话结束幂等记录时间与原因`)
+  console.log(`  ${game.watchdog === lifecycleWatchdog && game.watchdogEngine === lifecycleEngine && game.watchdogScene && game.watchdogFocuses ? '✅' : '❌'} 游戏会话独占看门狗、事件引擎和会话配置`)
+  const closed = game.close('自检', {}, 200)
+  const closedAgain = game.close('重复关闭', {}, 300)
+  console.log(`  ${closed && !closedAgain && !game.active && game.endedAt === 200 && game.endReason === '自检' ? '✅' : '❌'} 游戏会话结束幂等记录时间与原因`)
+  console.log(`  ${disarms.length === 1 && disarms[0].reason === '自检' && lifecycleWatchdog.armed === false ? '✅' : '❌'} 游戏会话关闭与唯一看门狗同步发生且只执行一次`)
 
   let now = 1_000
   const wakes = []

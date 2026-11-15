@@ -35,7 +35,6 @@ export async function apply(api) {
 | `asTool(spec)` | **必须用它注册**——它负责返回值无损化和注入 `exec.signal` |
 | `getSession(exec)` | 按 `exec.agent.id` 路由到当前会话的 `McSession`（含 `bot` / `events` / `watchdog`） |
 | `registry` | `McRegistry`：`peek(id)` / `listSessions()` / `destroy(id)` |
-| `ensureWatchdog(ctx, sess, agent)` | 拿/建看门狗 |
 | `memory` | `MemoryStore`：记忆树增删改查（`list` / `read` / `write` / `append` / `put` / `delete` / `search`），根目录 `.whale-craft/` |
 | `logLine(...)` | 写 `whale_craft/logs/whale-craft.log`（插件加载期也能用） |
 | `Watchdog` | 看门狗类（要自己造一个时用） |

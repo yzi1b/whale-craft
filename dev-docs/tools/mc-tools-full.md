@@ -279,7 +279,7 @@ refresh 刷新某账户的登录状态，皮肤站会去认证服换新令牌。
 
 > 临时使用，即将大幅变更。
 
-从 MC 下线（当前会话的机器人退出游戏）。不影响其他会话的机器人。看门狗会自动关闭并提醒你。
+结束当前游戏会话。不影响其他会话；机器人连接、看门狗、结构化事件队列与会话内配置同步关闭。
 
 - reason: **string** 下线原因（写进日志）
 
@@ -288,7 +288,7 @@ refresh 刷新某账户的登录状态，皮肤站会去认证服换新令牌。
 - online: **boolean** 固定为 false
 - gameSessionId: **string** 本次刚刚关闭的游戏会话 ID
 - quit: **object** `graceful`、`forced`、`ms`
-- watchdog: **string** `已关闭并已提醒` / `本来就没挂`
+- watchdog: **string** 固定为 `已随游戏会话关闭`
 
 ### mc_stop
 
@@ -544,6 +544,8 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 ## 看门狗控制
 
 看门狗随游戏会话自动启动，并在游戏会话彻底断开后销毁，不另设启动、停止工具。
+
+`mc_watchdog_config`、`mc_watchdog_focus`、`mc_watchdog_queue` 的返回值均带当前 `gameSessionId`；读取或编辑全局 base 配置且当前没有游戏会话时，该值为 `null`。
 
 ### mc_watchdog_info
 

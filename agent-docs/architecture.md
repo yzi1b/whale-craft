@@ -27,7 +27,8 @@ DSH host 进程
    ├─ protected（src）       RULES.md / AGENTS.md / config.json 的"可读不可写"统一判定
    ├─ AccountStore          $DSH_HOME/whale_craft/accounts.json + 宿主凭据服务（密码/token）
    ├─ McRegistry            agentId → McSession
-   │   └─ McSession         McBot + events[]（≤200 条）+ Watchdog + selectedAccount
+   │   └─ McSession         McBot + events[]（≤200 条）+ GameSession + selectedAccount
+   │       ├─ GameSession   Watchdog + WatchdogEngine + scene/focus（严格一对一）
    │       └─ McBot         src/core.mjs：mineflayer 实例（一个游戏角色）
    ├─ 工具注册（37 个）      mc_* 30 / mc_kit_* 4 / mc_admin_* 1 / mc_debug_* 2，全部经 asTool()
    ├─ HTTP（webServer）
@@ -46,8 +47,9 @@ DSH host 进程
 
 ## 3. 会话与实例模型（index.js）
 
-- `McSession`：`agentId / config / bot(McBot, instanceId=agentId) / mode(standby|active|sleep) / events / maxEvents=200 / watchdog / selectedAccount / waitInterruptedAt / waitInterruptReason`。
-- `McRegistry`：`getOrCreate(agent)` / `peek(id)`（**只读不建**，HTTP 用）/ `destroy(id)` / `destroyAll()`（插件卸载时 `ctx.effect` 里调）。`destroy()` 顺序：disarm 看门狗 → 优雅退游戏 → 清事件。
+- `McSession`：`agentId / config / bot(McBot, instanceId=agentId) / mode(standby|active|sleep) / events / maxEvents=200 / gameSession / selectedAccount / waitInterruptedAt / waitInterruptReason`；`watchdog` 等只读 getter 均从 `gameSession` 派生。
+- `GameSessionState`：一次成功进服创建一个 ID，并**独占** `Watchdog + WatchdogEngine + scene + focuses`。游戏会话与看门狗一对一强绑定：同步建立、同步关闭，不能单独存在、启停或跨游戏会话复用；自动重连保留同一个聚合。
+- `McRegistry`：`getOrCreate(agent)` / `peek(id)`（**只读不建**，HTTP 用）/ `destroy(id)` / `destroyAll()`（插件卸载时 `ctx.effect` 里调）。所有退出路径统一走 `McSession.closeGameSession()`：先断开机器人，再幂等关闭 GameSession（其中同步 disarm 看门狗），最后清引用。
 - **事件队列唯一写入方**是 `McSession.ensureWired`（懒绑 bot 事件 → `#pushEvent`）：`spawn / death / reconnect / offline / chat / system / damage`。超 200 条裁旧。`drainEvents()` 供 `mc_events` 读。
 - `interruptWait(reason)`：置 `waitInterruptedAt` 标记，`src/wait.mjs` 的等待循环（250ms 轮询）看到就立刻收工 —— 这是"唤醒不被等待堵住"的一半（另一半在 Watchdog `#inject`）。
 - **状态量语义**（`modeView()` / `mc_status` / `GET /api/mc/status`）：
@@ -58,7 +60,7 @@ DSH host 进程
 | `ghost` | 连接已结束但 `bot.entity` 残留 —— 明确告知"要回游戏请重新 mc_connect" |
 | `reconnecting` | 正在两次自动重连尝试之间的窗口 |
 | `reconnectPending` | 掉线置位；**真重连成功或手动 mc_connect 成功才清** —— 覆盖"正在尝试连接"那几十秒，免得状态条退回"未上线" |
-| `active`（HTTP） | `online || reconnecting || reconnectPending || watchdog.armed` —— 决定浏览器状态条显不显示 |
+| `active`（HTTP） | 游戏会话存在，或机器人仍在线/连接/重连中 —— 决定浏览器状态条显不显示 |
 
 - **单实例锁**：连服期间 `$DSH_HOME/whale_craft/.instance.<会话>.json`（`lockDir = stateDir`，不写包目录）。
 
@@ -89,8 +91,8 @@ DSH host 进程
 4. 优先 `agent.steer(userMessage(...))`（运行中 = 下一步插话；空闲 = 起一轮 = 唤醒）；`steer` 不可用时兜底 `sessionController.prompt({mode:'steer'}, promptSignal)` —— **promptSignal 必传**（`sessionController.prompt` 是 @Remote 签名，不传会 `throwIfAborted` 炸）；
 5. 注入被 `gate` 检查：**不在 MC 模式只记账不注入**（drop）。
 
-- 看门狗挂宿主 job（`jobs.start({kind:'mc-watch', label:'MC 看门狗（整局存活）', owner:agent, run})`）：job 存活期=整局游戏；`disarm` 幂等结算（`#settleJob`），宿主 kill job 时 `cancel → disarm(fromJob:true)`。
-- 断线矩阵：`offline` 且 `willReconnect` → 唤醒"正在自动重连"（不关看门狗）；`willReconnect=false` → **自动关看门狗** + 关闭通知（"你已经不在 MC 里了"）。
+- 看门狗挂宿主 job（`jobs.start({kind:'mc-watch', label:'MC 看门狗（整局存活）', owner:agent, run})`）：job 存活期=整局游戏；`disarm` 幂等结算（`#settleJob`）。宿主 kill job 时 `cancel` 也必须进入 `closeGameSession()`，不得只关看门狗。
+- 断线矩阵：`offline` 且 `willReconnect` → 唤醒“正在自动重连”（游戏会话与看门狗都保留）；`willReconnect=false` → 上层关闭整个游戏会话，看门狗随之关闭。本阶段不在此路径投放会话结束提示词。
 - 对外事件配置统一由 `mc_watchdog_config`（base / scene / effective）、`mc_watchdog_global_settings` 与 `mc_watchdog_focus` 管理；旧 `WATCH_DEFAULTS` 仅留在投递器内部兼容分支，不再暴露为工具配置。
 
 ## 6. 提示词注入体系（唯一通道 = 插件提示行）
@@ -209,7 +211,7 @@ kind 变化先 release 再套新）：
 
 ## 11. 停止、归档与保护
 
-- **`stopSession` 四步顺序**（状态条“强制停止”专用）：停 LLM → 优雅退游戏（看门狗 disarm(notify)）→ **只杀 `ownerSession` / `owner===sessionId` 的 job**（无主的不设防，**误杀宿主任务的坑**）→ 再停一次 LLM。HTTP 的 `/api/mc/stop` 默认 `cancelTurn: true`；工具 `mc_stop` 必须 `cancelTurn: false`（否则自我 abort 卡死）。
+- **`stopSession` 四步顺序**（状态条“强制停止”专用）：停 LLM → `closeGameSession()` 同步关闭游戏连接与看门狗 → **只杀 `ownerSession` / `owner===sessionId` 的 job**（无主的不设防，**误杀宿主任务的坑**）→ 再停一次 LLM。HTTP 的 `/api/mc/stop` 默认 `cancelTurn: true`；工具 `mc_stop` 必须 `cancelTurn: false`（否则自我 abort 卡死）。
 - **归档保护**：使用 DSH 0.2.2 官方接缝。`workspace/session-activity` 是 waterfall：MC 在线、重连中或看门狗挂着时，在 `await next()` 的结果前追加 `{kind:'minecraft'}`，普通归档因此拒绝；调用方选择 `archiveSession(id,{stopActivity:true})` 后，宿主先持久化归档再派发 `workspace/session-stop`，插件只关闭自己拥有的看门狗和机器人。LLM、通用 job、subagent 由各自 provider 停止；**不得再包装 `workspaceRegistry.archiveSession`**。
 
 ## 12. 落盘地图
