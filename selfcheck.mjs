@@ -356,7 +356,7 @@ console.log('\n--- 看门狗 v2 ---')
     console.log(`  ${/bot\.on\('offline'/.test(idxSrc) && /连接断开：/.test(idxSrc) ? '✅' : '❌'} 会话把 offline 转进事件队列（mc_events 能看到）`)
     console.log(`  ${/reconnecting: Boolean\(this\.bot\.reconnecting \|\| this\.bot\.reconnectPending\)/.test(idxSrc) && /Boolean\(sess\.bot\.reconnecting \|\| sess\.bot\.reconnectPending\)/.test(idxSrc) ? '✅' : '❌'} 🔴 modeView 与 /api/mc/status 都带上"正在重连"（含"正在尝试连接"那段，否则状态条会中途退回"未上线"）`)
     const cliSrc = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
-    console.log(`  ${/重连中/.test(cliSrc) && /data-mc-reconnecting/.test(cliSrc) ? '✅' : '❌'} 🔴 状态条会显示"重连中…"（不再假装在游戏中）`)
+    console.log(`  ${/正在重连/.test(cliSrc) && /data-mc-reconnecting/.test(cliSrc) ? '✅' : '❌'} 🔴 状态条会显示"重连中…"（不再假装在游戏中）`)
     // 「断线期」标记的生命周期：掉线时置位、**真重连成功**才清（只看 reconnecting 会在尝试连接的 45s 里退回"未上线"）
     const coreSrc3 = readFileSync(new URL('./src/core.mjs', import.meta.url), 'utf8')
     console.log(`  ${/if \(willReconnect\) this\.reconnectPending = true/.test(coreSrc3) && /this\.reconnectPending = false/.test(coreSrc3) ? '✅' : '❌'} 🔴 断线期标记：掉线置位 →（重连成功 / 手动进服）才清`)
@@ -3493,7 +3493,7 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
   const checks = [
     ['注册 id 仍是 whale_craft', /id:\s*'whale_craft'/.test(src)],
     ['mc-agent 兼容壳已删除（宿主已冷启动、图里只有 whale_craft）', !/id:\s*'mc-agent'/.test(src)],
-    ["状态条插槽 id/order='whale_craft-status'/50", /'whale_craft-status'[\s\S]{0,80}order:\s*50/.test(src)],
+    ['状态条与连接按钮共用入口并按游戏会话互斥', !src.includes("id: 'whale_craft-status'") && src.includes('if (st?.gameSessionId) return React.createElement(McStatusBar')],
     ["MC设置按钮 order=45（排在状态条左边）", /whale_craft-mc-settings[\s\S]{0,200}order:\s*45/.test(src)],
     // 🔴 2026-09-16 事故：DOM 注入 + 全域 Observer 会把「MC设置」插到输入框上方（生成时尤其明显）。
     //    现在只允许**一处**、**有门控**、**锚点只在 hero 相位存在**、**观察范围只限卡片**的注入。
@@ -3564,7 +3564,7 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
     ['输入框 box-sizing:border-box（否则比按钮高一点点）', /\[data-wc-cn-input\]\{box-sizing:border-box/.test(code)],
     ['地址行输入框与「连接」按钮**等高**（34px）', /\[data-wc-cn-input\]\{[^}]*height:34px/.test(code) && /\[data-wc-cn-actions\]\{[^}]*height:34px/.test(code)],
     ['错误提示**浮在地址上方留白**且 3s 自动消失', /data-wc-cn-error/.test(code) && /setTimeout\(\(\) => setError\(''\), 3000\)/.test(code)],
-    ['标题条入口：MC 模式门控 + **在游戏中隐藏**', /function McConnectEntry/.test(code) && /useMcSettingsGate\(props, false\)/.test(code) && /st\?\.active === true\) return null/.test(code)],
+    ['标题条入口：MC 模式门控 + 游戏会话存在时替换为状态条', /function McConnectEntry/.test(code) && /useMcSettingsGate\(props, false\)/.test(code) && code.includes('if (st?.gameSessionId) return React.createElement(McStatusBar')],
     ['hero 两个按钮按 order 排（连接 40 在左、设置 45 在右；设置只有图标）', /HERO_CONNECT_ATTR\]: 40/.test(code) && /HERO_BTN_ATTR\]: 45/.test(code) && /iconOnly: true/.test(code) && /getDisabled: isOff/.test(code)],
     ['连接弹窗：历史气泡横滚 + 局域网行 + 账户下拉 + 预留选项区', /data-wc-cn-bubbles/.test(code) && /data-wc-cn-lan\b/.test(code) && /data-wc-cn-pick/.test(code) && /data-wc-cn-extras/.test(code) && /添加\/管理/.test(code)],
     ['探测动画三方块**只动 opacity**（呼吸灯，非形变）', /@keyframes wc-breathe\{0%,100%\{opacity:\.2;\}50%\{opacity:1;\}\}/.test(code) && /data-wc-cn-dot/.test(code) && /animation:wc-breathe 1\.4s/.test(code)],
@@ -3654,9 +3654,9 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
     // 🔴 用户 2026-09-16："状态条是不是只显示'在游戏中'？应该显示服务器地址，太长则截断。"
     // 🔴 2026-10-05：不再有 subserver（用户只填一个 address）——只显示 host[:port]
     ['状态条显示服务器地址（host[:port]）', /function mcAddress\(state\)/.test(code) && /conn\?\.host/.test(code) && !/subserver/.test(code)],
-    ['地址太长就截断（完整地址留在 tooltip）', /address\.length > 26 \? address\.slice\(0, 25\) \+ '…'/.test(code) && /'data-mc-sub': '', title: address/.test(code)],
+    ['地址太长就截断（完整地址留在 tooltip）', /\[data-mc-sub\]\{[^}]*text-overflow:ellipsis/.test(code) && /'data-mc-sub': '', title: address/.test(code)],
     ['CSS 也兜一层截断（max-width + ellipsis）', /\[data-mc-sub\]\{[^}]*max-width:24ch[^}]*text-overflow:ellipsis/.test(code)],
-    ['拿不到地址就只显示"在游戏中"（不硬编造一个"—"）', /address \? React\.createElement\('span', \{ 'data-mc-sub'/.test(code)],
+    ['拿不到地址就只显示"在游戏中"（不硬编造一个"—"）', code.includes("address || '在游戏中'")],
     // ── 文件分享已整体移除（2026-11-08）：入口 / 页面 / 请求都不该残留 ──
     ['🔴 文件分享页与入口已移除', !/SharePane|启用文件分享|label: '文件分享'|apiDelete\(withSid\('\/api\/mc\/express'\)\)/.test(code)],
     // ── 「联网搜索」页（2026-10-08）：工作区无关的「允许联网搜索」开关（默认开）──

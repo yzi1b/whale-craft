@@ -14,7 +14,7 @@
 
 | 插槽 | kind | 作用域 | 入口 | 何时出现 |
 | --- | --- | --- | --- | --- |
-| `conversation.session.header.actions` | list | **session** | 状态条 / 强制停止（order 50）、「设置」（order 45）、**「连接到MC」（order 40，在设置左边）** | 进了游戏的会话 |
+| `conversation.session.header.actions` | list | **session** | **「连接到MC」/ 游戏会话状态条（同一入口，order 40）**、「设置」（order 45） | 进了游戏的会话 |
 | `conversation.input.right` | list | **session** | 新会话页 hero 的 **「连接到MC」+「设置」**（**驱动器**，本身 return null，按钮靠 DOM 按 order 插到模式芯片右边） | 新会话页 + MC 模式 |
 | `conversation.chat.assistant-actions` | list | **session** | **「创建MC+分支」**（order 10；立方体图标，见下） | 助手轮末消息 + 会话 preset ∈ `{standard, minecraft}` |
 | `plugins.detail.actions` | list | **root** | 插件页 → **whale_craft 详情页**头部的「设置」按钮（order 20） | 打开 whale_craft 的 bundle 详情页时 |
@@ -109,7 +109,7 @@
 
 两个入口（与「设置」**同一套 MC 模式门控**，无工作区时**禁用**）：标题条（order 40）与
 新会话页 hero（DOM 注入，按 `HERO_BTN_ORDER` 排在「设置」**左边**）。**标题条那个在游戏中隐藏**
-（`useMcStatus(sid).active === true`）。按钮 = **运行图标 + 文字「连接到MC」**；
+（`useMcStatus(sid).gameSessionId` 存在；与状态条共用 `McConnectEntry` 的同一状态快照）。按钮 = **运行图标 + 文字「连接到MC」**；
 🔴 运行图标用 **`IconTriangleRightFillRegular` 的几何 + CSS 描边成「空心三角」**（`RunIcon` + `.wc-runicon path{fill:none;stroke:currentColor}`）——
 **不要带外圈的 play，也不要实心**。
 ⚠️ **为什么默认看着特别小**：那个三角在 16×16 viewBox 里只画在中间一小块（约 5.7×8），四周全是透明边
@@ -166,3 +166,9 @@ npm run dev:web               # 隔离调试实例；改 client.js 只需刷新�
 ```
 
 > 改 `client.js` 的结构约定（新增插槽入口、换图标库）后，**同步更新本页**。
+
+## 游戏会话状态条（2026-11-15）
+
+标题条 order 40 的 `McConnectEntry` 在 `gameSessionId` 存在时改为渲染 `McStatusBar`，否则显示连接按钮，二者互斥；不再单独注册 order 50 状态条。绿点表示在线，文字直接显示服务器地址；黄点表示重连，文字为「正在重连」；游戏会话仍存在但离线且未重连时为红点「连接异常」。地址过长省略，完整内容在 tooltip 中。
+
+右侧停止按钮为实心正方形，tooltip 和无障碍名称均为「停止」。调用 `POST /api/mc/stop`，由后端 `stopSession → closeGameSession` 使用 `user-force-stop` 类型关闭游戏会话并延后投放用户手动停止提示词。成功后立即切回连接入口，失败弹错并保留状态条。用户可见约定见 [状态条设计](../dev-docs/ui/game-session-status.md)。

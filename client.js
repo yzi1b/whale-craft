@@ -88,7 +88,10 @@ window.__ModuleLoader__.load({
   box-shadow:var(--dsw-elevation-panel,0 1px 2px rgba(0,0,0,.12));}
 [data-mc-status][data-mc-busy]{opacity:.6;pointer-events:none;}
 [data-mc-dot]{width:7px;height:7px;border-radius:999px;background:var(--dsw-alias-state-success-primary);flex:none;}
-[data-mc-dot][data-mc-warn]{background:var(--dsw-alias-state-warn-primary);}
+[data-mc-dot][data-mc-warn]{background:var(--dsw-alias-state-warn-primary,#eab308);}
+[data-mc-dot][data-mc-error]{background:var(--dsw-alias-state-error-primary,#ef4444);}
+[data-mc-btn][data-mc-stop]{width:22px;padding:0;}
+[data-mc-stop-square]{display:block;flex:none;width:9px;height:9px;background:currentColor;border-radius:1px;}
 [data-mc-text]{color:var(--dsw-alias-label-secondary);}
 [data-mc-sub]{color:var(--dsw-alias-label-tertiary);max-width:24ch;overflow:hidden;text-overflow:ellipsis;}
 [data-mc-btn]{display:inline-flex;align-items:center;justify-content:center;height:22px;padding:0 9px;
@@ -534,6 +537,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
     function useMcStatus(sessionId) {
       const [state, setState] = React.useState(null)
       React.useEffect(() => {
+        setState(null)
         if (!sessionId) return undefined
         let alive = true
         const tick = () => {
@@ -567,62 +571,38 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       return port && port !== 25565 ? host + ':' + port : host
     }
 
-    function McStatusBar(props) {
-      // session scope 的标准 props；兼容 session 对象形态
-      const sessionId = props?.sessionId ?? props?.session?.id
-      const [state, setState] = useMcStatus(sessionId)
+    function McStatusBar({ sessionId, state, onStopped }) {
       const [busy, setBusy] = React.useState(false)
-
-      // 只有一个动作：强制停止（用户 2026-09-16："移除停止，只剩强行停止"）。
-      // 后端顺序：停 LLM → 优雅退游戏 → 清该会话后台任务 → 再停一次 LLM。
-      const stop = React.useCallback(() => {
-        if (!sessionId) return
+      const stop = async () => {
+        if (!sessionId || busy) return
         setBusy(true)
-        fetch(apiUrl('/api/mc/stop'), {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ sessionId, reason: '用户强制停止' }),
-        })
-          .catch(() => {})
-          .finally(() => { setBusy(false) })
-      }, [sessionId])
-
-      // 不在游戏里 → 不占位
-      if (!sessionId || !state || state.active !== true) return null
-
+        try {
+          await apiPost('/api/mc/stop', { sessionId, reason: '用户手动停止' })
+          onStopped()
+        } catch (e) {
+          window.alert(`停止失败：${describe(e)}`)
+        } finally { setBusy(false) }
+      }
+      if (!state?.gameSessionId) return null
+      const reconnecting = state.reconnecting === true
       const online = state.online === true
       const address = mcAddress(state)
-      // 太长就截断（完整地址留在 tooltip 里）
-      const shown = address.length > 26 ? address.slice(0, 25) + '…' : address
-      const timeouts = Number(state.timeouts ?? 0)
-      const stale = timeouts > 0
-      // 🔴 断线但正在自动重连（2026-09-19）：状态条要**说出**这件事，
-      //    不能因为 online=false 就整个消失（用户会以为插件把状态忘了、AI 也以为还在游戏里）。
-      const reconnecting = !online && state.reconnecting === true
-      const label = online ? '在游戏中' : (reconnecting ? '重连中…' : '未上线')
-      const tip = online
-        ? `${address ? address + '：' : ''}在游戏中${stale ? `（有 ${timeouts} 次操作超时，可能已失步）` : ''}`
-        : (reconnecting
-          ? `连接断了${address ? '（' + address + '）' : ''}，插件正在自动重连…`
-          : (address ? `已连接 ${address} 但角色不在线` : '已连接但角色不在线'))
-
-      return React.createElement(
-        'div',
-        {
-          'data-mc-status': '',
-          ...(busy ? { 'data-mc-busy': '' } : {}),
-          ...(reconnecting ? { 'data-mc-reconnecting': '' } : {}),
-          title: tip,
-        },
-        React.createElement('span', { 'data-mc-dot': '', ...(online && !stale ? {} : { 'data-mc-warn': '' }) }),
-        React.createElement('span', { 'data-mc-text': '' }, label),
-        address ? React.createElement('span', { 'data-mc-sub': '', title: address }, shown) : null,
-        React.createElement('button', {
-          type: 'button', 'data-mc-btn': '', 'data-mc-danger': '',
-          title: '强制停止：中断当前生成并让机器人退出游戏',
-          onClick: () => stop(),
-        }, '强制停止'),
-      )
+      const label = reconnecting ? '正在重连' : online ? (address || '在游戏中') : '连接异常'
+      const button = React.createElement('button', {
+        type: 'button', 'data-mc-btn': '', 'data-mc-danger': '', 'data-mc-stop': '',
+        title: '停止', 'aria-label': '停止', disabled: busy, onClick: stop,
+      }, React.createElement('span', { 'data-mc-stop-square': '', 'aria-hidden': true }))
+      return React.createElement('div', {
+        'data-mc-status': '',
+        ...(busy ? { 'data-mc-busy': '' } : {}),
+        ...(reconnecting ? { 'data-mc-reconnecting': '' } : {}),
+      },
+      React.createElement('span', {
+        'data-mc-dot': '', 'aria-hidden': true,
+        ...(reconnecting ? { 'data-mc-warn': '' } : online ? {} : { 'data-mc-error': '' }),
+      }),
+      React.createElement('span', { 'data-mc-sub': '', title: address || label }, label),
+      TooltipPrimitive ? React.createElement(TooltipPrimitive, { label: '停止', side: 'bottom' }, button) : button)
     }
 
     /* ==================================================================
@@ -839,10 +819,12 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       const sid = props?.sessionId ?? props?.session?.id ?? null
       const show = useMcSettingsGate(props, false)
       // 只在"要显示"时才轮询状态（非 MC 会话别白轮询）
-      const [st] = useMcStatus(show ? sid : null)
+      const [st, setStatus] = useMcStatus(show ? sid : null)
       const [open, setOpen] = React.useState(false)
       if (!show) return null
-      if (st?.active === true) return null          // 在游戏中 → 隐藏
+      if (st?.gameSessionId) return React.createElement(McStatusBar, {
+        sessionId: sid, state: st, onStopped: () => setStatus({ ok: true, active: false }),
+      })
       return React.createElement(
         React.Fragment,
         null,
@@ -2590,11 +2572,6 @@ select[data-wc-in]{appearance:none;padding-right:22px;
         ctx.effect(() => () => { style.remove() }, 'whale_craft: status bar styles')
 
         // list/session 插槽：增量安全，不覆盖官方 header
-        ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register(
-          { name: 'conversation.session.header.actions', id: 'whale_craft-status', order: 50 },
-          McStatusBar,
-        ))
-
         // 「连接到MC」入口①：标题条（order 40 → 落在「设置」45 的**左边**）。
         // 门控同「设置」（MC 模式）；**在游戏中时隐藏**（见 McConnectEntry）。
         ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register(
