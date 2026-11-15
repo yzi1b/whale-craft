@@ -102,6 +102,9 @@
 会话两入口仍是非受控（`settingsBus`）。**新会话页**按钮只要是 MC/MC+ 就显示，**没选工作区时禁用**
 （`mountHeroChipButton` 的 `getDisabled` + `refresh`，不重建 DOM）。详见 [architecture.md](architecture.md)。
 
+🔴 `McSettingsModal` 与 `McConnectModal` 的全屏遮罩统一通过 `react-dom.createPortal` 挂到 `document.body`。
+不要把遮罩直接留在标题栏或输入区插槽中：宿主容器可能带 `overflow`、`transform` 或在交互时重挂载，表现为点击后短暂卡顿但看不到弹窗。
+
 提示词页「注入」区的两个文件名（`RULES.md` / `AGENTS.md`）用 `FileName` 渲染：文件不存在时**斜体灰删除线**
 + hover「目前没有这个文件」（`data-wc-missing`），但**不禁用**开关——开关始终用于改配置。
 

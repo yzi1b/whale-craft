@@ -61,6 +61,7 @@ window.__ModuleLoader__.load({
     let IconChevronDownOutlineRegular = null
     let TooltipPrimitive = null
     let createRoot = null
+    let createPortal = null
     try {
       const primitives = require('@deepseek-ai/dsh-client-ui-primitives')
       IconSettingsOutlineRegular = primitives.IconSettingsOutlineRegular
@@ -77,6 +78,7 @@ window.__ModuleLoader__.load({
       // 借 react-dom 的一个小根把图标渲染进按钮，图标仍出自同一套官方图标集（不另画、不搬路径）。
       createRoot = require('react-dom/client').createRoot
     } catch (e) { /* 见上：只用图标，拿不到就退回文字，别让按钮变空白 */ }
+    try { createPortal = require('react-dom').createPortal } catch (e) { /* 老宿主退回插槽内渲染 */ }
 
     // apply() 时记下客户端 ctx：插槽组件拿不到 ctx，靠它取 uiWorkspace.openSession 打开新分支。
     let clientCtx = null
@@ -431,8 +433,8 @@ select[data-wc-in]{appearance:none;padding-right:22px;
     /* ==================================================================
      * 模块级事件总线
      * ----------------------------------------------------------------
-     * hero 那个「MC设置」按钮是**纯 DOM**（宿主没暴露 react-dom，不能 createPortal），
-     * 所以它没法直接 setState —— 它只 emit，由 React 侧的 McSettingsHost 订阅并开关模态框。
+     * hero 那个「MC设置」按钮是**纯 DOM**，所以它没法直接 setState —— 它只 emit，
+     * 由 React 侧的 McSettingsHost 订阅并开关模态框；模态框自身再 portal 到 body。
      * 总线**不传任何凭据**，只传一个空标记。
      * ================================================================== */
     const settingsBus = {
@@ -462,6 +464,13 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       },
     }
     const openConnect = () => connectBus.emit()
+
+    /** 全屏弹窗必须脱离会话标题/输入区插槽，避免宿主的 overflow/transform 把它裁掉。 */
+    const renderModal = (node) => (
+      createPortal && typeof document !== 'undefined' && document.body
+        ? createPortal(node, document.body)
+        : node
+    )
 
     /* ==================================================================
      * 接口小工具（契约见 index.js 的 /api/mc/accounts 等路由）
@@ -1907,7 +1916,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
       }
 
       return h(React.Fragment, null,
-        h('div', {
+        renderModal(h('div', {
           'data-wc-cn-overlay': '', role: 'presentation',
           onClick: closeAll,
           onMouseDown: (e) => { if (e.target === e.currentTarget) e.preventDefault() },
@@ -2015,7 +2024,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
                   : null)),
             // 预留：其余配置插槽
             h('div', { 'data-wc-cn-extras': '' }))),
-        )),
+        ))),
       // 叠加在上层的设置弹窗（受控，直接落到「账户」页）——是**兄弟**节点（不嵌在遮罩里，
       // 否则点它会冒泡到连接弹窗的"点遮罩关闭"）
       h(McSettingsModal, {
@@ -2403,7 +2412,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
             : workspaceName || (wsCwd ? String(wsCwd).split(/[\\/]/).filter(Boolean).pop() : ''))
         : ''
 
-      return React.createElement(
+      return renderModal(React.createElement(
         'div',
         {
           'data-wc-overlay': '',
@@ -2473,7 +2482,7 @@ select[data-wc-in]{appearance:none;padding-right:22px;
             ),
           ),
         ),
-      )
+      ))
     }
 
     /* ==================================================================

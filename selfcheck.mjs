@@ -3600,6 +3600,7 @@ console.log('\n--- 客户端 bundle（client.js 静态检查）---')
     // 🔴 2026-09-16 真机 bug：两个入口都把模态框写成 `createElement(McSettingsModal, null)`
     //    → sessionId 永远是 undefined → 点开设置就报"缺少 sessionId"。
     ['模态框真的拿到了 props（不是 null）', !/React\.createElement\(McSettingsModal, null\)/.test(code) && /React\.createElement\(McSettingsModal, \{ \.\.\.props, wsCwd \}\)/.test(code)],
+    ['连接与设置弹窗 portal 到 body（不被会话插槽裁剪）', /createPortal = require\('react-dom'\)\.createPortal/.test(code) && /createPortal\(node, document\.body\)/.test(code) && /return renderModal\(React\.createElement/.test(code) && /renderModal\(h\('div', \{/.test(code)],
     ['新对话页会把已知工作区一起报上去（cwd 兜底）', /function useWorkspaceCwd\(props\)/.test(code) && /q\.push\('cwd=' \+ encodeURIComponent\(wsCwd\)\)/.test(code)],
     // 🔴 2026-09-16：真机上反复"没注入"却查不出原因 → 「提示词」页直接把判据摆出来
     ['「提示词」页显示注入状态（会不会注入 + 为什么不会）', /data-wc-injectstatus/.test(code) && /injectStatus\?\.segments/.test(code) && /data-wc-note/.test(code)],
