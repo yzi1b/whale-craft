@@ -436,6 +436,8 @@ export class McBot extends EventEmitter {
     this.abortSignal = null       // 本轮 turn 的 abort signal（工具层注入）
     this.observerTimer = null     // 世界观察器（语义事件）
     this._obs = null
+    this._forcedMoveBot = null
+    this._forcedMoveHandler = null
     this._selfMovingAt = 0        // 我们自己发起移动的时刻（排除"被传送"误判）
     this.stats = { connects: 0, deaths: 0, chats: 0, lastEventAt: 0, timeouts: 0 }
   }
@@ -546,12 +548,24 @@ export class McBot extends EventEmitter {
    * 看门狗只负责"判定要不要叫醒我"，不该自己解析世界。
    */
   startObserver () {
-    if (this.observerTimer) return
+    if (this._forcedMoveBot && this._forcedMoveHandler) this._forcedMoveBot.removeListener?.('forcedMove', this._forcedMoveHandler)
     this._obs = {
       lastPos: this.position,
       lastPlayers: new Set(Object.keys(this.bot?.players ?? {})),
       lastInv: this.#invSignature(),
     }
+    this._forcedMoveBot = this.bot
+    this._forcedMoveHandler = () => {
+      const from = this._obs?.lastPos
+      const current = this.bot?.entity?.position
+      const to = current ? { x: current.x, y: current.y, z: current.z } : null
+      if (!from || !to) return
+      const distance = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z)
+      this._obs.lastPos = to
+      if (distance > 0) this.emit('teleport', { from, to, distance: Number(distance.toFixed(1)), serverForced: true })
+    }
+    this._forcedMoveBot?.on?.('forcedMove', this._forcedMoveHandler)
+    if (this.observerTimer) return
     // 🔴 回调自己兜住异常：`setInterval` 回调里抛错 = **uncaughtException** = 整个宿主进程死
     //    （宿主只对 `unhandledRejection` 做 fail-loud，这条通道它不防）。观察 tick 出错最多是少看一眼世界。
     this.observerTimer = setInterval(() => { try { this.#observeTick() } catch (e) { this.#reportError(e) } }, 1000)
@@ -560,6 +574,9 @@ export class McBot extends EventEmitter {
 
   stopObserver () {
     if (this.observerTimer) { clearInterval(this.observerTimer); this.observerTimer = null }
+    if (this._forcedMoveBot && this._forcedMoveHandler) this._forcedMoveBot.removeListener?.('forcedMove', this._forcedMoveHandler)
+    this._forcedMoveBot = null
+    this._forcedMoveHandler = null
     this._obs = null
   }
 
@@ -598,8 +615,7 @@ export class McBot extends EventEmitter {
       const d = Math.hypot(pos.x - obs.lastPos.x, pos.y - obs.lastPos.y, pos.z - obs.lastPos.z)
       const cs = b.controlState ?? {}
       const pressing = Boolean(cs.forward || cs.back || cs.left || cs.right || cs.jump)
-      if (d > 24) this.emit('teleport', { from: obs.lastPos, to: pos, distance: Number(d.toFixed(1)) })
-      else if (d >= 2 && !pressing) this.emit('pushed', { from: obs.lastPos, to: pos, distance: Number(d.toFixed(1)) })
+      if (d >= 2 && !pressing) this.emit('pushed', { from: obs.lastPos, to: pos, distance: Number(d.toFixed(1)) })
     }
     obs.lastPos = pos
 
@@ -1171,7 +1187,8 @@ export class McBot extends EventEmitter {
     this.#pushChat('player', w, t)
     this.stats.chats++
     this.stats.lastEventAt = now
-    if (w !== selfName) this.emit('chat', { who: w, text: t })
+    if (w === selfName) this.emit('selfChat', { who: w, text: t })
+    else this.emit('chat', { who: w, text: t })
   }
 
   /**

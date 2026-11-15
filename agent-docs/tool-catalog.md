@@ -27,7 +27,7 @@
 | `mc_status` | 连接态 | `connection`（host/port/**version**）+ online/lastError/reconnecting/ghost；在线时内联 `mc_context`。**不含**改版前的 modeView/最近聊天（2026-10-05 去掉，待重做） |
 | `mc_lan` | 找**局域网房间** | **只听**原版多播公告（`224.0.2.60:4445`，`[MOTD]…[/MOTD][AD]端口[/AD]`）；`seconds` 夹 [1,15] 默认 3，**恒定按时返回**（不扫端口）；多播被挡 → 空结果，请对方直接报地址。**`mode` 参数已删**（它本来就没被读，2026-10-05） |
 | `mc_ping` | **已知地址**的探路 | 发一次 STATUS ping（握手+状态请求），**不登录、不用账户、不进服**；参数只有 `address`（host[:port]，端口默认 25565）+ `timeoutMs`（默认 5s 上限 30s）；拿通不通/版本/协议号/MOTD/人数/延迟；错误说人话。**`subserver`/`port` 已删**（2026-10-05：地址自带端口；无子服概念） |
-| `mc_connect` | 进服（唯一连接入口） | 参数只有 `address`（host[:port]）+ `account`（innerID）。**不再有 `host/port/subserver/version`**；地址内部 `parseAddress`，握手 serverHost 就用该地址（DNS+Velocity 自行路由）；**版本永远自动探测**；版本不受支持（mineflayer 无该版本协议数据）→ **建连期间快速失败 + 明确版本错误**（不是"连接超时"；另有 spawn 后 `isVersionSupported` 兜底，复用 `src/mcversion.mjs`）；连接后等区块、**自动挂看门狗**、`learnName`；**返回 = `mc_status` 的内容** |
+| `mc_connect` | 进服（唯一连接入口） | 参数只有 `address`（host[:port]）+ `account`（innerID）。**不再有 `host/port/subserver/version`**；地址内部 `parseAddress`，握手 serverHost 就用该地址（DNS+Velocity 自行路由）；**版本永远自动探测**；版本不受支持（mineflayer 无该版本协议数据）→ **建连期间快速失败 + 明确版本错误**（不是"连接超时"；另有 spawn 后 `isVersionSupported` 兜底，复用 `src/mcversion.mjs`）；连接后等区块并**自动挂看门狗**；**返回 = `mc_status` 的内容** |
 | `mc_accounts` | 账户管理（会话内） | `list/search/refresh`（**`use` 已删**，2026-10-05）；`refresh` 走 `bot.authOnly`（只认证不连接），`innerID` 缺省用本会话选定/默认；返回值**永不含密码/token** |
 | `mc_disconnect` | 主动退服 | 经唯一的游戏会话关闭入口优雅 quit；看门狗、结构化队列和会话配置同步销毁；GameSession 投放一次结束提示词 |
 | `mc_stop` | 停本会话 | 等价强制停止但 `cancelTurn: false`（**防自我 abort**；HTTP 的 `/api/mc/stop` 用 `cancelTurn:true`） |

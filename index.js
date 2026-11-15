@@ -32,7 +32,7 @@ import { resolve, sep, join, isAbsolute, dirname, basename, relative } from 'nod
 import { McBot, lossless, logLine, libraryInfo } from './src/core.mjs'
 import { defineTool, toolDefKind } from './src/tool-def.mjs'
 import { versionPromptText, versionPromptTitle, versionPromptSource } from './src/version-prompt.mjs'
-import { Watchdog } from './src/watchdog.mjs'
+import { Watchdog } from './src/watchdog.ts'
 import { MemoryStore } from './src/memory.mjs'
 import { PluginConfig, DEFAULT_CONFIG, resolveStateDir } from './src/config.mjs'
 import { renderFetchText, WEB_FETCH_MAX_OUTPUT_CHARS } from './src/webfetch.mjs'
@@ -155,36 +155,13 @@ function readJsonBody(req) {
 }
 
 /**
- * Config = 纯**行为配置**（与"连哪个服"无关）。
- * 连接参数全在 mc_connect 工具里；0.1 时代的遗留 fallback 字段
- * （host/port/subserver/authUrl/authUser/authPass/autoConnect）已无人读，2026-10-02 清除。
- *
- * 🔴 2026-10-04：schema 由宿主 `@deepseek-ai/schemastery` 提供，**拿不到就不导出 Config**（= undefined）——
- *   cordis 对此是容忍的（`if (!runtime.Config) return config`），但也就**不会替我们填默认值** ⇒
- *   `apply()` 里自己兜 `DEFAULT_MENTIONS`。
- *   ⚠️ **绝不能**退化成一个普通对象：cordis 会去调 `Config['~standard'].validate` 而当场炸。
+ * 连接参数由 mc_connect 管理，看门狗参数由 mc_watchdog_config 管理。
+ * 保留空 Config 只为遵守宿主插件契约；拿不到 schemastery 时不导出 schema。
  */
 let z = null
 try { z = (await import('@deepseek-ai/schemastery')).default ?? null } catch { /* 宿主没喂 ⇒ 不要 Config */ }
 
-/**
- * 默认"喊我"触发词（正则，大小写不敏感）。聊天里命中这些词才算在叫我。
- *
- * 🔴 2026-09-16 用户投诉："为什么这台服务器上会有那种叫法的记忆？你暴露了些什么东西出去了！"
- *    根因就是这里**曾经把私人的账号名/昵称写成了默认值**——那串名字跟着代码进了**公开的开源副本**。
- *    默认值只留**通用叫法**；具体账号名由插件在连接成功后**从登录档案里现学**
- *    （见 `Watchdog.learnName`）；可配置叫法由新版看门狗的 `message.chat/mention.keywords` 管理
- *    —— **代码里永不再出现私人名字**。
- */
-export const DEFAULT_MENTIONS = [
-  'deepseek', 'deep\\s*seek', '\\bds\\b', '\\bdsh\\b', '\\bai\\b', 'agent',
-  '机器人', '麦块',
-]
-
-export const Config = z ? z.object({
-  // ── 行为配置 ──
-  mentions: z.array(z.string()).default(DEFAULT_MENTIONS),
-}) : undefined
+export const Config = z ? z.object({}) : undefined
 
 
 /* ======================== 每会话独立实例 ======================== */
@@ -261,14 +238,16 @@ class McSession {
         }).catch(() => {})
       }
     })
-    this.bot.on('chat', ({ who, text }) => {
+    const observeChat = ({ who, text }, isSelf = false) => {
       self.#pushEvent('chat', `<${who}> ${text}`, { who })
       const raw = self.bot.bot
       const me = raw?.entity?.position
       const them = raw?.players?.[who]?.entity?.position
       const distance = me && them ? Math.hypot(me.x - them.x, me.y - them.y, me.z - them.z) : null
-      self.observeWatchdog('message.chat', { player: { name: who, uuid: raw?.players?.[who]?.uuid ?? null }, isSystem: false, type: null, content: text }, { distance, onlineCount: Object.keys(raw?.players ?? {}).length })
-    })
+      self.observeWatchdog('message.chat', { player: { name: who, uuid: raw?.players?.[who]?.uuid ?? null }, isSystem: false, type: null, content: text }, { distance, onlineCount: Object.keys(raw?.players ?? {}).length, isSelf })
+    }
+    this.bot.on('chat', (event) => observeChat(event, false))
+    this.bot.on('selfChat', (event) => observeChat(event, true))
     this.bot.on('system', ({ text }) => { self.#pushEvent('system', text); self.observeWatchdog('message.system', { content: text }) })
     this.bot.on('damage', (e) => {
       self.#pushEvent('damage', `血量降到 ${e.health} @ ${JSON.stringify(e.position)}`)
@@ -371,21 +350,6 @@ class McSession {
     }
   }
 
-  /* ── "喊我"判定 ── */
-
-  mentionRegex() {
-    if (this._mentionRe?.source !== this.config.mentions.join('|')) {
-      this._mentionRe = new RegExp(this.config.mentions.map((p) => `(?:${p})`).join('|'), 'i')
-    }
-    return this._mentionRe
-  }
-
-  isCalled(text) { return this.mentionRegex().test(String(text ?? '')) }
-
-  calledBy(text) {
-    const s = String(text ?? '')
-    return this.config.mentions.filter((p) => { try { return new RegExp(`(?:${p})`, 'i').test(s) } catch { return false } })
-  }
 }
 
 
@@ -456,11 +420,7 @@ class McRegistry {
 /* ============================ 插件主体 ============================ */
 
 export function apply(ctx, rawConfig) {
-  /* 拿得到 schemastery 时，宿主按 Config schema 把 `mentions` 的默认值填好；拿不到时（官方 desktop）
-     cordis 原样透传（甚至整个 config 是 undefined）—— 这里兜一次。
-     显式传了数组（包括空数组 = "不认任何叫法"）就尊重原值。 */
   const config = { ...(rawConfig ?? {}) }
-  if (!Array.isArray(config.mentions)) config.mentions = [...DEFAULT_MENTIONS]
   const registry = new McRegistry(ctx, config)
 
   /* ── 插件状态目录（**配置 + 账户库**）：`$DSH_HOME/whale_craft/` ──────────────────
@@ -1452,7 +1412,7 @@ export function apply(ctx, rawConfig) {
       const asUser = body.asUser === true
       const text = buildConnectPrompt({ address, account: accountLabel, via })
       if (via !== 'lan') serverHistory.record(address)
-      // 唤醒范式（照抄 src/watchdog.mjs）：先打断可能的 mc_events 等待，再 steer
+      // 唤醒范式（照抄 src/watchdog.ts）：先打断可能的 mc_events 等待，再 steer
       try { registry.peek(sessionId)?.interruptWait?.('connect') } catch { /* 没在等就算了 */ }
       /**
        * 🔴 **新对话页**（`asUser:true`）：插件提示行在新会话里不灵（实测）⇒ **模拟玩家发言**：
@@ -1734,13 +1694,16 @@ export function apply(ctx, rawConfig) {
     const watchdogScene = {}
     const watchdogFocuses = new Map()
     const watchdog = new Watchdog({
-      ctx, sess, agent, promptSignal: promptAbort.signal, modern: true,
+      ctx, sess, agent, promptSignal: promptAbort.signal,
       onCancel: (reason) => { void sess.closeGameSession(reason, { kind: 'watchdog-cancelled', fromWatchdogJob: true }).catch(() => {}) },
     })
     watchdog.gate = watchdogGate(sess)
     const watchdogEngine = new WatchdogEngine(
       watchdogConfigStore.effective(watchdogScene, watchdogFocuses),
       (event, count) => watchdog.notifyEvent?.(event, count, watchdogConfigStore.global),
+      Date.now,
+      200,
+      (count) => { watchdog.stats.suppressed += count },
     )
     const connection = sess.bot.connectionView()
     const server = connection?.host ? formatAddress(connection.host, connection.port ?? 25565) : null
@@ -2056,6 +2019,7 @@ export function apply(ctx, rawConfig) {
       if (action === 'edit') {
         if (!['base', 'scene'].includes(type)) throw new Error('edit 的 type 必须是 base 或 scene')
         if (!args.config || typeof args.config !== 'object' || Array.isArray(args.config)) throw new Error('edit 必须提供 config 对象')
+        if (type === 'base' && args.merge === false) throw new Error('base 配置不支持 merge:false；请把要恢复默认的配置项设为 null')
         const result = type === 'base'
           ? watchdogConfigStore.editBase(args.config)
           : (() => {
@@ -3242,7 +3206,7 @@ export function apply(ctx, rawConfig) {
    *
    * 现在统一走 `src/user-message.mjs`：**优先宿主实现，拿不到就用自带等价实现**
    * （字段逐个对齐 `role` / `content` / `source` / `id`），并且解析失败会记一行日志。
-   * 看门狗（`src/watchdog.mjs`）是同一次事故的第二处，也已切到同一个模块。
+   * 看门狗（`src/watchdog.ts`）是同一次事故的第二处，也已切到同一个模块。
    */
   if (pluginLoadNote) {
     logLine(`拿不到宿主的 createUserMessage（${pluginLoadNote}）→ 用插件自带的等价实现兜底（提示词与看门狗注入照常）`)

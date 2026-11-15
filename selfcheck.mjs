@@ -295,41 +295,12 @@ console.log('\n--- 看门狗 v2 ---')
   console.log(`  ${[infoAll, infoOne, infoStar, infoArray, infoJsonArray].every((value) => value && typeof value === 'object' && typeof value.markdown === 'string') ? '✅' : '❌'} mc_watchdog_info 所有查询路径都返回对象`)
   console.log(`  ${/message\.chat/.test(infoArray.markdown) && /self\.teleport/.test(infoArray.markdown) && infoJsonArray.markdown === infoArray.markdown ? '✅' : '❌'} mc_watchdog_info 数组与 JSON 字符串数组都按多项查询`)
 
-  // 叫法判定（**配置不是硬编码**）——直接构造 Watchdog 测，不依赖 registry
-  const { Watchdog } = await import('./src/watchdog.mjs')
-  const probe = new Watchdog({ ctx: fakeCtx, sess: { bot: {}, events: [], config: {} }, agent: A.agent })
-  probe.updateConfig({ mentionPatterns: ['ds', '用户'] })
-  const called = probe.calledBy('用户 你在吗')
-  const notCalled = probe.calledBy('今天天气不错')
-  console.log(`  ${called.includes('用户') && notCalled.length === 0 ? '✅' : '❌'} 动态叫法生效：命中 ${JSON.stringify(called)}，未命中 ${JSON.stringify(notCalled)}`)
-  console.log(`  ${probe.config.wakeOn.damage && !probe.config.wakeOn.itemPickup ? '✅' : '❌'} 改叫法不影响唤醒矩阵默认值`)
-
   // ── 断线状态同步（2026-09-19 用户："连接断开了状态没有同步，AI 也以为连接还在"）──
   // 以前 core **根本不发**"断线"事件：看门狗还挂着、状态条照旧写"在游戏中"（配合旧的
   // online 只看 bot.entity）、AI 要等下次调工具才撞上"不在线"。这里把三处一起钉住。
   {
-    const { Watchdog, WATCH_DEFAULTS } = await import('./src/watchdog.mjs')
     const { McBot } = await import('./src/core.mjs')
-    const { EventEmitter } = await import('node:events')
     const { readFileSync } = await import('node:fs')
-
-    console.log(`  ${WATCH_DEFAULTS.wakeOn.disconnect === true ? '✅' : '❌'} 🔴 唤醒矩阵新增 disconnect（断线默认叫醒 AI）`)
-
-    // 会重连 → 排一次唤醒；不会重连 → 旧模式只负责关看门狗，生产由游戏会话管理器投结束提示词。
-    const wdA = new Watchdog({ ctx: fakeCtx, sess: { bot: new EventEmitter(), events: [], config: {} }, agent: A.agent, onFire: () => {} })
-    wdA.arm()
-    wdA.sess.bot.emit('offline', { reason: '被踢: 测试', willReconnect: true, sub: '' })
-    const queued = wdA.pending?.[0]
-    console.log(`  ${queued?.reasons?.includes('disconnect') && /正在自动重连/.test(String(queued?.text)) ? '✅' : '❌'} 🔴 断线（会重连）→ 排队唤醒 AI：「${String(queued?.text ?? '').slice(0, 34)}…」`)
-    console.log(`  ${wdA.armed === true ? '✅' : '❌'} 会重连时看门狗继续挂着（重连成功后照常监听）`)
-    console.log(`  ${wdA.log.some((e) => e.kind === 'offline') ? '✅' : '❌'} 断线进了看门狗事件留档（mc_watch log 看得到）`)
-
-    const wdB = new Watchdog({ ctx: fakeCtx, sess: { bot: new EventEmitter(), events: [], config: {} }, agent: A.agent, onFire: () => {} })
-    wdB.arm()
-    wdB.sess.bot.emit('offline', { reason: '连接结束', willReconnect: false, sub: '' })
-    console.log(`  ${wdB.armed === false ? '✅' : '❌'} 🔴 旧模式不会重连时看门狗自动关闭`)
-    try { wdA.disarm('自检结束', { notify: false }) } catch {}
-    try { wdB.disarm('自检结束', { notify: false }) } catch {}
 
     // 真 socket 断开 → core 必须发出 offline（不是只在日志里写一行）
     {
@@ -367,8 +338,7 @@ console.log('\n--- 看门狗 v2 ---')
   //      `mc_events {waitSec:120}` 会把唤醒文案压在等待后面。修法：唤醒前先打断等待。
   {
     const { waitForEvents } = await import('./src/wait.mjs')
-    const { Watchdog } = await import('./src/watchdog.mjs')
-    const { EventEmitter } = await import('node:events')
+    const { Watchdog } = await import('./src/watchdog.ts')
     const { readFileSync } = await import('node:fs')
 
     // ① 等到事件 → 立刻回
@@ -407,25 +377,20 @@ console.log('\n--- 看门狗 v2 ---')
     // ⑤ 看门狗注入前**真的**会打断（stub 会话记录调用）
     {
       let interruptedWith = null
-      const stub = { bot: new EventEmitter(), events: [], config: {}, interruptWait: (r) => { interruptedWith = r } }
+      const stub = { bot: { online: true }, interruptWait: (reason) => { interruptedWith = reason } }
       const wd = new Watchdog({
         ctx: fakeCtx, sess: stub,
         agent: { id: 'w', status: 'running', steer: () => {} },
-        onFire: () => {},
-        tickMs: 50,                     // 自检不等生产那 1s tick
       })
-      wd.arm()
-      wd.updateConfig({ observeWindowMs: 100 })
-      stub.bot.emit('chat', { who: 'someone', text: 'deepseek 在吗' })     // 命中叫法
-      await new Promise((r) => setTimeout(r, 300))                        // 观察窗口 + tick(1s)
+      wd.notifyEvent({ timestamp: Date.now(), name: 'message.chat', content: { who: 'someone', content: 'deepseek 在吗' }, modifiers: {} }, 1, { minInterval: 5000 })
       console.log(`  ${interruptedWith ? '✅' : '❌'} 🔴 看门狗注入前会打断等待（interruptWait("${interruptedWith ?? ''}")）`)
-      try { wd.disarm('自检结束', { notify: false }) } catch {}
     }
     // ⑥ 接线不能丢（在 mc_events 的工具侧 + 看门狗的注入口）
     const idxSrc2 = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
-    const wdSrc2 = readFileSync(new URL('./src/watchdog.mjs', import.meta.url), 'utf8')
+    const wdSrc2 = readFileSync(new URL('./src/watchdog.ts', import.meta.url), 'utf8')
     console.log(`  ${/await waitForEvents\(/.test(idxSrc2) && /interrupted: true/.test(idxSrc2) ? '✅' : '❌'} mc_events 用抽出来的等待逻辑，并把"被打断"告诉 AI`)
-    console.log(`  ${/this\.sess\?\.interruptWait\?\./.test(wdSrc2) ? '✅' : '❌'} 🔴 看门狗在**所有事件注入**前都打断等待（一个口子覆盖唤醒/补提醒/心跳）`)
+    console.log(`  ${/this\.sess\.interruptWait\?\./.test(wdSrc2) ? '✅' : '❌'} 🔴 看门狗在**所有事件注入**前都打断等待（一个口子覆盖所有新版事件）`)
+    console.log(`  ${/watchdogEngine\?\.config\['harness\.heartbeat'\]/.test(wdSrc2) ? '✅' : '❌'} 看门狗挂载日志读取事件引擎心跳配置`)
     console.log(`  ${/被传送 \/ 捡物 \/ 其他玩家上下线不在这里/.test(idxSrc2) ? '✅' : '❌'} 工具描述不再谎称"含被传送/捡物/上下线"（那些只在 mc_watch log 里）`)
   }
 
@@ -434,6 +399,8 @@ console.log('\n--- 看门狗 v2 ---')
     await tools.get('mc_watchdog_config').execute({ action: 'edit', type: 'base', config: { '不存在的项': { wake: true } } }, A)
     console.log('  ❌ 非法配置项竟然被接受')
   } catch (e) { console.log(`  ✅ 非法配置项清晰报错：${e.message.slice(0, 50)}…`) }
+  const baseReplaceError = await tools.get('mc_watchdog_config').execute({ action: 'edit', type: 'base', merge: false, config: {} }, A).then(() => null, (error) => error.message)
+  console.log(`  ${/base 配置不支持 merge:false/.test(String(baseReplaceError)) && /设为 null/.test(String(baseReplaceError)) ? '✅' : '❌'} base merge:false 不再被静默忽略`)
 
   const badAction = await tools.get('mc_watch').execute({ action: 'stats' }, A).then(() => null).catch((e) => e.message)
   console.log(`  ${/未知 action/.test(String(badAction)) ? '✅' : '❌'} mc_watch 未知 action 明确报错`)
@@ -907,8 +874,25 @@ console.log('\n--- 聊天识别（未签名 system_chat 也要算玩家说话）
   console.log(`  ${chats.length === 1 ? '✅' : '❌'} 同一句短时间内重复只算一次（1.5s 去重）`)
 
   chats.length = 0
+  const selfChats = []
+  b1.on('selfChat', (c) => selfChats.push(c))
   fake.emit('message', ...sysChat('Test_Bot', '我自己说的话'))
-  console.log(`  ${chats.length === 0 ? '✅' : '❌'} 自己说的话不触发 chat（不当成别人喊我）`)
+  console.log(`  ${chats.length === 0 && selfChats.length === 1 ? '✅' : '❌'} 自己说的话单独进入 selfChat（不冒充别人喊我）`)
+
+  const forcedMoves = []
+  const forcedBot = new McBot({ instanceId: 'sc-forced-' + Math.random().toString(36).slice(2, 7) })
+  const forcedRaw = new EventEmitter()
+  forcedRaw.entity = { position: { x: 10, y: 64, z: 10 } }
+  forcedRaw.players = {}
+  forcedRaw.inventory = { items: () => [] }
+  forcedRaw.controlState = {}
+  forcedBot.bot = forcedRaw
+  forcedBot.on('teleport', (event) => forcedMoves.push(event))
+  forcedBot.startObserver()
+  forcedRaw.entity.position = { x: 13, y: 64, z: 10 }
+  forcedRaw.emit('forcedMove')
+  forcedBot.stopObserver()
+  console.log(`  ${forcedMoves.length === 1 && forcedMoves[0].distance === 3 && forcedMoves[0].serverForced === true ? '✅' : '❌'} 服务端 forcedMove 无距离阈值地识别为传送`)
 
   chats.length = 0
   fake.emit('message', ...sysText('Tester joined the game'))
@@ -934,18 +918,6 @@ console.log('\n--- 聊天识别（未签名 system_chat 也要算玩家说话）
   fake.emit('message', { translate: 'chat.type.text', with: [{ text: '<user>' }, { text: '签名的这句' }], toString: () => '<<user>> 签名的这句' }, 'chat')
   console.log(`  ${chats.length === 1 ? '✅' : '❌'} 签名聊天在 message 里的那条被跳过（不重复投递）`)
 
-  // 看门狗：叫法命中（含"现学自己的名字"）
-  const { Watchdog } = await import('./src/watchdog.mjs')
-  const wd = new Watchdog({ ctx: fakeCtx, sess: { bot: { on: () => {}, off: () => {} }, events: [], config: {} }, agent: A.agent })
-  // 🔴 默认叫法必须**逐字等于**这份通用清单：多一条都不行（曾经多过两条私人名字，跟着开源副本公开了）
-  const genericMentions = ['deepseek', 'deep\\s*seek', '\\bds\\b', '\\bdsh\\b', '\\bai\\b', 'agent', '机器人', '麦块']
-  const dflt = JSON.stringify(wd.config.mentionPatterns)
-  console.log(`  ${dflt === JSON.stringify(genericMentions) ? '✅' : '❌'} 🔴 默认叫法就是这 ${genericMentions.length} 条通用词（没有任何私人名字）：${dflt}`)
-  wd.learnName('Test_Bot')
-  console.log(`  ${wd.calledBy('Test_Bot 你在吗').length > 0 ? '✅' : '❌'} 连接后现学自己的游戏名 → 别人喊名字能叫醒`)
-  console.log(`  ${wd.learnName('Test_Bot') === false ? '✅' : '❌'} 同一个名字不会重复加（幂等）`)
-  wd.learnName('a+b(c)')
-  console.log(`  ${wd.calledBy('a+b(c) 来').length > 0 ? '✅' : '❌'} 名字里的正则特殊字符被转义（不会把正则写坏）`)
 }
 
 // McBot.status 要带上**连的哪个服**（用户 2026-09-16："状态条应该显示服务器地址，太长则截断"）
@@ -1379,7 +1351,7 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
   //    `@deepseek-ai/dsh-llm` 没进依赖声明，本机靠 junction 侥幸解析到，别人解析不到 ⇒
   //    消息构造不出来。现在统一走 `src/user-message.mjs`（宿主实现优先 + 自带等价实现兜底）。
   const umSrc = (await import('node:fs')).readFileSync(new URL('./src/user-message.mjs', import.meta.url), 'utf8')
-  const wdSrc = (await import('node:fs')).readFileSync(new URL('./src/watchdog.mjs', import.meta.url), 'utf8')
+  const wdSrc = (await import('node:fs')).readFileSync(new URL('./src/watchdog.ts', import.meta.url), 'utf8')
   const { messageFactoryKind } = await import('./src/user-message.mjs')
   console.log(`  ${/from '\.\/src\/user-message\.mjs'/.test(idx) ? '✅' : '❌'} 🔴 index.js 的消息构造走共用模块 src/user-message.mjs`)
   console.log(`  ${/export const builtinUserMessage/.test(umSrc) && /export const userMessage/.test(umSrc) ? '✅' : '❌'} 🔴 共用模块里有**自带等价实现**（不依赖任何宿主包也能注入）`)
@@ -2654,7 +2626,7 @@ console.log('\n--- 未处理拒绝（fail-loud → 整个 DSH exit(1)）防护 -
 
   // ⑤ 源码卫生：`void …then(…)` 必须带 catch（我们自己的火忘式 promise）
   const { readFileSync: rf } = await import('node:fs')
-  const files = ['index.js', 'src/core.mjs', 'src/watchdog.mjs', 'src/memory.mjs', 'src/accounts.mjs']
+  const files = ['index.js', 'src/core.mjs', 'src/watchdog.ts', 'src/memory.mjs', 'src/accounts.mjs']
   const dangling = []
   for (const f of files) {
     const text = rf(new URL('./' + f, import.meta.url), 'utf8')
@@ -2691,8 +2663,7 @@ console.log('\n--- 未处理拒绝（fail-loud → 整个 DSH exit(1)）防护 -
 // 本测试用**忠实模拟宿主契约**的桩：prompt 真的调 throwIfAborted，不给 signal 必炸。
 console.log('\n--- 看门狗唤醒投递（真机 bug 回归）---')
 {
-  const { Watchdog } = await import('./src/watchdog.mjs')
-  const { EventEmitter } = await import('node:events')
+  const { Watchdog } = await import('./src/watchdog.ts')
 
   const deliver = []
   const hostLike = {
@@ -2704,21 +2675,16 @@ console.log('\n--- 看门狗唤醒投递（真机 bug 回归）---')
     logger: { info: () => {}, warn: () => {} },
     get: (k) => (k === 'sessionController' ? hostLike : undefined),
   }
-  const bot = new EventEmitter()
-  const wd = new Watchdog({
+  const event = (content) => ({ timestamp: Date.now(), name: 'message.chat', content: { who: '<user>', content }, modifiers: {} })
+  const makeWatchdog = (status = 'idle') => new Watchdog({
     ctx: wdCtx,
-    sess: { bot, events: [], agentId: 'sess-w', config: {} },
-    agent: { id: 'sess-w', status: 'idle' },
-    onFire: () => {},
+    sess: { bot: { online: true }, agentId: 'sess-w' },
+    agent: { id: 'sess-w', status },
     promptSignal: new AbortController().signal,
-    tickMs: 50,                       // 自检不等生产那 1s tick
   })
-  wd.updateConfig({ observeWindowMs: 100, maxWakePerMinute: 100 })
-  wd.arm()
 
-  // 空闲状态下命中叫法 → 走 'queue'（= followup，开新一轮）
-  bot.emit('chat', { who: '<user>', text: 'deepseek，你在这里建一座地标塔' })
-  await new Promise((r) => setTimeout(r, 300))
+  const wd = makeWatchdog()
+  wd.notifyEvent(event('deepseek，你在这里建一座地标塔'), 1, { minInterval: 5000 })
 
   const got = deliver[0]
   console.log(`  ${got ? '✅' : '❌'} 空闲时能真正投递出去（${deliver.length} 次）`)
@@ -2728,34 +2694,25 @@ console.log('\n--- 看门狗唤醒投递（真机 bug 回归）---')
 
   // 运行中也必须投得出去，且走 steer（插下一步，不打断）
   deliver.length = 0
-  wd.agent = { id: 'sess-w', status: 'running' }
-  bot.emit('chat', { who: '<user>', text: 'deepseek 在吗' })
-  await new Promise((r) => setTimeout(r, 300))
+  const runningWd = makeWatchdog('running')
+  runningWd.notifyEvent(event('deepseek 在吗'), 1, { minInterval: 5000 })
   console.log(`  ${deliver[0]?.mode === 'steer' ? '✅' : '❌'} 运行中走 steer=插话不打断：mode=${deliver[0]?.mode}`)
-  console.log(`  ${wd.stats.injected >= 1 ? '✅' : '❌'} 注入计数已累加（${wd.stats.injected}）`)
+  console.log(`  ${runningWd.stats.injected >= 1 ? '✅' : '❌'} 注入计数已累加（${runningWd.stats.injected}）`)
 
   // 🔴 2026-09-17：**模式闸门** —— 会话切出 MC 模式后，看门狗不许再往会话里注入（同类残留）
   deliver.length = 0
-  const droppedBefore = wd.stats.dropped
-  wd.gate = () => false
-  bot.emit('chat', { who: '<user>', text: 'deepseek 又在吗' })
-  await new Promise((r) => setTimeout(r, 300))
+  const blockedWd = makeWatchdog()
+  blockedWd.gate = () => false
+  blockedWd.notifyEvent(event('deepseek 又在吗'), 1, { minInterval: 5000 })
   console.log(`  ${deliver.length === 0 ? '✅' : '❌'} 🔴 闸门关着（已退出 MC 模式）→ **一次都不注入**（实际 ${deliver.length} 次）`)
-  console.log(`  ${wd.stats.dropped > droppedBefore ? '✅' : '❌'} 被丢弃的注入记进 stats.dropped（${wd.stats.dropped}）`)
-  wd.gate = () => true
-  bot.emit('chat', { who: '<user>', text: 'deepseek 回来了吗' })
-  await new Promise((r) => setTimeout(r, 300))
-  console.log(`  ${deliver.length >= 1 ? '✅' : '❌'} 闸门打开（切回 MC 模式）→ 立刻恢复注入（${deliver.length} 次；不用重新 arm）`)
-
-  wd.disarm('自检结束')
-  console.log(`  ${wd.armed === false ? '✅' : '❌'} disarm 后停止监听`)
+  console.log(`  ${blockedWd.stats.dropped === 1 ? '✅' : '❌'} 被丢弃的注入记进 stats.dropped（${blockedWd.stats.dropped}）`)
 }
 
 // ── 看门狗 job 必须能结算（隐患：job 卡在 stopping）──
 // 根因：_resolveJob 存了但从没调用 → done 永不 resolve → job_list 里永远挂着
 console.log('\n--- 看门狗 job 结算 ---')
 {
-  const { Watchdog } = await import('./src/watchdog.mjs')
+  const { Watchdog } = await import('./src/watchdog.ts')
   const { EventEmitter } = await import('node:events')
   let hooks = null
   let startSpec = null
@@ -2776,7 +2733,6 @@ console.log('\n--- 看门狗 job 结算 ---')
       ctx: wdCtx,
       sess: { bot: new EventEmitter(), events: [], agentId: 's', config: {} },
       agent: { id: 's' },
-      onFire: () => {},
       // 生产中该回调关闭整个 GameSession；本单元只代行聚合对象最终调用的底层拆除。
       onCancel: (reason) => watchdog.disarm(reason, { fromJob: true }),
     })
@@ -2834,7 +2790,7 @@ console.log('\n--- 看门狗 job 结算 ---')
   console.log(`  ${killCallers.every((c) => c === 's') && killCallers.length > 0 ? '✅' : '❌'} 🔴 kill 的 caller 是会话 id 字符串（收到：${JSON.stringify(killCallers)}）`)
 
   // 🔴 拿不到会话 id → **不许挂"无主 job"**（无主 job 对**所有会话**可见）：降级 + 留档
-  const wdNoId = new Watchdog({ ctx: wdCtx, sess: { bot: new EventEmitter(), events: [], config: {} }, onFire: () => {} })
+  const wdNoId = new Watchdog({ ctx: wdCtx, sess: { bot: new EventEmitter(), events: [], config: {} } })
   wdNoId.arm()
   const degraded = wdNoId.jobId === null && (wdNoId.log ?? []).some((e) => /拿不到会话 id/.test(e.text))
   console.log(`  ${degraded ? '✅' : '❌'} 拿不到会话 id：不挂无主 job（降级 + 留档）`)
@@ -2849,7 +2805,7 @@ console.log('\n--- 结构不变量：事件队列单一写入方 ---')
 {
   const { readFileSync } = await import('node:fs')
   const { fileURLToPath } = await import('node:url')
-  const wdSrc = readFileSync(fileURLToPath(new URL('./src/watchdog.mjs', import.meta.url)), 'utf8')
+  const wdSrc = readFileSync(fileURLToPath(new URL('./src/watchdog.ts', import.meta.url)), 'utf8')
   const idxSrc = readFileSync(fileURLToPath(new URL('./index.js', import.meta.url)), 'utf8')
 
   // 看门狗不得调用 onFire（那正是"第二个写入方"）
@@ -2861,7 +2817,9 @@ console.log('\n--- 结构不变量：事件队列单一写入方 ---')
   console.log(`  ${!wdSessPush ? '✅' : '❌'} 看门狗不直接 push sess.events`)
 
   // index.js 里 ensureWired 必须仍然是写入方（别把它也删了，否则 mc_events 空了）
-  const wired = /this\.bot\.on\('chat',[\s\S]{0,120}#pushEvent\('chat'/.test(idxSrc)
+  const wired = /const observeChat = \([\s\S]{0,160}#pushEvent\('chat'/.test(idxSrc)
+    && /this\.bot\.on\('chat', \(event\) => observeChat\(event, false\)\)/.test(idxSrc)
+    && /this\.bot\.on\('selfChat', \(event\) => observeChat\(event, true\)\)/.test(idxSrc)
   console.log(`  ${wired ? '✅' : '❌'} ensureWired 仍是唯一写入方（mc_events 事件来源）`)
 
   // 看门狗构造签名里不该再收 onFire
@@ -3013,8 +2971,7 @@ console.log('\n--- 无 OP 建造（创造模式自动取物）---')
 // `steer` 的宿主文档："An idle driver starts a turn" —— 空闲也能唤醒，正合用。
 console.log('\n--- 看门狗唤醒投递（提示词注入，非用户消息）---')
 {
-  const { Watchdog } = await import('./src/watchdog.mjs')
-  const { EventEmitter } = await import('node:events')
+  const { Watchdog } = await import('./src/watchdog.ts')
 
   const steerCalls = []
   const promptCalls = []
@@ -3025,19 +2982,15 @@ console.log('\n--- 看门狗唤醒投递（提示词注入，非用户消息）-
       ? { prompt: (req, sig) => { sig.throwIfAborted(); promptCalls.push(req); return Promise.resolve({}) } }
       : undefined),
   }
-  const bot = new EventEmitter()
-  const wd = new Watchdog({
+  const makeWatchdog = (agent) => new Watchdog({
     ctx: wdCtx,
-    sess: { bot, events: [], agentId: 'sess-w', config: {} },
-    agent: fakeAgent,
+    sess: { bot: { online: true }, agentId: 'sess-w' },
+    agent,
     promptSignal: new AbortController().signal,
-    tickMs: 50,                       // 自检不等生产那 1s tick
   })
-  wd.updateConfig({ observeWindowMs: 100, maxWakePerMinute: 100 })
-  wd.arm()
-
-  bot.emit('chat', { who: '<user>', text: 'deepseek，你在这里建一座地标塔' })
-  await new Promise((r) => setTimeout(r, 300))
+  const event = (content) => ({ timestamp: Date.now(), name: 'message.chat', content: { who: '<user>', content }, modifiers: {} })
+  const wd = makeWatchdog(fakeAgent)
+  wd.notifyEvent(event('deepseek，你在这里建一座地标塔'), 1, { minInterval: 5000 })
 
   const msg = steerCalls[0]
   console.log(`  ${steerCalls.length === 1 ? '✅' : '❌'} 走 agent.steer（${steerCalls.length} 次）`)
@@ -3051,11 +3004,9 @@ console.log('\n--- 看门狗唤醒投递（提示词注入，非用户消息）-
 
   steerCalls.length = 0
   fakeAgent.status = 'running'
-  bot.emit('chat', { who: '<user>', text: 'deepseek 在吗' })
-  await new Promise((r) => setTimeout(r, 300))
+  const runningWd = makeWatchdog(fakeAgent)
+  runningWd.notifyEvent(event('deepseek 在吗'), 1, { minInterval: 5000 })
   console.log(`  ${steerCalls.length === 1 && promptCalls.length === 0 ? '✅' : '❌'} 运行中也用 steer（不分叉成 followup）`)
-
-  wd.disarm('自检结束')
 }
 
 // ── 放置可行性判据（用户问：洞穴空气？液体？）──
@@ -3941,7 +3892,7 @@ if (process.env.WHALE_CRAFT_NO_HOST_SIM === '1') {
     console.log(failLines.slice(0, 5).map((l) => '     ' + l.trim()).join('\n') || `     ${String(childFail?.message ?? '').split('\n')[0]}`)
   }
   console.log(`  ${childDump?.toolDefKind === 'builtin' ? '✅' : '❌'} 子进程确实走了内置路（kind=${childDump?.toolDefKind}；屏蔽失败的话这里会是 host）`)
-  console.log(`  ${childDump?.configPresent === false ? '✅' : '❌'} 子进程里 Config === undefined（schemastery 拿不到 ⇒ 不导出 schema、apply 自己兜默认值）`)
+  console.log(`  ${childDump?.configPresent === false ? '✅' : '❌'} 子进程里 Config === undefined（schemastery 拿不到 ⇒ 不导出空 schema）`)
 
   const parentList = [...tools.entries()].map(([name, d]) => ({ name, parameters: d.parameters, outputSchema: d.output?.schema, timeoutMs: d.timeoutMs ?? null }))
   const childList = childDump?.tools ?? []
@@ -3994,7 +3945,8 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
 
   let now = 1_000
   const wakes = []
-  const engine = new WatchdogEngine(cloneWatchdogDefaults(), (event, count) => wakes.push({ event, count }), () => now)
+  let suppressed = 0
+  const engine = new WatchdogEngine(cloneWatchdogDefaults(), (event, count) => wakes.push({ event, count }), () => now, 200, (count) => { suppressed += count })
   const first = engine.observe('self.damage', { damage: 1, type: 'minecraft:in_fire', source: null, health: 19, position: null })
   now += 100
   const repeated = engine.observe('self.damage', { damage: 2, type: 'minecraft:in_fire', source: null, health: 17, position: null })
@@ -4003,6 +3955,22 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
   console.log(`  ${first.modifiers['type.once']?.count === -1 && !repeated.modifiers['type.once'] ? '✅' : '❌'} type.once 首次命中，连续伤害不重复命中`)
   console.log(`  ${nextRound.modifiers['type.once']?.count === 2 && nextRound.modifiers['type.once']?.damageSum === 3 ? '✅' : '❌'} 静默 4s 后新一轮携带上一轮 count/damageSum`)
   console.log(`  ${wakes.length === 2 ? '✅' : '❌'} 两轮持续伤害只提醒两次（实际 ${wakes.length}）`)
+  console.log(`  ${suppressed === 1 ? '✅' : '❌'} type.once 冷却静默会计入 suppressed（实际 ${suppressed}）`)
+
+  const selfConfig = cloneWatchdogDefaults()
+  const selfEngine = new WatchdogEngine(selfConfig)
+  selfEngine.observe('message.chat', { player: { name: 'DeepSeek', uuid: null }, isSystem: false, type: null, content: 'ds' }, { isSelf: true, onlineCount: 1, distance: 0 })
+  const selfEvent = selfEngine.queue[0]
+  selfConfig['message.chat'].includeSelf = false
+  selfEngine.setConfig(selfConfig)
+  selfEngine.observe('message.chat', { player: { name: 'DeepSeek', uuid: null }, isSystem: false, type: null, content: '第二句' }, { isSelf: true, onlineCount: 1, distance: 0 })
+  console.log(`  ${selfEngine.queue.length === 1 && selfEvent && Object.keys(selfEvent.modifiers).length === 0 ? '✅' : '❌'} includeSelf=true 记录自己的话但不命中唤醒修饰；false 时不记录`)
+
+  const { Watchdog } = await import('./src/watchdog.ts')
+  const watchdog = new Watchdog({ ctx: fakeCtx, sess: { interruptWait: () => {}, bot: {} }, agent: { id: 'stats', steer: () => {} } })
+  watchdog.notifyEvent({ name: 'self.teleport', content: {}, modifiers: {}, timestamp: Date.now() }, 1, { minInterval: 5_000 })
+  const watchdogStatus = watchdog.status()
+  console.log(`  ${watchdogStatus.lastWakeAt !== null && watchdogStatus.lastWakeKind === 'self.teleport' && watchdogStatus.stats.fired === 1 && watchdogStatus.stats.injected === 1 ? '✅' : '❌'} 新版提醒更新 lastWakeAt/lastWakeKind/fired/injected`)
 
   const exactConfig = cloneWatchdogDefaults()
   exactConfig['self.damage'].modifiers.type.types = ['minecraft:player_attack']

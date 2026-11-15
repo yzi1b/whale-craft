@@ -38,7 +38,7 @@
 | B2 | 提示词**晚一步**/注入时机不对（0.1.4 前） | 宿主 `preStep()` 先 `inbox.claim()`（把消息领走）**再**跑 `agent/pre-step` 瀑布——塞 `inbox.nextStep` 会晚一步 | 改为在 `agent/pre-step` 里**改写 `decision.messages`**，置于本步最前 |
 | B3 | 切出 MC 模式后**提示词再也不投**（0.1.4 前） | 切模式漏清投递台账 | `withdrawAgentsMdNotices` 清队列 + 清台账 + 划 `since` 线 |
 | B4 | MC 模式下 `.whale-craft/AGENTS.md` 会在**任何**模式被宿主额外注入 | 宿主把 `AGENTS.md`/`CLAUDE.md` 当工作区指令文件候选，不受插件开关控制 | 行事准则改名 **`RULES.md`**（不在候选名单）；老文件自动迁移 + `.bak` 改名 |
-| B5 | 用户投诉："为什么这台服务器上叫 'auth' 的记忆它有？"（2026-09-16） | 默认 `mentionPatterns` 写死了私人账号名/昵称，随开源副本公开 | 默认只放通用叫法；账号名由 `learnName()` 从登录档案**现学**（不进源码） |
+| B5 | 用户投诉："为什么这台服务器上叫 'auth' 的记忆它有？"（2026-09-16） | 旧看门狗把私人账号名/昵称写进默认叫法，随开源副本公开 | 旧叫法系统整体删除；聊天判断只用 `watchdog-catalog` 中可见、可配置的修饰器规则 |
 
 ### C. 权限隔离系
 
@@ -63,7 +63,7 @@
 
 | # | 现象 | 根因 | 修法 |
 | --- | --- | --- | --- |
-| E1 | "连接断开了状态没有同步"——`mc_status`/状态条/AI 都以为还连着 | **三处一起撒谎**：core 不 emit 断线、会话不转发、看门狗没这条唤醒项还照旧挂着 | core emit `offline {reason, willReconnect}` → 会话转进事件队列 → 看门狗 `wakeOn.disconnect`（会重连=唤醒说"正在自动重连"；不重连=自动关闭+通知）；前端 `active` 认 `reconnecting`、状态条显示**"重连中…"**、`reconnectPending` 覆盖"正在尝试连接"窗口 |
+| E1 | "连接断开了状态没有同步"——`mc_status`/状态条/AI 都以为还连着 | **三处一起撒谎**：core 不 emit 断线、会话不转发、看门狗也没收到断线事实 | core emit `offline {reason, willReconnect}` → 会话转进事件队列并交给 `WatchdogEngine`；不重连时由游戏会话统一关闭和通知；前端 `active` 认 `reconnecting`、状态条显示**"重连中…"**、`reconnectPending` 覆盖"正在尝试连接"窗口 |
 | E2 | "等到消息也不唤醒，空等特别久"——`mc_events {waitSec:120}` 把唤醒堵住 | 宿主 `agent.steer` 在**下一步 step 边界**消费，而 step 边界要等当前工具返回；等待把正在等的事堵住了 | `src/wait.mjs` 多一条收工条件"被唤醒打断"；看门狗**所有注入前**先 `sess.interruptWait(kind)`；实测打断后 126ms 返回 |
 
 ### F. 工程 / 环境系

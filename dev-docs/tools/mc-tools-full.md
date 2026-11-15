@@ -633,6 +633,7 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 - action 不是 "edit" / "read" → `action 参数无效`
 - edit 缺少 type，或 config / file 未恰好填写一个 → 对应参数错误
 - 基础配置使用 file，或基础 / 最终生效配置使用 dist → 对应配置不得导入导出
+- 基础配置显式传入 `merge:false` → `base 配置不支持 merge:false；请把要恢复默认的配置项设为 null`
 - scene 导入文件后缀、`wcwc` 版本或 `type` 不符 → 对应文件格式错误
 - 配置项、修饰名或配置字段不存在 → 对应注册名或字段错误
 - 配置值类型、范围不符合事件定义 → 对应字段校验错误

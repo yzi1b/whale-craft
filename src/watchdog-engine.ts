@@ -4,6 +4,7 @@ import { cloneWatchdogDefaults, type WatchdogConfig, type WatchdogEventName } fr
 
 type ModifierPayload = JsonObject | true
 type WakeHandler = (event: WatchdogEvent, pendingCount: number) => void
+type SuppressedHandler = (count: number) => void
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 const text = (value: unknown): string => String(value ?? '')
@@ -35,6 +36,7 @@ export class WatchdogEngine {
   private readonly onWake: WakeHandler | undefined
   private readonly now: () => number
   private readonly maxQueue: number
+  private readonly onSuppressed: SuppressedHandler | undefined
   private readonly pending: Array<{ due: number, event: WatchdogEvent }> = []
   private readonly damageRounds = new Map<string, { lastAt: number, count: number, damageSum: number }>()
   private heartbeatAt: number
@@ -44,11 +46,13 @@ export class WatchdogEngine {
     onWake?: WakeHandler,
     now: () => number = Date.now,
     maxQueue = 200,
+    onSuppressed?: SuppressedHandler,
   ) {
     this.config = clone(config)
     this.onWake = onWake
     this.now = now
     this.maxQueue = maxQueue
+    this.onSuppressed = onSuppressed
     this.heartbeatAt = now()
   }
 
@@ -58,9 +62,14 @@ export class WatchdogEngine {
     const config = this.config[name]
     if (!config) throw new Error(`该事件或修饰不存在：${name}`)
     const timestamp = this.now()
-    const modifiers = this.modifiers(name, content, context, timestamp)
+    const selfChat = name === 'message.chat' && context.isSelf === true
+    const modifiers = selfChat ? {} : this.modifiers(name, content, context, timestamp)
     let record = config.record === true
     let wake = config.wake === true
+    if (selfChat && config.includeSelf !== true) {
+      record = false
+      wake = false
+    }
     let delay = Number(config.delay ?? 0)
     const configuredModifiers = config.modifiers as Record<string, Record<string, unknown>>
     for (const modifier of Object.keys(modifiers)) {
@@ -162,7 +171,7 @@ export class WatchdogEngine {
           if (!previous || timestamp - previous.lastAt >= Number(once.resetAfterMs)) {
             out['type.once'] = { type: damageType, count: previous?.count ?? -1, damageSum: previous?.damageSum ?? -1 }
             this.damageRounds.set(damageType, { lastAt: timestamp, count: 0, damageSum: 0 })
-          }
+          } else this.onSuppressed?.(1)
           const round = this.damageRounds.get(damageType)
           if (round) { round.lastAt = timestamp; round.count++; round.damageSum += Number(content.damage) || 0 }
         }

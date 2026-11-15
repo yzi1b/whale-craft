@@ -30,7 +30,7 @@
 - **重连**：网络断开后固定等待 1s，最多尝试 3 次；被踢、认证失败不重连。`reconnecting` 覆盖等待与尝试，`reconnectPending` 覆盖**整个断线期**（直到真重连成功/尝试耗尽）。
 - **`offline` 事件**（`b.on('end')` 里 emit）：`{sub, reason: lastError ?? '连接结束', willReconnect, at}`；`willReconnect = autoReconnect && bot===b && !stopped`。**断线必须进上层队列**（0.1.7 修）。
 - `disconnect(reason)`：停重连/观察器 → `quit()` 宽限 3s（计时器故意不 unref）→ 没走掉才强断；返回 `{graceful,forced,ms}`。`authOnly()`：只认证不连接（账户 refresh 用）。
-- **事件清单**：`spawn {sub,position,gamemode}`、`offline`、`reconnect {sub}`、`death {position}`、`damage {damage,type,source,health,position}`（每次实际掉血；1.20+ 从 `damage_event`/动态注册表解析类型）、`chat {who,text}`、`system {text}`、观察器 `playerJoin/playerLeave {who}`、`teleport`、`pushed`、`pickup`、`log`。
+- **事件清单**：`spawn {sub,position,gamemode}`、`offline`、`reconnect {sub}`、`death {position}`、`damage {damage,type,source,health,position}`（每次实际掉血；1.20+ 从 `damage_event`/动态注册表解析类型）、`chat {who,text}`、`selfChat {who,text}`、`system {text}`、观察器 `playerJoin/playerLeave {who}`、`teleport`（mineflayer `forcedMove`，无距离阈值）、`pushed`、`pickup`、`log`。
   - ⚠️ **core 没有 `heartbeat` 事件** —— 心跳是看门狗配置项，靠 `stats.lastEventAt` 判。
 - **聊天识别**（`wireChatEvents`/`#playerChatFrom`）：`player_chat` 包（签名）直接处理；`message` 事件里 `position==='chat'` 跳过防重复；`game_info` 必 system；其余先试玩家聊天判据（`chat.type.text` / `chat.type.team.*` / `commands.message.display.incoming` / 兜底渲染形状正则 `<who> text`）——覆盖"被服务端塞进 system 位置的玩家聊天"。
 - **按键上报兼容层（`player_input`，为 26.2 加的）已于 2026-10-02 整体移除**：上游还连不了 26.2（mineflayer 4.39.0 的 testedVersions 只到 26.1；minecraft-data 3.117.0 只有元数据、无数据目录），半吊子支持先撤。将来重建**必须**沿用"先查后发"护栏——教训见 [history.md](history.md)（protodef 对未知包名不报错，写出 `02 00 00` 会被服务端当 `accept_teleportation` → 秒踢）。
@@ -45,34 +45,20 @@
 - 返回 `{waitedMs, interrupted, reason}`。收工条件按序检查：① `signal.aborted` → `reason:'用户停止'`（interrupted:false）；② `sess.waitInterruptedAt > startedAt` → `interrupted:true, reason: waitInterruptReason`；③ 新事件出现 → `reason:'有事件'`；④ 超时 → `reason:null`。
 - **存在的理由**：宿主 `agent.steer` 在**下一步 step 边界**消费，而 step 边界要等当前工具调用返回 —— 没有打断机制时，`mc_events{waitSec:120}` 会把看门狗的唤醒文案**压到等待结束**才投递（"等待堵住了它正在等的那件事"，0.1.7 事故）。
 
-## 3. `src/game-session.ts` + `src/watchdog.mjs` —— 游戏会话与单脑看门狗
+## 3. `src/game-session.ts` + `src/watchdog.ts` —— 游戏会话与单脑看门狗
 
 `GameSessionState` 是生产生命周期聚合根：每个实例独占一个 `Watchdog`、一个 `WatchdogEngine`、场景配置和注意配置；看门狗不能脱离游戏会话单独存在、启停或复用。`McSession.closeGameSession()` 是唯一关闭入口，自动重连期间保留原聚合；彻底断开、主动退出、强停、归档、实例销毁、换服或看门狗 job 被取消都会关闭整个聚合。首次 `close()` 还会经 `src/game-session-close.ts` 构造一次结束提示词；重复关闭不会重复投放，初始化失败可显式 `notify:false`。
 
 `src/game-session-close.ts` 是结束提示词的唯一文案与策略源：清理/遮蔽原因，补游戏会话 ID、服务器和持续时间，并按关闭类型选择 `wake` 或 `defer`。传输层只接受渲染完成的 notice，不得在工具或事件监听器里另拼文案。
 
-**导出**：`Watchdog`、`WATCH_DEFAULTS`。
+**导出**：`Watchdog`。
 
-- 构造 `{ctx, sess, agent, promptSignal, tickMs}`（promptSignal **必传**，`sessionController.prompt` 是 @Remote；`tickMs` 生产默认 1000，自检传小值避免每条注入真等 1 秒）。
-- `arm()` 幂等：`learnName(sess.bot.username)`（**从登录档案现学游戏名**，不写进源码——防私人名字随开源副本泄露）→ 绑 bot 事件 → `#startJob()`（宿主 jobs，`kind:'mc-watch'`，`owner:agent`；无 jobs 服务降级"无 job 模式"）→ `setInterval(#tick, tickMs)`。
+- 构造 `{ctx, sess, agent, promptSignal, tickMs, onCancel}`；`promptSignal` 供 `sessionController.prompt` 兜底路径使用，`tickMs` 生产默认 1000。
+- `arm()` 幂等：挂宿主 job（`kind:'mc-watch'`，`owner` 为会话 id）并启动唯一的 `WatchdogEngine.tick()` 定时器；它不绑定 bot 事件、不做事件匹配。
+- `notifyEvent(event, pendingCount, global)` 是事件引擎唯一投递入口：按全局 `minInterval` 合并提醒，更新 `lastWakeAt` / `lastWakeKind` / `stats.fired`；`type.once` 冷却静默由事件引擎回报到 `stats.suppressed`。
 - `disarm(reason, {fromJob})`：底层幂等 teardown，并结算 job（`readOutput` = 留档末 30 条）；它不再拥有关闭通知能力，生产只由 `GameSessionState.close()` 调用。job cancel 反向请求关闭整个游戏会话。
-- **旧唤醒矩阵**（`wakeOn`）：仅供 `Watchdog` 的非 modern 兼容分支；生产使用 `modern:true` 跳过这些事件判断，对外配置统一走 `src/watchdog-catalog.ts` / `mc_watchdog_config`。
-
-| 项 | 默认 | 判定 | 文案要点 |
-| --- | --- | --- | --- |
-| `mention` | ✅ | `calledBy()` 正则命中 `mentionPatterns` | `[有人喊我] who text ← 命中叫法` |
-| `nearbySpeech` | ✅ | hypot ≤ `nearRadius`(16) | `就在我旁边` |
-| `damage` | ✅ | damage 事件 | `血量降到 N` |
-| `death` | ✅ | death 事件 | `我死了` |
-| `teleport` | ✅ | teleport 事件 | `位置瞬移 N 格` |
-| `pushed` | ❌ | pushed 事件 | `被动移动` |
-| `itemPickup` | ❌ | pickup 事件 | `捡到 …` |
-| `playerJoin` / `playerLeave` | ❌ | 对应事件 | `who 上线/下线了` |
-| `disconnect` | ✅ | offline 且 willReconnect | `连接断了（reason）——正在自动重连…` |
-| `heartbeat` | ❌ | 距上次唤醒 ≥ `heartbeatSec`(300) 且在线 | `【心跳｜已挂机 Ns】` |
-
-- 同话题延续：唤醒后 `topicWindowSec`(120s) 内的发言**直接算 mention**。命中进 `pending` 攒 `observeWindowMs`(2s) 合并 → `#flush` 过 `maxWakePerMinute`(6) 限流 → 一条 `【MC 看门狗｜标签】` 正文注入。另有 `followUpAfterSec`(45)：唤醒后 45s 无下文补提醒一次。
-- **`#inject`（唯一注入口）**：① gate（非 MC 模式只记账 drop）；② **先 `sess.interruptWait(kind)`**；③ 首选 `agent.steer(userMessage(...))`（`source:{kind:'plugin:whale_craft',form:'notice'}`——v4 规范值，宿主渲染成折叠一行；空闲时起一轮、运行中下一步插话）；④ 兜底 `sessionController.prompt({mode:'steer'}, promptSignal)`。**绝不用** `followup`/queue 类"冒充用户发言"的通道。
+- 事件匹配、修饰器、延迟、心跳、注意项与 `type.once` 全在 `src/watchdog-engine.ts` / `src/watchdog-catalog.ts`；`Watchdog` 内没有另一套规则、默认值或兼容路径。
+- **`inject`（唯一注入口）**：① gate（非 MC 模式只记账 drop）；② **先 `sess.interruptWait(kind)`**；③ 首选 `agent.steer(userMessage(...))`（`source:{kind:'plugin:whale_craft',form:'notice'}`——v4 规范值，宿主渲染成折叠一行；空闲时起一轮、运行中下一步插话）；④ 兜底 `sessionController.prompt({mode:'steer'}, promptSignal)`。**绝不用** `followup`/queue 类"冒充用户发言"的通道。
 - 留档 `this.log`（内存，上限 200，`#record` 是唯一写入点）—— 与 `sess.events` 分开，双写曾是 bug。
 
 ## 4. `src/memory.mjs` —— MemoryStore（记忆树）

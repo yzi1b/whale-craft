@@ -81,19 +81,19 @@ DSH host 进程
 | 通道 | 提供者 | 内容 |
 | --- | --- | --- |
 | **拉**（发生过什么） | `mc_events` 读 `sess.events` | 聊天、系统消息、受伤、上线/死亡/重连/断线。⚠️ 被传送/捡物/上下线只进**看门狗留档**（`mc_watch {action:"log"}`），不在这个队列 |
-| **推**（该不该醒） | Watchdog → 插件提示行注入 | 唤醒矩阵命中 → 合并 → 限流 → 注入 |
+| **推**（该不该醒） | `WatchdogEngine` → `Watchdog` → 插件提示行注入 | 事实匹配 → 修饰器 → 延迟/冷却 → 全局间隔合并 → 注入 |
 
 完整注入流程（0.1.7 定格的顺序，每一步都有事故背书）：
 
-1. 事件命中 `wakeOn` 某一项（或心跳到点 / 45s 补提醒）→ 进 `pending`；
-2. 攒 `observeWindowMs`（2s）把连珠炮合并，`#flush` 时过 `maxWakePerMinute`（6 次/分）限流；
+1. `McSession.ensureWired()` 把事实交给唯一的 `WatchdogEngine.observe()`；引擎按 `src/watchdog-catalog.ts` 的事件和修饰器配置决定记录、延迟与唤醒；
+2. 延迟事件由 `WatchdogEngine.tick()` 冲刷；命中唤醒后交给 `Watchdog.notifyEvent()`，再按全局 `minInterval` 合并相邻提醒；
 3. 注入前**先 `sess.interruptWait(kind)`** —— 让堵在 `mc_events{waitSec}` 里的等待立刻返回（工具一返回 → step 结束 → 唤醒当场投递）；
 4. 优先 `agent.steer(userMessage(...))`（运行中 = 下一步插话；空闲 = 起一轮 = 唤醒）；`steer` 不可用时兜底 `sessionController.prompt({mode:'steer'}, promptSignal)` —— **promptSignal 必传**（`sessionController.prompt` 是 @Remote 签名，不传会 `throwIfAborted` 炸）；
 5. 注入被 `gate` 检查：**不在 MC 模式只记账不注入**（drop）。
 
 - 看门狗挂宿主 job（`jobs.start({kind:'mc-watch', label:'MC 看门狗（整局存活）', owner:agent, run})`）：job 存活期=整局游戏；`disarm` 幂等结算（`#settleJob`）。宿主 kill job 时 `cancel` 也必须进入 `closeGameSession()`，不得只关看门狗。
-- 断线矩阵：`offline` 且 `willReconnect` → 唤醒“正在自动重连”（游戏会话与看门狗都保留）；`willReconnect=false` → 上层关闭整个游戏会话，看门狗随之关闭，并由 `GameSessionState.close()` 按被踢、连接异常或重连耗尽类型投放一次结束提示词。
-- 对外事件配置统一由 `mc_watchdog_config`（base / scene / effective）、`mc_watchdog_global_settings` 与 `mc_watchdog_focus` 管理；旧 `WATCH_DEFAULTS` 仅留在投递器内部兼容分支，不再暴露为工具配置。
+- 断线由会话层观察并交给事件引擎；`willReconnect=false` 时上层关闭整个游戏会话，看门狗随之关闭，并由 `GameSessionState.close()` 按被踢、连接异常或重连耗尽类型投放一次结束提示词。
+- 对外事件配置只由 `mc_watchdog_config`（base / scene / effective）、`mc_watchdog_global_settings` 与 `mc_watchdog_focus` 管理；不存在第二套看门狗配置或兼容分支。
 
 ## 6. 提示词注入体系（唯一通道 = 插件提示行）
 
