@@ -35,7 +35,9 @@ export const WATCHDOG_EVENT_DEFAULTS = {
     'type.once': { types: ['*'], resetAfterMs: 4_000, record: true, wake: true, delay: -1 },
   } },
   'self.teleport': { record: true, wake: true, delay: 0, modifiers: {} },
-  'self.pushed': { record: true, wake: false, delay: 0, modifiers: {} },
+  'self.pushed': { minDistance: 0.2, record: false, wake: false, delay: 0, modifiers: {
+    once: { resetAfterMs: 4_000, record: true, wake: true, delay: -1 },
+  } },
   'self.pickup': { record: true, wake: false, delay: 0, modifiers: {} },
 } as const
 
@@ -48,6 +50,7 @@ export interface WatchdogModifierTraits {
 
 const WATCHDOG_MODIFIER_TRAITS: Readonly<Record<string, WatchdogModifierTraits>> = Object.freeze({
   'self.damage/type.once': Object.freeze({ simplifiable: false }),
+  'self.pushed/once': Object.freeze({ simplifiable: false }),
 })
 
 export function watchdogModifierTraits (event: string, modifier: string): WatchdogModifierTraits {
@@ -79,8 +82,9 @@ export function validateWatchdogPatch (item: string, patch: unknown): Record<str
   for (const [field, value] of Object.entries(patch)) {
     if (field === 'modifiers' || !Object.hasOwn(defaults, field)) throw new Error(`${item}.${field} 字段不存在`)
     if (['record', 'wake', 'includeSelf', 'treatSystemAsChat'].includes(field) && typeof value !== 'boolean') throw new Error(`${item}.${field} 不接受值 ${JSON.stringify(value)}`)
-    if (['delay', 'interval', 'distance', 'count', 'resetAfterMs'].includes(field) && !Number.isFinite(value)) throw new Error(`${item}.${field} 不接受值 ${JSON.stringify(value)}`)
+    if (['delay', 'interval', 'distance', 'minDistance', 'count', 'resetAfterMs'].includes(field) && !Number.isFinite(value)) throw new Error(`${item}.${field} 不接受值 ${JSON.stringify(value)}`)
     if (field === 'delay' && Number(value) < (modifier ? -1 : 0)) throw new Error(`${item}.delay 不接受值 ${value}`)
+    if (field === 'minDistance' && Number(value) < 0) throw new Error(`${item}.minDistance 不接受值 ${value}`)
     if (field === 'resetAfterMs' && Number(value) < 1_000) throw new Error(`${item}.resetAfterMs 不接受值 ${value}`)
     if (['keywords', 'players', 'types'].includes(field) && (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string'))) throw new Error(`${item}.${field} 不接受值 ${JSON.stringify(value)}`)
     out[field] = value

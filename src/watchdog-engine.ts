@@ -39,6 +39,7 @@ export class WatchdogEngine {
   private readonly onSuppressed: SuppressedHandler | undefined
   private readonly pending: Array<{ due: number, event: WatchdogEvent }> = []
   private readonly damageRounds = new Map<string, { lastAt: number, count: number, damageSum: number }>()
+  private pushedRound: { lastAt: number, count: number, distanceSum: number, from: JsonObject | null } | null = null
   private heartbeatAt: number
 
   constructor (
@@ -63,9 +64,11 @@ export class WatchdogEngine {
     if (!config) throw new Error(`该事件或修饰不存在：${name}`)
     const timestamp = this.now()
     const selfChat = name === 'message.chat' && context.isSelf === true
-    const modifiers = selfChat ? {} : this.modifiers(name, content, context, timestamp)
-    let record = config.record === true
-    let wake = config.wake === true
+    const pushedDistance = Number(content.distance)
+    const belowPushedThreshold = name === 'self.pushed' && (!Number.isFinite(pushedDistance) || pushedDistance < Number(config.minDistance ?? 0))
+    const modifiers = selfChat || belowPushedThreshold ? {} : this.modifiers(name, content, context, timestamp)
+    let record = !belowPushedThreshold && config.record === true
+    let wake = !belowPushedThreshold && config.wake === true
     if (selfChat && config.includeSelf !== true) {
       record = false
       wake = false
@@ -178,6 +181,24 @@ export class WatchdogEngine {
           const round = this.damageRounds.get(damageType)
           if (round) { round.lastAt = timestamp; round.count++; round.damageSum += Number(content.damage) || 0 }
         }
+      }
+    } else if (name === 'self.pushed') {
+      const once = config.once!
+      const resetAfterMs = Number(once.resetAfterMs)
+      const previous = this.pushedRound
+      if (!previous || timestamp - previous.lastAt >= resetAfterMs) {
+        out.once = {
+          count: previous?.count ?? -1,
+          distanceSum: previous ? Number(previous.distanceSum.toFixed(1)) : -1,
+          from: previous?.from ?? null,
+        }
+        this.pushedRound = { lastAt: timestamp, count: 0, distanceSum: 0, from: clone((content.from as JsonObject | undefined) ?? null) }
+      } else this.onSuppressed?.(1)
+      const round = this.pushedRound
+      if (round) {
+        round.lastAt = timestamp
+        round.count++
+        round.distanceSum += Number(content.distance) || 0
       }
     }
     return out

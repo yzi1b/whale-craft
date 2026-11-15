@@ -882,19 +882,29 @@ console.log('\n--- 聊天识别（未签名 system_chat 也要算玩家说话）
   console.log(`  ${chats.length === 0 && selfChats.length === 1 ? '✅' : '❌'} 自己说的话单独进入 selfChat（不冒充别人喊我）`)
 
   const forcedMoves = []
+  const pushedMoves = []
+  const pickups = []
+  let forcedInventory = []
   const forcedBot = new McBot({ instanceId: 'sc-forced-' + Math.random().toString(36).slice(2, 7) })
   const forcedRaw = new EventEmitter()
   forcedRaw.entity = { position: { x: 10, y: 64, z: 10 } }
   forcedRaw.players = {}
-  forcedRaw.inventory = { items: () => [] }
+  forcedRaw.inventory = { items: () => forcedInventory }
   forcedRaw.controlState = {}
   forcedBot.bot = forcedRaw
   forcedBot.on('teleport', (event) => forcedMoves.push(event))
+  forcedBot.on('pushed', (event) => pushedMoves.push(event))
+  forcedBot.on('pickup', (event) => pickups.push(event))
   forcedBot.startObserver()
   forcedRaw.entity.position = { x: 13, y: 64, z: 10 }
   forcedRaw.emit('forcedMove')
+  forcedRaw.entity.position = { x: 13.3, y: 64, z: 10 }
+  forcedInventory = [{ name: 'stone', count: 2 }, { name: 'stone', count: 3 }, { name: 'dirt', count: 1 }]
+  await new Promise((resolve) => setTimeout(resolve, 1_100))
   forcedBot.stopObserver()
   console.log(`  ${forcedMoves.length === 1 && forcedMoves[0].distance === 3 && forcedMoves[0].serverForced === true ? '✅' : '❌'} 服务端 forcedMove 无距离阈值地识别为传送`)
+  console.log(`  ${pushedMoves.length === 1 && pushedMoves[0].distance === 0.3 ? '✅' : '❌'} 非自主位置变化会产出 pushed 事实，由事件配置决定最小距离`)
+  console.log(`  ${pickups.length === 1 && pickups[0].items.includes('stone*5') && pickups[0].items.includes('dirt*1') ? '✅' : '❌'} 拾取载荷按同名物品合并并使用“名称*数量”格式`)
 
   chats.length = 0
   fake.emit('message', ...sysText('Tester joined the game'))
@@ -3959,6 +3969,21 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
   console.log(`  ${wakes.length === 2 ? '✅' : '❌'} 两轮持续伤害只提醒两次（实际 ${wakes.length}）`)
   console.log(`  ${suppressed === 1 ? '✅' : '❌'} type.once 冷却静默会计入 suppressed（实际 ${suppressed}）`)
 
+  const pushedConfig = cloneWatchdogDefaults()
+  let pushedNow = 10_000
+  const pushedWakes = []
+  let pushedSuppressed = 0
+  const pushedEngine = new WatchdogEngine(pushedConfig, (event, count) => pushedWakes.push({ event, count }), () => pushedNow, 200, (count) => { pushedSuppressed += count })
+  pushedEngine.observe('self.pushed', { from: { x: 0, y: 64, z: 0 }, to: { x: 0.1, y: 64, z: 0 }, distance: 0.1 })
+  const pushedFirst = pushedEngine.observe('self.pushed', { from: { x: 0, y: 64, z: 0 }, to: { x: 0.3, y: 64, z: 0 }, distance: 0.3 })
+  pushedNow += 100
+  const pushedRepeated = pushedEngine.observe('self.pushed', { from: { x: 0.3, y: 64, z: 0 }, to: { x: 0.5, y: 64, z: 0 }, distance: 0.2 })
+  pushedNow += 4_100
+  const pushedNextRound = pushedEngine.observe('self.pushed', { from: { x: 0.5, y: 64, z: 0 }, to: { x: 0.9, y: 64, z: 0 }, distance: 0.4 })
+  console.log(`  ${pushedEngine.queue.length === 2 && pushedFirst.modifiers.once?.count === -1 && !pushedRepeated.modifiers.once ? '✅' : '❌'} pushed 低于 minDistance 不记录，连续推动只命中首次`)
+  console.log(`  ${pushedNextRound.modifiers.once?.count === 2 && pushedNextRound.modifiers.once?.distanceSum === 0.5 && pushedNextRound.modifiers.once?.from?.x === 0 ? '✅' : '❌'} pushed 新一轮携带上一轮次数、累计位移和起点`)
+  console.log(`  ${pushedWakes.length === 2 && pushedSuppressed === 1 ? '✅' : '❌'} pushed.once 两轮唤醒两次，轮内静默计入 suppressed`)
+
   const selfConfig = cloneWatchdogDefaults()
   const selfEngine = new WatchdogEngine(selfConfig)
   selfEngine.observe('message.chat', { player: { name: 'DeepSeek', uuid: null }, isSystem: false, type: null, content: 'ds' }, { isSelf: true, onlineCount: 1, distance: 0 })
@@ -3998,6 +4023,7 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
   console.log(`  ${compacted[0].modifiers.mention && !compacted[1].modifiers.mention ? '✅' : '❌'} 可精简修饰的相同载荷只保留首次`)
   console.log(`  ${compacted[2].modifiers['type.once'] && compacted[3].modifiers['type.once'] ? '✅' : '❌'} 不可精简修饰的相同载荷始终保留`)
   console.log(`  ${watchdogModifierTraits('message.chat', 'mention').simplifiable && !watchdogModifierTraits('self.damage', 'type.once').simplifiable ? '✅' : '❌'} 修饰目录声明可精简性`)
+  console.log(`  ${!watchdogModifierTraits('self.pushed', 'once').simplifiable ? '✅' : '❌'} pushed.once 声明为不可精简`)
   console.log(`  ${/\*\*不可精简\*\*/.test(eventCatalogMarkdown('self.damage/type.once')) ? '✅' : '❌'} 修饰详情向助理声明“不可精简”`)
 }
 

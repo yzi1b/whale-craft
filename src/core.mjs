@@ -539,7 +539,7 @@ export class McBot extends EventEmitter {
 
   /**
    * 启动观察器：每 1s 对比快照，产出 mineflayer 本身**不提供**的语义事件：
-   *   'teleport'    位置瞬移（>24 格/秒）= 多半被玩家传送
+   *   'teleport'    服务端 forcedMove = 服务器强制改变位置
    *   'pushed'      非自主移动（没按方向键却位移）= 被推/水流
    *   'pickup'      背包总数变多 = 捡到物品
    *   'playerJoin' / 'playerLeave'
@@ -550,7 +550,7 @@ export class McBot extends EventEmitter {
   startObserver () {
     if (this._forcedMoveBot && this._forcedMoveHandler) this._forcedMoveBot.removeListener?.('forcedMove', this._forcedMoveHandler)
     this._obs = {
-      lastPos: this.position,
+      lastPos: this.#observerPosition(),
       lastPlayers: new Set(Object.keys(this.bot?.players ?? {})),
       lastInv: this.#invSignature(),
     }
@@ -592,11 +592,16 @@ export class McBot extends EventEmitter {
     return { total, map }
   }
 
+  #observerPosition () {
+    const position = this.bot?.entity?.position
+    return position ? { x: position.x, y: position.y, z: position.z } : null
+  }
+
   #observeTick () {
     const b = this.bot
     if (!b?.entity || !this._obs) return
     const now = Date.now()
-    const pos = this.position
+    const pos = this.#observerPosition()
     const obs = this._obs
 
     // ① 玩家上下线
@@ -615,7 +620,7 @@ export class McBot extends EventEmitter {
       const d = Math.hypot(pos.x - obs.lastPos.x, pos.y - obs.lastPos.y, pos.z - obs.lastPos.z)
       const cs = b.controlState ?? {}
       const pressing = Boolean(cs.forward || cs.back || cs.left || cs.right || cs.jump)
-      if (d >= 2 && !pressing) this.emit('pushed', { from: obs.lastPos, to: pos, distance: Number(d.toFixed(1)) })
+      if (d > 0 && !pressing) this.emit('pushed', { from: obs.lastPos, to: pos, distance: Number(d.toFixed(1)) })
     }
     obs.lastPos = pos
 
@@ -625,7 +630,7 @@ export class McBot extends EventEmitter {
       const gained = []
       for (const [n, c] of Object.entries(inv.map)) {
         const delta = c - (obs.lastInv.map[n] ?? 0)
-        if (delta > 0) gained.push(`${n}x${delta}`)
+        if (delta > 0) gained.push(`${n}*${delta}`)
       }
       if (gained.length) this.emit('pickup', { items: gained })
     }
