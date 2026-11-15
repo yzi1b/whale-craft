@@ -58,6 +58,7 @@
 - `notifyEvent(event, pendingCount, global)` 是事件引擎唯一投递入口：按全局 `minInterval` 合并提醒，更新 `lastWakeAt` / `lastWakeKind` / `stats.fired`；`type.once` 冷却静默由事件引擎回报到 `stats.suppressed`。
 - `disarm(reason, {fromJob})`：底层幂等 teardown，并结算 job（`readOutput` = 留档末 30 条）；它不再拥有关闭通知能力，生产只由 `GameSessionState.close()` 调用。job cancel 反向请求关闭整个游戏会话。
 - 事件匹配、修饰器、延迟、心跳、注意项与 `type.once` 全在 `src/watchdog-engine.ts` / `src/watchdog-catalog.ts`；`Watchdog` 内没有另一套规则、默认值或兼容路径。
+- 队列读取会按“事件事实名 + 修饰名 + 载荷”精简重复修饰；修饰目录元数据可声明 `simplifiable:false`，当前 `self.damage/type.once` 不可精简，因此每次出现都保留。
 - **`inject`（唯一注入口）**：① gate（非 MC 模式只记账 drop）；② **先 `sess.interruptWait(kind)`**；③ 首选 `agent.steer(userMessage(...))`（`source:{kind:'plugin:whale_craft',form:'notice'}`——v4 规范值，宿主渲染成折叠一行；空闲时起一轮、运行中下一步插话）；④ 兜底 `sessionController.prompt({mode:'steer'}, promptSignal)`。**绝不用** `followup`/queue 类"冒充用户发言"的通道。
 - 留档 `this.log`（内存，上限 200，`#record` 是唯一写入点）—— 与 `sess.events` 分开，双写曾是 bug。
 

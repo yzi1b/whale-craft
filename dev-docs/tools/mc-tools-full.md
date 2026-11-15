@@ -728,7 +728,7 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 - selectedCount: (number) 本次按 count 选中的事件数量
 - consumedCount: (number) 本次实际从队列移除的事件数量；consume 为 false 时是 0
 - queueCountAfterConsume: (number) 操作完成后的剩余事件数量
-- events: (object[]) 处理后的事件数组，从旧到新；reply 为 false 时省略。每项含 `time`、`name`、`content`、`modifiers`
+- events: (object[]) 处理后的事件数组，从旧到新；reply 为 false 时省略。每项含 `time`、`name`、`content`、`modifiers`。同种事件事实中同名且载荷相同的可精简修饰只在最先一项保留；声明“不可精简”的修饰始终保留。
 
 写出文件时，每行写一个处理后的事件对象，并按 [reply-dist](#reply-dist) 的约定在结果末尾报告路径与大小。
 

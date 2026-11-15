@@ -57,7 +57,7 @@
 | `mc_watchdog_global_settings` | 全局提醒配置 | 持久化 `minInterval` / `interruptLevel` / `minInterruptInterval` |
 | `mc_watchdog_config` | 三层配置 | 编辑/读取 base、scene、effective；base 落 `$DSH_HOME/whale_craft/watchdog.json`；返回 `gameSessionId`（无会话的 base 操作为 null） |
 | `mc_watchdog_focus` | 注意配置 | 会话内 list/edit/read/remove；remove 单项同时接受 `name` 与 `names`；支持敏感/钝感合并；返回 `gameSessionId` |
-| `mc_watchdog_queue` | 结构化事件队列 | 与游戏会话同寿命；读取时本地化时间并精简重复修饰；返回 `gameSessionId` |
+| `mc_watchdog_queue` | 结构化事件队列 | 与游戏会话同寿命；读取时本地化时间，可精简修饰按“事实+修饰+载荷”只留首次，不可精简修饰全部保留；返回 `gameSessionId` |
 
 ## 四、交互与动作（8）
 

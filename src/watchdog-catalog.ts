@@ -42,6 +42,18 @@ export const WATCHDOG_EVENT_DEFAULTS = {
 export type WatchdogEventName = keyof typeof WATCHDOG_EVENT_DEFAULTS
 export type WatchdogConfig = Record<string, Record<string, unknown>>
 
+export interface WatchdogModifierTraits {
+  simplifiable: boolean
+}
+
+const WATCHDOG_MODIFIER_TRAITS: Readonly<Record<string, WatchdogModifierTraits>> = Object.freeze({
+  'self.damage/type.once': Object.freeze({ simplifiable: false }),
+})
+
+export function watchdogModifierTraits (event: string, modifier: string): WatchdogModifierTraits {
+  return WATCHDOG_MODIFIER_TRAITS[`${event}/${modifier}`] ?? { simplifiable: true }
+}
+
 export const cloneWatchdogDefaults = (): WatchdogConfig => JSON.parse(JSON.stringify(WATCHDOG_EVENT_DEFAULTS)) as WatchdogConfig
 
 export function splitWatchdogItem (item: string): { event: WatchdogEventName, modifier: string | null } {
@@ -88,7 +100,9 @@ export function eventCatalogMarkdown (query?: string | string[]): string {
     const { event, modifier } = splitWatchdogItem(item)
     const fact = WATCHDOG_EVENT_DEFAULTS[event] as unknown as { modifiers: Record<string, unknown> } & Record<string, unknown>
     const config = modifier ? fact.modifiers[modifier] : fact
+    const traits = modifier ? watchdogModifierTraits(event, modifier) : null
+    const simplifiability = traits?.simplifiable === false ? '\n\n**不可精简**' : ''
     const modifiers = modifier ? '' : `\n\n**事件修饰：**\n${Object.keys(fact.modifiers).map((name) => `- ${name}`).join('\n')}`
-    return `## \`${item}\` ${modifier ? '事件修饰' : '事件事实'}\n\n**配置：**\n\n\`\`\`json\n${JSON.stringify(config, null, 2)}\n\`\`\`${modifiers}`
+    return `## \`${item}\` ${modifier ? '事件修饰' : '事件事实'}${simplifiability}\n\n**配置：**\n\n\`\`\`json\n${JSON.stringify(config, null, 2)}\n\`\`\`${modifiers}`
   }).join('\n\n')
 }

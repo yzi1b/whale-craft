@@ -1,6 +1,6 @@
 // -*- coding: utf-8 -*-
 import type { JsonObject, WatchdogEvent } from './types.ts'
-import { cloneWatchdogDefaults, type WatchdogConfig, type WatchdogEventName } from './watchdog-catalog.ts'
+import { cloneWatchdogDefaults, watchdogModifierTraits, type WatchdogConfig, type WatchdogEventName } from './watchdog-catalog.ts'
 
 type ModifierPayload = JsonObject | true
 type WakeHandler = (event: WatchdogEvent, pendingCount: number) => void
@@ -121,7 +121,10 @@ export class WatchdogEngine {
       const modifiers: Record<string, ModifierPayload> = {}
       for (const [name, payload] of Object.entries(event.modifiers)) {
         const key = `${event.name}/${name}/${JSON.stringify(payload)}`
-        if (!seen.has(key)) { seen.add(key); modifiers[name] = payload }
+        if (!watchdogModifierTraits(event.name, name).simplifiable || !seen.has(key)) {
+          seen.add(key)
+          modifiers[name] = payload
+        }
       }
       return { time: new Date(event.timestamp).toLocaleString(), name: event.name, content: event.content, modifiers } as JsonObject
     })

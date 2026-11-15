@@ -290,10 +290,12 @@ console.log('\n--- 看门狗 v2 ---')
   const infoAll = await info.execute({}, A)
   const infoOne = await info.execute({ name: 'self.damage' }, A)
   const infoStar = await info.execute({ name: 'self.damage/*' }, A)
+  const infoOnce = await info.execute({ name: 'self.damage/type.once' }, A)
   const infoArray = await info.execute({ name: ['message.chat', 'self.teleport'] }, A)
   const infoJsonArray = await info.execute({ name: '["message.chat","self.teleport"]' }, A)
-  console.log(`  ${[infoAll, infoOne, infoStar, infoArray, infoJsonArray].every((value) => value && typeof value === 'object' && typeof value.markdown === 'string') ? '✅' : '❌'} mc_watchdog_info 所有查询路径都返回对象`)
+  console.log(`  ${[infoAll, infoOne, infoStar, infoOnce, infoArray, infoJsonArray].every((value) => value && typeof value === 'object' && typeof value.markdown === 'string') ? '✅' : '❌'} mc_watchdog_info 所有查询路径都返回对象`)
   console.log(`  ${/message\.chat/.test(infoArray.markdown) && /self\.teleport/.test(infoArray.markdown) && infoJsonArray.markdown === infoArray.markdown ? '✅' : '❌'} mc_watchdog_info 数组与 JSON 字符串数组都按多项查询`)
+  console.log(`  ${/\*\*不可精简\*\*/.test(infoOnce.markdown) && /\*\*不可精简\*\*/.test(infoStar.markdown) ? '✅' : '❌'} mc_watchdog_info 在单项与通配详情声明不可精简修饰`)
 
   // ── 断线状态同步（2026-09-19 用户："连接断开了状态没有同步，AI 也以为连接还在"）──
   // 以前 core **根本不发**"断线"事件：看门狗还挂着、状态条照旧写"在游戏中"（配合旧的
@@ -3920,7 +3922,7 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
   const { GameSessionState, GAME_SESSION_ID_PATTERN } = await import('./src/game-session.ts')
   const { buildGameSessionCloseNotice, sanitizeGameSessionCloseText } = await import('./src/game-session-close.ts')
   const { WatchdogEngine } = await import('./src/watchdog-engine.ts')
-  const { cloneWatchdogDefaults } = await import('./src/watchdog-catalog.ts')
+  const { cloneWatchdogDefaults, eventCatalogMarkdown, watchdogModifierTraits } = await import('./src/watchdog-catalog.ts')
   const lifecycleEngine = new WatchdogEngine(cloneWatchdogDefaults())
   const disarms = []
   const lifecycleWatchdog = { armed: true, status: () => ({ armed: true }), disarm: (reason, options) => { disarms.push({ reason, options }); lifecycleWatchdog.armed = false } }
@@ -3982,6 +3984,21 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
   console.log(`  ${system.modifiers.playerConnection?.player === 'Tester' ? '✅' : '❌'} 系统消息识别玩家连接修饰`)
   const read = engine.read(2, true)
   console.log(`  ${read.selectedCount === 2 && read.consumedCount === 2 && read.queueCountAfterConsume === engine.queue.length ? '✅' : '❌'} 结构化队列按数量读取并消费`)
+
+  const compactEngine = new WatchdogEngine(cloneWatchdogDefaults())
+  const repeatedMention = { keyword: 'ds' }
+  const repeatedOnce = { type: 'minecraft:in_fire', count: 2, damageSum: 3 }
+  compactEngine.queue.push(
+    { timestamp: 1, name: 'message.chat', content: {}, modifiers: { mention: repeatedMention } },
+    { timestamp: 2, name: 'message.chat', content: {}, modifiers: { mention: repeatedMention } },
+    { timestamp: 3, name: 'self.damage', content: {}, modifiers: { 'type.once': repeatedOnce } },
+    { timestamp: 4, name: 'self.damage', content: {}, modifiers: { 'type.once': repeatedOnce } },
+  )
+  const compacted = compactEngine.read(-1, false).events
+  console.log(`  ${compacted[0].modifiers.mention && !compacted[1].modifiers.mention ? '✅' : '❌'} 可精简修饰的相同载荷只保留首次`)
+  console.log(`  ${compacted[2].modifiers['type.once'] && compacted[3].modifiers['type.once'] ? '✅' : '❌'} 不可精简修饰的相同载荷始终保留`)
+  console.log(`  ${watchdogModifierTraits('message.chat', 'mention').simplifiable && !watchdogModifierTraits('self.damage', 'type.once').simplifiable ? '✅' : '❌'} 修饰目录声明可精简性`)
+  console.log(`  ${/\*\*不可精简\*\*/.test(eventCatalogMarkdown('self.damage/type.once')) ? '✅' : '❌'} 修饰详情向助理声明“不可精简”`)
 }
 
 console.log('\n日志:', logs.slice(0, 6).join(' | ') || '(无)')
