@@ -29,7 +29,7 @@
 | `mc_ping` | **已知地址**的探路 | 发一次 STATUS ping（握手+状态请求），**不登录、不用账户、不进服**；参数只有 `address`（host[:port]，端口默认 25565）+ `timeoutMs`（默认 5s 上限 30s）；拿通不通/版本/协议号/MOTD/人数/延迟；错误说人话。**`subserver`/`port` 已删**（2026-10-05：地址自带端口；无子服概念） |
 | `mc_connect` | 进服（唯一连接入口） | 参数只有 `address`（host[:port]）+ `account`（innerID）。**不再有 `host/port/subserver/version`**；地址内部 `parseAddress`，握手 serverHost 就用该地址（DNS+Velocity 自行路由）；**版本永远自动探测**；版本不受支持（mineflayer 无该版本协议数据）→ **建连期间快速失败 + 明确版本错误**（不是"连接超时"；另有 spawn 后 `isVersionSupported` 兜底，复用 `src/mcversion.mjs`）；连接后等区块、**自动挂看门狗**、`learnName`；**返回 = `mc_status` 的内容** |
 | `mc_accounts` | 账户管理（会话内） | `list/search/refresh`（**`use` 已删**，2026-10-05）；`refresh` 走 `bot.authOnly`（只认证不连接），`innerID` 缺省用本会话选定/默认；返回值**永不含密码/token** |
-| `mc_disconnect` | 主动退服 | 经唯一的游戏会话关闭入口优雅 quit；看门狗、结构化队列和会话配置同步销毁 |
+| `mc_disconnect` | 主动退服 | 经唯一的游戏会话关闭入口优雅 quit；看门狗、结构化队列和会话配置同步销毁；GameSession 投放一次结束提示词 |
 | `mc_stop` | 停本会话 | 等价强制停止但 `cancelTurn: false`（**防自我 abort**；HTTP 的 `/api/mc/stop` 用 `cancelTurn:true`） |
 | `mc_capabilities` | 能力/限制自述 | 报 plugin 版本、mineflayer testedVersions、超时上限、指令白名单等；不返回插件安装目录，配置路径用 `$DSH_HOME` 占位符或工作区相对路径 |
 

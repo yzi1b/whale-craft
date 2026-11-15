@@ -740,13 +740,14 @@ export class McBot extends EventEmitter {
         const why = this.lastError ?? '连接结束'
         // 🔴 2026-09-19：断线必须**主动播报**（AI 与前端都要马上知道），不能等下一次工具调用才发现。
         //    以前这里只写日志：于是"被踢之后 mc_status 还说在线、看门狗还挂着、AI 以为还在游戏里"。
-        const willReconnect = Boolean(this.autoReconnect && this.bot === b && !this.stopped)
+        const current = this.bot === b
+        const willReconnect = Boolean(this.autoReconnect && current && !this.stopped)
         this.log('连接结束', r ?? '')
         // 「断线期」标记：一直置到**真重连成功**为止。
         // why：`reconnecting` 只在"两次尝试之间的等待窗口"为真，一旦开始尝试连接（最长 45s）它就变 false——
         //      只看它的话，状态条在那 45 秒里会从"重连中…"退回"未上线"，看着像插件放弃了。
         if (willReconnect) this.reconnectPending = true
-        this.emit('offline', { sub, reason: why, willReconnect, at: Date.now() })
+        this.emit('offline', { sub, reason: why, willReconnect, current, at: Date.now() })
         if (willReconnect) this.#scheduleReconnect(sub)
       })
       b.on('death', () => { this.stats.deaths++; this.emit('death', { position: this.position }) })
@@ -821,8 +822,8 @@ export class McBot extends EventEmitter {
         throw err
       }
 
-      if (previous && previous !== b) { try { previous.quit() } catch {} }
       this.bot = b
+      if (previous && previous !== b) { try { previous.quit() } catch {} }
       this.sub = sub
       this._connectionProfile.version = b.version   // 实际协商版本（供 mc_status）
       this._lastHost = host          // ⚠️ 必须记：否则上面的"已连着就直接返回"永不生效，

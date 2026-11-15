@@ -1,10 +1,12 @@
 // -*- coding: utf-8 -*-
 import { randomBytes } from 'node:crypto'
 import type { GameSessionId } from './types.ts'
+import { buildGameSessionCloseNotice } from './game-session-close.ts'
+import type { GameSessionCloseKind, GameSessionCloseNotice } from './game-session-close.ts'
 
 export interface GameSessionWatchdog {
   armed: boolean
-  disarm: (reason?: string, options?: { notify?: boolean, fromJob?: boolean }) => unknown
+  disarm: (reason?: string, options?: { fromJob?: boolean }) => unknown
   status: () => Record<string, unknown>
 }
 
@@ -19,6 +21,16 @@ export interface GameSessionResources {
   watchdogEngine: GameSessionWatchdogEngine
   watchdogScene?: Record<string, Record<string, unknown>>
   watchdogFocuses?: Map<string, { sensitive: boolean, config: Record<string, Record<string, unknown>> }>
+  server?: string | null
+  onCloseNotice?: (notice: GameSessionCloseNotice) => void
+}
+
+export interface GameSessionCloseOptions {
+  kind?: GameSessionCloseKind
+  fromWatchdogJob?: boolean
+  notify?: boolean
+  attempts?: number | null
+  lastReconnectError?: string | null
 }
 
 export const GAME_SESSION_ID_PATTERN = /^[0-9a-f]{16}$/
@@ -34,6 +46,8 @@ export class GameSessionState {
   readonly watchdogEngine: GameSessionWatchdogEngine
   readonly watchdogScene: Record<string, Record<string, unknown>>
   readonly watchdogFocuses: Map<string, { sensitive: boolean, config: Record<string, Record<string, unknown>> }>
+  readonly server: string | null
+  readonly onCloseNotice: ((notice: GameSessionCloseNotice) => void) | null
   endedAt: number | null = null
   endReason: string | null = null
 
@@ -44,15 +58,31 @@ export class GameSessionState {
     this.watchdogEngine = resources.watchdogEngine
     this.watchdogScene = resources.watchdogScene ?? {}
     this.watchdogFocuses = resources.watchdogFocuses ?? new Map()
+    this.server = resources.server ?? null
+    this.onCloseNotice = resources.onCloseNotice ?? null
   }
 
   get active (): boolean { return this.endedAt === null }
 
-  close (reason: string, options: { fromWatchdogJob?: boolean } = {}, now = Date.now()): boolean {
+  close (reason: string, options: GameSessionCloseOptions = {}, now = Date.now()): boolean {
     if (!this.active) return false
     this.endedAt = now
     this.endReason = reason
-    this.watchdog.disarm(reason, { notify: false, fromJob: options.fromWatchdogJob === true })
+    this.watchdog.disarm(reason, { fromJob: options.fromWatchdogJob === true })
+    if (options.notify !== false && this.onCloseNotice !== null) {
+      try {
+        this.onCloseNotice(buildGameSessionCloseNotice({
+          gameSessionId: this.id,
+          kind: options.kind ?? 'connection-lost',
+          reason,
+          server: this.server,
+          startedAt: this.startedAt,
+          endedAt: now,
+          ...(options.attempts !== undefined ? { attempts: options.attempts } : {}),
+          ...(options.lastReconnectError !== undefined ? { lastReconnectError: options.lastReconnectError } : {}),
+        }))
+      } catch {}
+    }
     return true
   }
 }

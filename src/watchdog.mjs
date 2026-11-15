@@ -56,9 +56,6 @@ import { userMessage } from './user-message.mjs'
 /** 默认配置。括号里是"为什么默认这样"。 */
 export const WATCH_DEFAULTS = {  /** 进服自动挂载（用户要求：进游戏自动打开） */
   autoArm: true,
-  /** 退服时是否提醒 AI（用户要求：退出游戏会提醒 AI） */
-  notifyOnDisarm: true,
-
   /** 唤醒条件矩阵。true = 这类事件叫醒我 */
   wakeOn: {
     mention: true,        // 命中叫法 —— 主通道
@@ -320,12 +317,11 @@ export class Watchdog {
   /**
    * 卸载看门狗。
    * @param {string} reason
-   * @param {{notify?:boolean, fromJob?:boolean}} [opts]
-   *   notify=true 时在对话里提醒 AI（退服提醒）；
+   * @param {{fromJob?:boolean}} [opts]
    *   fromJob=true 表示这次是宿主 job 被 kill 触发的，**不要**再回头去 kill 那个 job
    *   （否则自我递归，而且 job 会卡在 stopping 永远不结算）。
    */
-  disarm (reason = '主动关闭', { notify = false, fromJob = false } = {}) {
+  disarm (reason = '主动关闭', { fromJob = false } = {}) {
     // 🔴 **不管谁发起的，done 都必须结算**（2026-09-16 真机 bug：强制关闭后 UI 一直显示
     //    "还有 1 个后台任务 / 正在停止"）。
     //    旧代码只有 `fromJob` 那条路结算：我们**主动** disarm 时先 `jobs.kill()` 请宿主停 →
@@ -348,10 +344,6 @@ export class Watchdog {
     // 结算 done —— 否则 job 永远停在 'stopping'，job_list 里挂着不动、job_kill 永远"请求中"
     this.#settleJob(fromJob ? `被取消（${reason}）` : `已停止（${reason}）`)
 
-    if (notify && this.config.notifyOnDisarm) {
-      this.#inject(`【看门狗已关闭｜${reason}】你已经不在 Minecraft 里了，事件监听停止。`
-        + '如需继续请用 mc_connect 重新进服（进服后看门狗会自动挂上）。', 'lifecycle')
-    }
     return { ...this.status(), reason }
   }
 
@@ -647,7 +639,7 @@ export class Watchdog {
     //    宿主把 steer 放在**下一个 step 边界**投递，而 step 边界要等当前这一步的工具返回 ⇒
     //    一个 `mc_events {waitSec:120}` 就能把唤醒压到等待结束。
     //    置个标记，等待循环（src/wait.mjs）见到就立刻收工 → 工具返回 → step 结束 → 这条文案当场投出去。
-    //    所有注入都走这里（唤醒 / 关闭通知 / 补提醒 / 心跳），所以放在这一个口子上。
+    //    所有看门狗事件注入都走这里（唤醒 / 补提醒 / 心跳），所以放在这一个口子上。
     try { this.sess?.interruptWait?.(kind ?? null) } catch { /* 打断失败不影响注入 */ }
 
     // ────────────────────────────────────────────────────────────────────────

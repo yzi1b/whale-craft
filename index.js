@@ -11,8 +11,8 @@
  *  3. 🔴 **连接参数工具化**：服务器地址/端口/登录凭据/子服 全部由 mc_connect 工具
  *     运行时传参，AI 根据用户指令或记忆文件决定连哪里。Config 里不再有硬编码的
  *     服务器/凭据（0.1 时代的遗留 fallback 字段已于 2026-10-02 清理）。
- *  4. 事件通知**只有一条通道**：`mc_watch` 后台看门狗任务（job 结算 → DSH followup
- *     唤醒**同一个会话**）。本插件**不存在**任何跨会话唤醒实现。
+ *  4. 游戏内事件唤醒**只有一条通道**：`mc_watch` 看门狗用插件提示行唤醒**同一个会话**；
+ *     游戏会话结束提示则只由 `GameSessionState.close()` 投放。本插件不存在跨会话唤醒。
  *
  * 机器人核心在 ./src/core.mjs（不依赖 DSH，可独立测试）。
  * 挂载：profile cordis.patch.yml 里 `- id: whale_craft / name: whale_craft`。
@@ -243,10 +243,22 @@ class McSession {
     this.bot.on('reconnect', (e) => self.#pushEvent('lifecycle', `已重连 ${e.sub}`))
     // 🔴 断线也要进事件队列（2026-09-19）：`mc_events` 里看得见，AI 才不会以为"一直在线"。
     this.bot.on('offline', (e) => {
+      if (e?.current === false) return
       self.#pushEvent('lifecycle', `连接断开：${e?.reason ?? '连接结束'}${e?.willReconnect ? '（正在自动重连）' : '（不会自动重连）'}`)
       self.observeWatchdog('connection.disconnect', { sub: self.bot.sub ?? '', reason: String(e?.reason ?? '连接结束'), willReconnect: Boolean(e?.willReconnect), at: Number(e?.at ?? Date.now()) })
       if (!e?.willReconnect && self.gameSession?.active) {
-        void self.closeGameSession(String(e?.reason ?? '连接结束'), { disconnect: false }).catch(() => {})
+        const reason = String(e?.reason ?? '连接结束')
+        const kind = /^被踢[:：]/.test(reason)
+          ? 'kicked'
+          : /^自动重连\s+\d+\s+次均失败/.test(reason)
+            ? 'reconnect-failed'
+            : 'connection-lost'
+        void self.closeGameSession(reason, {
+          disconnect: false,
+          kind,
+          attempts: kind === 'reconnect-failed' ? self.bot.maxReconnectAttempts : null,
+          lastReconnectError: kind === 'reconnect-failed' ? self.bot.lastError : null,
+        }).catch(() => {})
       }
     })
     this.bot.on('chat', ({ who, text }) => {
@@ -270,7 +282,7 @@ class McSession {
   /* ── 清理 ── */
 
   async destroy() {
-    try { await this.closeGameSession('会话结束') } catch {}
+    try { await this.closeGameSession('运行实例关闭', { kind: 'runtime-shutdown' }) } catch {}
     this.events = []
   }
 
@@ -280,7 +292,13 @@ class McSession {
   get watchdogFocuses() { return this.gameSession?.watchdogFocuses ?? null }
 
   /** 游戏会话与看门狗的唯一关闭入口；二者保持到物理断开完成，再同步销毁。 */
-  async closeGameSession(reason = '游戏会话结束', { disconnect = true, fromWatchdogJob = false } = {}) {
+  async closeGameSession(reason = '游戏会话结束', {
+    disconnect = true,
+    kind = 'connection-lost',
+    fromWatchdogJob = false,
+    attempts = null,
+    lastReconnectError = null,
+  } = {}) {
     if (this._closingGameSession) return this._closingGameSession
     const gameSession = this.gameSession
     if (!gameSession?.active) {
@@ -300,7 +318,7 @@ class McSession {
         try { quit = await this.bot.disconnect(reason) } catch (error) { quitError = String(error?.message ?? error) }
       }
       if (this.gameSession === gameSession) {
-        gameSession.close(String(reason), { fromWatchdogJob })
+        gameSession.close(String(reason), { kind, fromWatchdogJob, attempts, lastReconnectError })
         this.gameSession = null
       }
       this.mode = 'standby'
@@ -403,19 +421,19 @@ class McRegistry {
   peek(agentId) { return this.sessions.get(agentId) }
 
   /** 销毁某个会话的实例 */
-  destroy(agentId) {
+  async destroy(agentId) {
     const sess = this.sessions.get(agentId)
     if (sess) {
-      sess.destroy()
+      await sess.destroy()
       this.sessions.delete(agentId)
       this.ctx.logger?.info?.(`[whale_craft] 销毁会话实例：${agentId}`)
     }
   }
 
   /** 销毁所有（插件卸载时） */
-  destroyAll() {
+  async destroyAll() {
     for (const [id, sess] of this.sessions) {
-      try { sess.destroy() } catch {}
+      try { await sess.destroy() } catch {}
     }
     this.sessions.clear()
   }
@@ -707,7 +725,7 @@ export function apply(ctx, rawConfig) {
   const promptAbort = new AbortController()
   ctx.effect(() => () => { try { promptAbort.abort() } catch {} }, 'whale_craft: prompt signal')
 
-  ctx.effect(() => () => { registry.destroyAll() })
+  ctx.effect(() => async () => { await registry.destroyAll() })
 
   /* ─────────── HTTP API：状态条 UI 用（状态查询 / 强制停止 / 普通停止）─────────── */
 
@@ -734,7 +752,7 @@ export function apply(ctx, rawConfig) {
    *      （`tools/index.ts:219` 原话 "cannot hard-kill same-process code"），所以"让工具必然结算"是唯一出路。
    *   ② **先尝试优雅退出游戏**（`bot.quit` + 宽限期，真走不掉才强断；见 src/core.mjs 的 disconnect）。
    *   ③ **再强清该会话全部后台任务**（看门狗就在里面）。
-   *   ④ **最后再停一次 LLM**：②③期间会有退服事件/注入（"你被踢了"、工具被 abort 的结算）可能又把它推起来，
+   *   ④ **最后再停一次 LLM**：②③期间会有退服事件或工具被 abort 的结算；结束提示词按强停策略延后到下一步，
    *      收尾再停一次，避免会话停在异常状态。
    *
    * ⚠️ **普通停止已移除**（用户要求："移除停止，只剩强行停止"）。唯一的例外是 `cancelTurn:false`：
@@ -744,7 +762,7 @@ export function apply(ctx, rawConfig) {
    * @param {string} sessionId
    * @param {{reason?: string, cancelTurn?: boolean}} [opts]
    */
-  const stopSession = async (sessionId, { reason = '用户强制停止', cancelTurn = true } = {}) => {
+  const stopSession = async (sessionId, { reason = '用户强制停止', cancelTurn = true, closeKind = cancelTurn ? 'user-force-stop' : 'assistant-stop' } = {}) => {
     const sess = registry.peek(sessionId)
     const agents = ctx.get('agents')
     const agent = agents?.get?.(sessionId)
@@ -755,8 +773,12 @@ export function apply(ctx, rawConfig) {
     }
 
     /** 停 LLM：优先 sessionController.cancel（宿主正路），退到 agent.cancel */
-    const cancelLLM = () => {
+    const cancelLLM = (keepInbox = false) => {
       try {
+        if (keepInbox && typeof agent?.cancel === 'function') {
+          agent.cancel({ kind: 'user' }, { keepInbox: true })
+          return true
+        }
         const sc = ctx.get('sessionController')
         if (typeof sc?.cancel === 'function') { sc.cancel({ sessionId }); return true }
         if (typeof agent?.cancel === 'function') { agent.cancel({ kind: 'user' }, { keepInbox: true }); return true }
@@ -789,7 +811,7 @@ export function apply(ctx, rawConfig) {
     // ② 退出游戏；游戏会话与看门狗只经同一个关闭入口同步销毁
     if (sess) {
       try {
-        const closed = await sess.closeGameSession(reason)
+        const closed = await sess.closeGameSession(reason, { kind: closeKind })
         out.quit = closed.quit
         if (closed.quitError) out.quitError = closed.quitError
         out.kicked = true
@@ -826,7 +848,8 @@ export function apply(ctx, rawConfig) {
 
     // ④ 最后再停一次 LLM（收尾，避免状态异常）
     if (cancelTurn) {
-      out.finalStopLLM = cancelLLM()
+      // 结束提示词已由 GameSession 以 defer 方式放入 next-step；收尾取消必须保留 inbox。
+      out.finalStopLLM = cancelLLM(true)
       out.order.push('stop-llm-final')
       await waitIdle(800)
     }
@@ -866,7 +889,7 @@ export function apply(ctx, rawConfig) {
     const sess = registry.peek(id)
     logLine(`会话 ${id} 已归档 → 停止 MC 活动`)
     try {
-      await sess.closeGameSession('会话被归档')
+      await sess.closeGameSession('会话被归档', { kind: 'archived' })
     } catch {}
   })
 
@@ -1660,6 +1683,46 @@ export function apply(ctx, rawConfig) {
     return gameSession
   }
 
+  /**
+   * 游戏会话管理器决定文案与 wake/defer；这里仅负责把已经构造好的插件提示行交给宿主。
+   * wake 使用 steer（空闲起一轮、运行中下一步插话）；defer 只排到下一步，不主动重启被强停/归档的会话。
+   */
+  const deliverGameSessionCloseNotice = (sess, fallbackAgent, notice) => {
+    const agent = ctx.get('agents')?.get?.(sess.agentId) ?? fallbackAgent
+    if (!agent) {
+      logLine(`游戏会话结束提示词无法投放（找不到 agent）：${notice.gameSessionId} / ${notice.kind}`)
+      return
+    }
+    const message = userMessage({
+      content: [{ type: 'text', text: notice.text }],
+      source: { kind: 'plugin:whale_craft', form: 'notice', summary: notice.summary },
+    })
+    const defer = () => {
+      const inbox = agent.inbox
+      if (typeof inbox?.append === 'function') {
+        inbox.append('next-step', message)
+        return true
+      }
+      if (Array.isArray(inbox?.nextStep)) {
+        inbox.nextStep.push(message)
+        return true
+      }
+      return false
+    }
+    try { sess.interruptWait('game-session-close') } catch {}
+    if (notice.delivery === 'wake' && typeof agent.steer === 'function') {
+      try {
+        agent.steer(message)
+        logLine(`游戏会话结束提示词已投放（wake）：${notice.gameSessionId} / ${notice.kind}`)
+        return
+      } catch (error) {
+        logLine(`游戏会话结束提示词 steer 失败，改为延后投放：${error?.message ?? error}`)
+      }
+    }
+    if (defer()) logLine(`游戏会话结束提示词已投放（defer）：${notice.gameSessionId} / ${notice.kind}`)
+    else logLine(`游戏会话结束提示词无法投放（没有 steer 或 inbox）：${notice.gameSessionId} / ${notice.kind}`)
+  }
+
   /** 成功进服后一次性创建并发布游戏会话聚合；看门狗不能脱离它单独存在。 */
   const createGameSession = (sess, agent) => {
     if (sess.gameSession?.active) {
@@ -1672,17 +1735,26 @@ export function apply(ctx, rawConfig) {
     const watchdogFocuses = new Map()
     const watchdog = new Watchdog({
       ctx, sess, agent, promptSignal: promptAbort.signal, modern: true,
-      onCancel: (reason) => { void sess.closeGameSession(reason, { fromWatchdogJob: true }).catch(() => {}) },
+      onCancel: (reason) => { void sess.closeGameSession(reason, { kind: 'watchdog-cancelled', fromWatchdogJob: true }).catch(() => {}) },
     })
     watchdog.gate = watchdogGate(sess)
     const watchdogEngine = new WatchdogEngine(
       watchdogConfigStore.effective(watchdogScene, watchdogFocuses),
       (event, count) => watchdog.notifyEvent?.(event, count, watchdogConfigStore.global),
     )
-    const gameSession = new GameSessionState({ watchdog, watchdogEngine, watchdogScene, watchdogFocuses })
+    const connection = sess.bot.connectionView()
+    const server = connection?.host ? formatAddress(connection.host, connection.port ?? 25565) : null
+    const gameSession = new GameSessionState({
+      watchdog,
+      watchdogEngine,
+      watchdogScene,
+      watchdogFocuses,
+      server,
+      onCloseNotice: (notice) => deliverGameSessionCloseNotice(sess, agent, notice),
+    })
     sess.gameSession = gameSession
     try { watchdog.arm() } catch (error) {
-      try { gameSession.close('游戏会话建立失败') } catch {}
+      try { gameSession.close('游戏会话建立失败', { notify: false }) } catch {}
       if (sess.gameSession === gameSession) sess.gameSession = null
       throw error
     }
@@ -1772,6 +1844,8 @@ export function apply(ctx, rawConfig) {
     output: text(),
     async execute(args, exec) {
       const sess = getSession(exec)
+      const previousBot = sess.bot.bot
+      const previousGameSession = sess.gameSession?.active ? sess.gameSession : null
       const { host, port } = parseAddress(args.address, 25565)
       if (!host) throw new Error('address 不能为空（形如 example.com 或 example.com:25566）')
       const innerID = args.account ? String(args.account) : (sess.selectedAccount ?? null)
@@ -1791,6 +1865,9 @@ export function apply(ctx, rawConfig) {
         await sess.bot.connect(opts)
       } catch (e) {
         throw withUserHint(e, resolved.label)
+      }
+      if (previousGameSession && previousBot && sess.bot.bot !== previousBot) {
+        await sess.closeGameSession(`切换服务器至 ${formatAddress(host, port)}`, { disconnect: false, kind: 'server-switch' })
       }
       sess.mode = 'active'
       await sess.bot.waitForChunks()
@@ -1879,6 +1956,7 @@ export function apply(ctx, rawConfig) {
       return stopSession(sessionId, {
         reason: args.reason ? String(args.reason) : 'AI 主动下线',
         cancelTurn: false,
+        closeKind: 'assistant-stop',
       })
     },
   }))
@@ -1892,7 +1970,7 @@ export function apply(ctx, rawConfig) {
       const sess = getSession(exec)
       const why = args.reason ? String(args.reason) : 'agent 主动下线'
       if (!sess.gameSession?.active) throw new Error('当前没有游戏会话')
-      const closed = await sess.closeGameSession(why)
+      const closed = await sess.closeGameSession(why, { kind: 'assistant-disconnect' })
       return { online: false, gameSessionId: closed.gameSessionId, quit: closed.quit, watchdog: '已随游戏会话关闭' }
     },
   }))
@@ -3201,6 +3279,9 @@ export function apply(ctx, rawConfig) {
     } catch { return null }
   }
 
+  /** 只有正文首行为 `Instructions from:` 的才是可被模式切换撤回/替换的规则提示。 */
+  const isOurInstructionNotice = (m) => isOurNotice(m) && noticeRelOf(m) !== null
+
   /**
    * 从**会话日志**里读"这个 preset 下我们已经投过哪些文件"。
    *
@@ -3225,7 +3306,7 @@ export function apply(ctx, rawConfig) {
       for (const ev of events.slice(from)) {
         if (ev?.type !== 'user/message') continue
         const m = ev.data
-        if (!isOurNotice(m)) continue
+        if (!isOurInstructionNotice(m)) continue
         const text = (m.content ?? []).map((c) => c?.text ?? '').join('')
         for (const rel of rels) if (rel && text.includes(rel)) out.add(rel)
       }
@@ -3427,7 +3508,7 @@ export function apply(ctx, rawConfig) {
       // 留着会让下一步再送一遍（重复注入）。
       try { withdrawAgentsMdNotices(agent) } catch { /* 摘不掉也不影响本步 */ }
       markNoticesSent(agent, r.todo)
-      const msgs = (decision.messages ?? []).filter((m) => !isOurNotice(m))
+      const msgs = (decision.messages ?? []).filter((m) => !isOurInstructionNotice(m))
       const out = { ...decision, messages: [...noticeMessagesFor(r.todo), ...msgs] }
       return out
     } catch (e) {

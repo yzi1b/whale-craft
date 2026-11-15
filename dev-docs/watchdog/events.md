@@ -312,7 +312,7 @@ AI 调用工具获得指定修饰的全面概述：
 - willReconnect: (boolean) 是否会自动重连。
 - at: (number) 断开时间戳。
 
-> 当前实现：`willReconnect === true` 时看门狗保持挂载并提醒“正在自动重连”；`false` 时自动卸载并提醒助理已不在游戏中。
+> 当前实现：`willReconnect === true` 时游戏会话与看门狗保持运行并提醒“正在自动重连”；`false` 时游戏会话管理器同步关闭二者，并统一投放游戏会话结束提示词。
 
 ## 自身 `self`
 

@@ -48,8 +48,8 @@ DSH host 进程
 ## 3. 会话与实例模型（index.js）
 
 - `McSession`：`agentId / config / bot(McBot, instanceId=agentId) / mode(standby|active|sleep) / events / maxEvents=200 / gameSession / selectedAccount / waitInterruptedAt / waitInterruptReason`；`watchdog` 等只读 getter 均从 `gameSession` 派生。
-- `GameSessionState`：一次成功进服创建一个 ID，并**独占** `Watchdog + WatchdogEngine + scene + focuses`。游戏会话与看门狗一对一强绑定：同步建立、同步关闭，不能单独存在、启停或跨游戏会话复用；自动重连保留同一个聚合。
-- `McRegistry`：`getOrCreate(agent)` / `peek(id)`（**只读不建**，HTTP 用）/ `destroy(id)` / `destroyAll()`（插件卸载时 `ctx.effect` 里调）。所有退出路径统一走 `McSession.closeGameSession()`：先断开机器人，再幂等关闭 GameSession（其中同步 disarm 看门狗），最后清引用。
+- `GameSessionState`：一次成功进服创建一个 ID，并**独占** `Watchdog + WatchdogEngine + scene + focuses`。游戏会话与看门狗一对一强绑定：同步建立、同步关闭，不能单独存在、启停或跨游戏会话复用；自动重连保留同一个聚合。结束提示词也只由该对象在首次 `close()` 时构造一次，调用方只能传关闭类型与原因。
+- `McRegistry`：`getOrCreate(agent)` / `peek(id)`（**只读不建**，HTTP 用）/ `destroy(id)` / `destroyAll()`（插件卸载时 `ctx.effect` 里调）。所有退出路径统一走 `McSession.closeGameSession()`：先断开机器人，再幂等关闭 GameSession（其中同步 disarm 看门狗并投结束提示词），最后清引用。立即类提示走插件来源 `steer`；强停/归档/运行时关闭只排下一步，避免重新唤醒。
 - **事件队列唯一写入方**是 `McSession.ensureWired`（懒绑 bot 事件 → `#pushEvent`）：`spawn / death / reconnect / offline / chat / system / damage`。超 200 条裁旧。`drainEvents()` 供 `mc_events` 读。
 - `interruptWait(reason)`：置 `waitInterruptedAt` 标记，`src/wait.mjs` 的等待循环（250ms 轮询）看到就立刻收工 —— 这是"唤醒不被等待堵住"的一半（另一半在 Watchdog `#inject`）。
 - **状态量语义**（`modeView()` / `mc_status` / `GET /api/mc/status`）：
@@ -92,7 +92,7 @@ DSH host 进程
 5. 注入被 `gate` 检查：**不在 MC 模式只记账不注入**（drop）。
 
 - 看门狗挂宿主 job（`jobs.start({kind:'mc-watch', label:'MC 看门狗（整局存活）', owner:agent, run})`）：job 存活期=整局游戏；`disarm` 幂等结算（`#settleJob`）。宿主 kill job 时 `cancel` 也必须进入 `closeGameSession()`，不得只关看门狗。
-- 断线矩阵：`offline` 且 `willReconnect` → 唤醒“正在自动重连”（游戏会话与看门狗都保留）；`willReconnect=false` → 上层关闭整个游戏会话，看门狗随之关闭。本阶段不在此路径投放会话结束提示词。
+- 断线矩阵：`offline` 且 `willReconnect` → 唤醒“正在自动重连”（游戏会话与看门狗都保留）；`willReconnect=false` → 上层关闭整个游戏会话，看门狗随之关闭，并由 `GameSessionState.close()` 按被踢、连接异常或重连耗尽类型投放一次结束提示词。
 - 对外事件配置统一由 `mc_watchdog_config`（base / scene / effective）、`mc_watchdog_global_settings` 与 `mc_watchdog_focus` 管理；旧 `WATCH_DEFAULTS` 仅留在投递器内部兼容分支，不再暴露为工具配置。
 
 ## 6. 提示词注入体系（唯一通道 = 插件提示行）

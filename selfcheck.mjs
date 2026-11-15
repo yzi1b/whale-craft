@@ -315,7 +315,7 @@ console.log('\n--- 看门狗 v2 ---')
 
     console.log(`  ${WATCH_DEFAULTS.wakeOn.disconnect === true ? '✅' : '❌'} 🔴 唤醒矩阵新增 disconnect（断线默认叫醒 AI）`)
 
-    // 会重连 → 排一次唤醒；不会重连 → 直接关掉看门狗（它的关闭通知就会告诉 AI 去 mc_connect）
+    // 会重连 → 排一次唤醒；不会重连 → 旧模式只负责关看门狗，生产由游戏会话管理器投结束提示词。
     const wdA = new Watchdog({ ctx: fakeCtx, sess: { bot: new EventEmitter(), events: [], config: {} }, agent: A.agent, onFire: () => {} })
     wdA.arm()
     wdA.sess.bot.emit('offline', { reason: '被踢: 测试', willReconnect: true, sub: '' })
@@ -327,7 +327,7 @@ console.log('\n--- 看门狗 v2 ---')
     const wdB = new Watchdog({ ctx: fakeCtx, sess: { bot: new EventEmitter(), events: [], config: {} }, agent: A.agent, onFire: () => {} })
     wdB.arm()
     wdB.sess.bot.emit('offline', { reason: '连接结束', willReconnect: false, sub: '' })
-    console.log(`  ${wdB.armed === false ? '✅' : '❌'} 🔴 不会重连时看门狗自动关闭（关闭通知会告诉 AI"你已不在 MC 里、要 mc_connect"）`)
+    console.log(`  ${wdB.armed === false ? '✅' : '❌'} 🔴 旧模式不会重连时看门狗自动关闭`)
     try { wdA.disarm('自检结束', { notify: false }) } catch {}
     try { wdB.disarm('自检结束', { notify: false }) } catch {}
 
@@ -425,7 +425,7 @@ console.log('\n--- 看门狗 v2 ---')
     const idxSrc2 = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
     const wdSrc2 = readFileSync(new URL('./src/watchdog.mjs', import.meta.url), 'utf8')
     console.log(`  ${/await waitForEvents\(/.test(idxSrc2) && /interrupted: true/.test(idxSrc2) ? '✅' : '❌'} mc_events 用抽出来的等待逻辑，并把"被打断"告诉 AI`)
-    console.log(`  ${/this\.sess\?\.interruptWait\?\./.test(wdSrc2) ? '✅' : '❌'} 🔴 看门狗在**所有**注入前都打断等待（一个口子覆盖唤醒/关闭通知/补提醒/心跳）`)
+    console.log(`  ${/this\.sess\?\.interruptWait\?\./.test(wdSrc2) ? '✅' : '❌'} 🔴 看门狗在**所有事件注入**前都打断等待（一个口子覆盖唤醒/补提醒/心跳）`)
     console.log(`  ${/被传送 \/ 捡物 \/ 其他玩家上下线不在这里/.test(idxSrc2) ? '✅' : '❌'} 工具描述不再谎称"含被传送/捡物/上下线"（那些只在 mc_watch log 里）`)
   }
 
@@ -1256,7 +1256,7 @@ console.log('\n--- 归档保护（官方生命周期）---')
   console.log(`  ${plain === rest ? '✅' : '❌'} 无 MC 活动时原样交棒，不阻止普通归档`)
 
   const idx = (await import('node:fs')).readFileSync(new URL('./index.js', import.meta.url), 'utf8')
-  console.log(`  ${/await sess\.closeGameSession\('会话被归档'\)/.test(idx) ? '✅' : '❌'} stopActivity 统一关闭游戏会话（看门狗随会话关闭）`)
+  console.log(`  ${/await sess\.closeGameSession\('会话被归档', \{ kind: 'archived' \}\)/.test(idx) ? '✅' : '❌'} stopActivity 统一关闭游戏会话（看门狗随会话关闭）`)
   console.log(`  ${!idx.includes('wsRegistry.archiveSession =') && !idx.includes('installArchiveGuard') ? '✅' : '❌'} 不再劫持 workspaceRegistry.archiveSession`)
 }
 
@@ -1759,6 +1759,18 @@ console.log('\n--- 全局配置 / mc_admin_config / MC 模式隔离 ---')
     console.log(`  ${plusMsgs.length === 2 ? '✅' : '❌'} 🔴 MC+ 会话也只投 2 条（不再有「MC+ 模式说明」；实际 ${plusMsgs.length} 条）`)
     console.log(`  ${!plusMsgs.some((m) => /（MC\+ 模式说明）/.test(String(m?.source?.summary ?? ''))) ? '✅' : '❌'} 投递里不再出现「MC+ 模式说明」`)
     console.log(`  ${msgs.length === 2 ? '✅' : '❌'} MC 会话仍是 2 条`)
+  }
+  {
+    const closeAgent = { id: 'sess-CLOSE-NOTICE', session: mkSession('whale-close-'), ctx: makeAgentCtx('minecraft'), inbox: mkInbox() }
+    closeAgent.inbox.append('next-step', {
+      id: 'close-notice',
+      role: 'user',
+      content: [{ type: 'text', text: '【Minecraft 游戏会话已结束】\n游戏会话 ID：0123456789abcdef' }],
+      source: { kind: 'plugin:whale_craft', form: 'notice', summary: 'Minecraft 游戏会话已结束' },
+    })
+    fire('agent/created', closeAgent)
+    const closeStep = await preStepMessages(closeAgent)
+    console.log(`  ${closeStep.some((message) => message?.id === 'close-notice') ? '✅' : '❌'} 🔴 规则提示词对账不会吞掉延后的游戏会话结束提示词`)
   }
   // 🔴🔴 用户 2026-09-16 真机投诉："这个 agent 怎么还能用 pwsh！不是只暴露我们指定的工具吗！"
   //    旧实现：allowOtherTools 默认为空 ⇒ 只 deny 了我们的管理工具，宿主那堆工具（pwsh/subagent/…）
@@ -3954,18 +3966,30 @@ console.log('\n--- TypeScript 渐进迁移平台 ---')
 console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
 {
   const { GameSessionState, GAME_SESSION_ID_PATTERN } = await import('./src/game-session.ts')
+  const { buildGameSessionCloseNotice, sanitizeGameSessionCloseText } = await import('./src/game-session-close.ts')
   const { WatchdogEngine } = await import('./src/watchdog-engine.ts')
   const { cloneWatchdogDefaults } = await import('./src/watchdog-catalog.ts')
   const lifecycleEngine = new WatchdogEngine(cloneWatchdogDefaults())
   const disarms = []
   const lifecycleWatchdog = { armed: true, status: () => ({ armed: true }), disarm: (reason, options) => { disarms.push({ reason, options }); lifecycleWatchdog.armed = false } }
-  const game = new GameSessionState({ watchdog: lifecycleWatchdog, watchdogEngine: lifecycleEngine }, 100)
+  const notices = []
+  const game = new GameSessionState({ watchdog: lifecycleWatchdog, watchdogEngine: lifecycleEngine, server: 'mc.example:25566', onCloseNotice: (notice) => notices.push(notice) }, 100)
   console.log(`  ${GAME_SESSION_ID_PATTERN.test(game.id) && game.active ? '✅' : '❌'} 游戏会话 ID 为 16 位 hex，创建后 active`)
   console.log(`  ${game.watchdog === lifecycleWatchdog && game.watchdogEngine === lifecycleEngine && game.watchdogScene && game.watchdogFocuses ? '✅' : '❌'} 游戏会话独占看门狗、事件引擎和会话配置`)
-  const closed = game.close('自检', {}, 200)
+  const closed = game.close('自检', { kind: 'assistant-disconnect' }, 200)
   const closedAgain = game.close('重复关闭', {}, 300)
   console.log(`  ${closed && !closedAgain && !game.active && game.endedAt === 200 && game.endReason === '自检' ? '✅' : '❌'} 游戏会话结束幂等记录时间与原因`)
   console.log(`  ${disarms.length === 1 && disarms[0].reason === '自检' && lifecycleWatchdog.armed === false ? '✅' : '❌'} 游戏会话关闭与唯一看门狗同步发生且只执行一次`)
+  console.log(`  ${notices.length === 1 && notices[0].gameSessionId === game.id && notices[0].delivery === 'wake' && /mc\.example:25566/.test(notices[0].text) ? '✅' : '❌'} 游戏会话管理器只投一次带 ID/服务器的结束提示词`)
+
+  const deferred = buildGameSessionCloseNotice({ gameSessionId: game.id, kind: 'user-force-stop', reason: '用户强制停止', startedAt: 0, endedAt: 65_000 })
+  const redacted = sanitizeGameSessionCloseText('password=secret access_token=abc\n连接断开')
+  console.log(`  ${deferred.delivery === 'defer' && /持续时间：1 分 5 秒/.test(deferred.text) && /仍可使用 mc_status、mc_connect/.test(deferred.text) ? '✅' : '❌'} 强停提示延后投放，且不会误禁离线可用工具`)
+  console.log(`  ${!redacted.includes('secret') && !redacted.includes('abc') && redacted.includes('[已隐藏]') ? '✅' : '❌'} 结束原因中的凭据字段会被遮蔽`)
+
+  const closeKinds = ['assistant-disconnect', 'assistant-stop', 'user-force-stop', 'kicked', 'connection-lost', 'reconnect-failed', 'archived', 'runtime-shutdown', 'watchdog-cancelled', 'server-switch']
+  const renderedKinds = closeKinds.map((kind) => buildGameSessionCloseNotice({ gameSessionId: game.id, kind, reason: '测试原因', startedAt: 0, endedAt: 1_000, attempts: 3, lastReconnectError: '超时' }))
+  console.log(`  ${renderedKinds.every((notice) => notice.text.includes('【Minecraft 游戏会话已结束】') && !notice.text.includes('${')) ? '✅' : '❌'} 十种关闭情形都能生成无残留占位符的提示词`)
 
   let now = 1_000
   const wakes = []
