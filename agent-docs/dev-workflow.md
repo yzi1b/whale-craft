@@ -79,7 +79,7 @@ npm run dev:stop              # 按 pidfile 停实例
 - **形态**：假 ctx（工具注册表、sessionController、jobs、agentPresets…全部 stub）+ 加载**真** `apply()`；用 `console.log('  ✅/❌ …')` 输出；只有 `apply()` 抛错才 `exit 1`，末尾恒 `process.exit(0)`。
 - **污染隔离**：`MC_LOG` → `logs/selfcheck.log`；`WHALE_CRAFT_DIR`（全局配置）→ `mkdtemp` 临时目录（构造用 `fileURLToPath` 而非 `new URL().pathname`——中文用户名路径会被百分号编码，2026-09-24 卡过自检）。**记忆根没有 env 阀门**：靠给测试 agent 一个 `mkdtemp` **临时工作区** cwd，记忆落在它的 `.whale-craft`（2026-10-08 起）。
 - **覆盖分组**（节标题）：超时保护单元｜工具面与参数｜每会话实例分离｜未连接行为｜看门狗 v2（含断线同步、等待被打断）｜mc_act/give/sequence/stop｜状态条停止不取消 LLM｜MC设置 HTTP（真路由 + 信任栅栏）｜玩家说话辨认｜记忆树｜图像地图｜扩展点｜归档保护｜提示词注入单通道与去重｜配置+权限隔离｜协议护栏禁发未知包｜幽灵在线｜账户/凭据分离｜受保护文件（RULES/AGENTS/config.json 可读不可写）与版本标记｜认证 URL｜未处理拒绝不留患｜唤醒投递（必须提示词注入）｜job 结算｜事件队列单一写入方｜无 OP 建造｜放置判据（与 minecraft-data 真值表比对）｜mc_connect 全参数｜client bundle 静态断言｜mc_lan/mc_ping｜设置页 UI 静态断言｜打包完整性｜**宿主包缺省**（内置 defineTool 与宿主逐字对拍 + 无宿主模拟子进程）。
-- **无宿主模拟**（2026-10-04，issue #5）：`tools/no-host-init.mjs`（module.register 解析钩子）屏蔽 `@deepseek-ai/dsh-tools`/`schemastery` 后**再跑一遍 selfcheck**（子进程），并逐字比对 37 个工具的注册形状——本机 link 安装测不出的问题靠它钉住；发布侧另有 `tools/check-standalone-import.mjs`（干净安装 import 回归，CI 必跑，改回静态 import 必红）。
+- **无宿主模拟**（2026-10-04，issue #5）：`tools/no-host-init.mjs`（module.register 解析钩子）屏蔽 `@deepseek-ai/dsh-tools`/schemastery 后**再跑一遍 selfcheck**（子进程），并逐字比对 34 个工具的注册形状——本机 link 安装测不出的问题靠它钉住；发布侧另有 `tools/check-standalone-import.mjs`（干净安装 import 回归，CI 必跑，改回静态 import 必红）。
 - **加断言的惯例**：断言要打在**真实实现**上（别只测 stub）；曾有"集成断言假绿"（复制完 preset 要改 persona/关 shell 那两条测不到）与"前端拿不到真路由"（真机 404）的教训，所以有一条专门**打真路由**的断言。计数口径：README 里写的 726/686 是历史数字，以实际运行为准（当前 600+ ✅）。
 - **保持快**（2026-11-08 优化，167s → ~34s）：自检是日常高频命令，**别用真实等待去验上限**。
   - 连接类：`McBot` 的 `connectTimeoutMs` 传小值（连关闭端口验失败路径）。
@@ -90,9 +90,9 @@ npm run dev:stop              # 按 pidfile 停实例
 ## 6. 调试技巧
 
 - **日志**：插件日志 `$DSH_HOME/whale_craft/logs/whale-craft.log`（`MC_LOG` 可覆盖；启动时同时进宿主 logger）。自检日志 `logs/selfcheck.log`。
-- **会话内诊断**：`mc_debug_diag`（物理/控制位/收包/事件队列 + `promptInjection` 投递状态；需开启调试开关）；`mc_watch {action:"log"}` 看看门狗留档；`GET /api/mc/mode?sessionId=` 有注入诊断。
+- **会话内诊断**：`mc_debug_diag`（物理/控制位/收包 + `promptInjection` 投递状态；需开启调试开关）；结构化事件用 `mc_watchdog_queue`；`GET /api/mc/mode?sessionId=` 有注入诊断。
 - **真机验收文化**：本项目修 bug 讲究"真机复现 → 修 → 真机验收"（CHANGELOG 每条修复都带现象/根因/修法/验收）。能起本地 MC 服务端就起，别只靠自检。
-- **别信"状态在撒谎"**：历史多次出现"界面/AI/工具三处一起撒谎"（断线后仍显示在游戏中、幽灵在线）。改状态相关代码时，同步核对：`McBot.online`、`McSession.modeView()`、`/api/mc/status`、client 状态条、`mc_events`/看门狗——五处要一致。
+- **别信"状态在撒谎"**：历史多次出现"界面/AI/工具三处一起撒谎"（断线后仍显示在游戏中、幽灵在线）。改状态相关代码时，同步核对：`McBot.online`、`McSession.modeView()`、`/api/mc/status`、client 状态条、结构化看门狗事件——五处要一致。
 
 ## 7. DSH 升级敏感清单（升级后逐项自查）
 
@@ -120,6 +120,6 @@ npm run dev:stop              # 按 pidfile 停实例
 | 调 mineflayer ack 类 API | `withTimeout`/`raceAbort` 包裹 |
 | 报"成功" | 复验实际状态（blockAt / 状态字段）再报 |
 | 改工具返回值 | 过 `lossless`（经 asTool 自动） |
-| 投递提示/唤醒 | 走 `userMessage()` + 看门狗 `#inject`；先 `interruptWait` |
+| 投递提示/唤醒 | 走 `userMessage()` + 看门狗 `#inject` |
 | 新增**可选宿主包**（宿主可能给不到） | 顶层**绝不静态 import**（`await import()`+try/catch）；宿主优先、`kind()` 记来源；拿不到写**等价实现**并在 selfcheck 里与宿主**逐字对拍**；名字加进 `tools/no-host-hooks.mjs` 名单；CI 的 standalone 回归自动覆盖任何包（详见 src-modules.md §16、history F11） |
 | 动 `.github/workflows/*` | 用 Contents API 落地（workflow scope 坑，见 release.md） |

@@ -13,8 +13,8 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 
 核心设计（用户视角的完整说明见仓库根 `README.md`）：
 
-- **每会话独立实例**：每个会话（agent）有自己的 McBot + 事件队列 + 看门狗；不同会话可连不同服务器、不同账号。
-- **事件唤醒只有一条通道**：`mc_watch` 看门狗（绑定宿主 job → 结算/注入）；**不存在**跨会话唤醒。
+- **每会话独立实例**：每个会话（agent）有自己的 McBot；每个游戏会话独占结构化事件队列与看门狗。不同会话可连不同服务器、不同账号。
+- **事件唤醒只有一条通道**：游戏会话绑定的看门狗（绑定宿主 job → 结算/注入）；**不存在**跨会话唤醒。
 - **提示词只走"插件提示行"**：`source:{kind:'plugin:whale_craft',form:'notice'}`（v4 规范值），绝不冒充用户发言。
 - **凭据不进模型上下文**：密码/token 只写宿主凭据服务（`$DSH_HOME/.credentials.yaml`），工具返回/HTTP 永不携带。
 - **长期记忆** `<工作区>/.whale-craft/`：AI 维护的文档树。专用工具与索引自动注入均已移除（2026-10-07）——agent 用宿主文件工具自行读写，并按 RULES.md 的指示自行阅读/维护 `README.md` 索引。
@@ -24,7 +24,7 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 
 | 位置 | 角色 |
 | --- | --- |
-| `index.js`（~4k 行） | **host 半端入口**：`apply()` 装配一切 —— Config / McSession / Watchdog、37 个工具、HTTP API、提示词注入、MC模式/MC+模式 三档权限策略、归档保护、扩展加载 |
+| `index.js`（~4k 行） | **host 半端入口**：`apply()` 装配一切 —— Config / McSession / Watchdog、34 个工具、HTTP API、提示词注入、MC模式/MC+模式 三档权限策略、归档保护、扩展加载 |
 | `presets/*.patch.yml` | 「MC模式」「MC+模式」两个 preset 的**声明式**定义（DSH 0.2.2；经 `dsh.bundle.patch` 数组随包挂载） |
 | `client.js`（~1.8k 行） | **浏览器半端 bundle**（手写 factory，无构建步骤，HMR 热更）：状态条 / MC设置弹窗 / 新会话页 hero 入口 |
 | `src/core.mjs`（~2k 行） | `McBot`：mineflayer 封装（连接/重连/动作/观察/协议护栏）；**不依赖 DSH**，可独立测试 |
@@ -44,7 +44,7 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 | 文档 | 内容 | 何时读 |
 | --- | --- | --- |
 | [architecture.md](architecture.md) | 全局架构、运行时数据流、注入/唤醒/隔离/自举机制、HTTP 面 | 想理解"系统怎么转" |
-| [tool-catalog.md](tool-catalog.md) | 37 个工具逐个说明 + 通用约定 | 改/加工具时 |
+| [tool-catalog.md](tool-catalog.md) | 34 个工具逐个说明 + 通用约定 | 改/加工具时 |
 | [src-modules.md](src-modules.md) | src/ 模块参考：导出、语义、不变式、坑 | 改某个模块时 |
 | [client-ui.md](client-ui.md) | 浏览器半端：插槽扩展点、**图标约定**、root vs 会话作用域 | 改 client.js / 加 UI 入口时 |
 | [dev-workflow.md](dev-workflow.md) | 本机环境硬约束、隔离铁律、自检、调试、升级敏感点 | **动手前必读** |
@@ -57,10 +57,10 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 2. 🔴 **`agent/pre-step` 是 cordis waterfall，必须调用 `next()`** —— 曾导致"所有模式的所有会话每一轮都失败"（0.1.4 P0）。
 3. 🔴 **任何可能永不 settle 的 await 必须套 `withTimeout`/`raceAbort`**（mineflayer 的 dig/place/equip 等是等服务端 ack 的 promise）。宿主无法硬中断（"cannot hard-kill same-process code"），一个卡住的工具会让整轮 turn / 停止按钮 / 插话全部失效。
 4. 🔴 **工具必须用 `asTool()` 注册**（自动 lossless + 注入 `exec.signal`）；返回值里混进 Vec3 类实例会让宿主报 "not lossless JSON"，整条工具失败。
-5. 🔴 **唤醒/通知一律走"插件提示行"**（`userMessage()`，`source.kind='plugin'`/`form='notice'`），**不许**退回冒充用户来源的 fallback；看门狗在注入前**必须先 `interruptWait()`**（否则 `mc_events{waitSec}` 的等待会把唤醒压到等待结束才投递 —— 0.1.7 修的"等待堵住唤醒"）。
+5. 🔴 **唤醒/通知一律走"插件提示行"**（`userMessage()`，`source.kind='plugin'`/`form='notice'`），**不许**退回冒充用户来源的 fallback。
 6. **新模块一律 TypeScript**；只用 Node 可原生擦除的类型语法（`erasableSyntaxOnly`）。改旧大文件后仍必跑 `check-core`；提交前跑 `npm run check`（typecheck + check-core + selfcheck + build）。
 7. 仓库统一 **LF 行尾**（`.gitattributes`）——自检里有大量按行匹配的断言，行尾漂移会红。
-8. **事件队列 `sess.events` 的唯一写入方是 `McSession.ensureWired`**；看门狗留档写自己的内存 `watchdog.log`。双写曾是 bug。
+8. **结构化事件只进入当前 `GameSessionState.watchdogEngine`**；不得重建会话外事件队列或阻塞等待工具。
 9. 工作流文件（`.github/workflows/*`）的落地有 GitHub **workflow scope** 坑 —— 走 Contents API，别硬推（见 release.md §4）。
 
 ## 快速验证改动

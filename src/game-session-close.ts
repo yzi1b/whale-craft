@@ -3,7 +3,6 @@ import type { GameSessionId } from './types.ts'
 
 export type GameSessionCloseKind =
   | 'assistant-disconnect'
-  | 'assistant-stop'
   | 'user-stop'
   | 'kicked'
   | 'connection-lost'
@@ -58,8 +57,6 @@ function kindText (input: GameSessionCloseInput): string {
   switch (input.kind) {
     case 'assistant-disconnect':
       return '这是你主动执行的退出。停止仍以本局在线状态为前提的子代理或后台任务；不要自行重新连接。只有用户再次要求进入服务器时，才建立新的游戏会话。向用户简短确认已经退出。'
-    case 'assistant-stop':
-      return '这是你主动停止的游戏会话。不要自行重新连接，也不要继续刚才的游戏任务。向用户简短确认游戏会话已经停止。'
     case 'user-stop':
       return '这是用户主动停止了游戏会话。立即停止刚才的游戏任务，不要自行重新连接，也不要把这次停止当作需要排障的异常。向用户简短确认游戏会话已经停止。'
     case 'kicked':

@@ -47,11 +47,10 @@ DSH host 进程
 
 ## 3. 会话与实例模型（index.js）
 
-- `McSession`：`agentId / config / bot(McBot, instanceId=agentId) / mode(standby|active|sleep) / events / maxEvents=200 / gameSession / selectedAccount / waitInterruptedAt / waitInterruptReason`；`watchdog` 等只读 getter 均从 `gameSession` 派生。
+- `McSession`：`agentId / config / bot(McBot, instanceId=agentId) / mode(standby|active|sleep) / gameSession / selectedAccount`；`watchdog` 等只读 getter 均从 `gameSession` 派生。
 - `GameSessionState`：一次成功进服创建一个 ID，并**独占** `Watchdog + WatchdogEngine + scene + focuses`。游戏会话与看门狗一对一强绑定：同步建立、同步关闭，不能单独存在、启停或跨游戏会话复用；自动重连保留同一个聚合。结束提示词也只由该对象在首次 `close()` 时构造一次，调用方只能传关闭类型与原因。
 - `McRegistry`：`getOrCreate(agent)` / `peek(id)`（**只读不建**，HTTP 用）/ `destroy(id)` / `destroyAll()`（插件卸载时 `ctx.effect` 里调）。所有退出路径统一走 `McSession.closeGameSession()`：先断开机器人，再幂等关闭 GameSession（其中同步 disarm 看门狗并投结束提示词），最后清引用。立即类提示走插件来源 `steer`；强停/归档/运行时关闭只排下一步，避免重新唤醒。
-- **事件队列唯一写入方**是 `McSession.ensureWired`（懒绑 bot 事件 → `#pushEvent`）：`spawn / death / reconnect / offline / chat / system / damage`。超 200 条裁旧。`drainEvents()` 供 `mc_events` 读。
-- `interruptWait(reason)`：置 `waitInterruptedAt` 标记，`src/wait.mjs` 的等待循环（250ms 轮询）看到就立刻收工 —— 这是"唤醒不被等待堵住"的一半（另一半在 Watchdog `#inject`）。
+- `McSession.ensureWired` 把 bot 事件直接转换为结构化事实并写入当前 `GameSessionState.watchdogEngine`；不存在会话外第二事件队列。
 - **状态量语义**（`modeView()` / `mc_status` / `GET /api/mc/status`）：
 
 | 量 | 含义 |
@@ -76,20 +75,19 @@ DSH host 进程
 
 ## 5. 事件 → 唤醒链路（"该不该醒" vs "发生过什么"）
 
-两条通道，分工明确：
+结构化事件只有一条通道：
 
 | 通道 | 提供者 | 内容 |
 | --- | --- | --- |
-| **拉**（发生过什么） | `mc_events` 读 `sess.events` | 聊天、系统消息、受伤、上线/死亡/重连/断线。⚠️ 被传送/捡物/上下线只进**看门狗留档**（`mc_watch {action:"log"}`），不在这个队列 |
-| **推**（该不该醒） | `WatchdogEngine` → `Watchdog` → 插件提示行注入 | 事实匹配 → 修饰器 → 延迟/冷却 → 全局间隔合并 → 注入 |
+| **记录与读取** | `WatchdogEngine` → `mc_watchdog_queue` | 当前游戏会话的全部结构化事实；队列与游戏会话同寿命 |
+| **命中后唤醒** | `WatchdogEngine` → `Watchdog` → 插件提示行注入 | 事实匹配 → 修饰器 → 延迟/冷却 → 全局间隔合并 → 注入 |
 
 完整注入流程（0.1.7 定格的顺序，每一步都有事故背书）：
 
 1. `McSession.ensureWired()` 把事实交给唯一的 `WatchdogEngine.observe()`；引擎按 `src/watchdog-catalog.ts` 的事件和修饰器配置决定记录、延迟与唤醒；
 2. 延迟事件由 `WatchdogEngine.tick()` 冲刷；命中唤醒后交给 `Watchdog.notifyEvent()`，再按全局 `minInterval` 合并相邻提醒；
-3. 注入前**先 `sess.interruptWait(kind)`** —— 让堵在 `mc_events{waitSec}` 里的等待立刻返回（工具一返回 → step 结束 → 唤醒当场投递）；
-4. 优先 `agent.steer(userMessage(...))`（运行中 = 下一步插话；空闲 = 起一轮 = 唤醒）；`steer` 不可用时兜底 `sessionController.prompt({mode:'steer'}, promptSignal)` —— **promptSignal 必传**（`sessionController.prompt` 是 @Remote 签名，不传会 `throwIfAborted` 炸）；
-5. 注入被 `gate` 检查：**不在 MC 模式只记账不注入**（drop）。
+3. 优先 `agent.steer(userMessage(...))`（运行中 = 下一步插话；空闲 = 起一轮 = 唤醒）；`steer` 不可用时兜底 `sessionController.prompt({mode:'steer'}, promptSignal)` —— **promptSignal 必传**（`sessionController.prompt` 是 @Remote 签名，不传会 `throwIfAborted` 炸）；
+4. 注入被 `gate` 检查：**不在 MC 模式只记账不注入**（drop）。
 
 - 看门狗挂宿主 job（`jobs.start({kind:'mc-watch', label:'MC 看门狗（整局存活）', owner:agent, run})`）：job 存活期=整局游戏；`disarm` 幂等结算（`#settleJob`）。宿主 kill job 时 `cancel` 也必须进入 `closeGameSession()`，不得只关看门狗。
 - 断线由会话层观察并交给事件引擎；`willReconnect=false` 时上层关闭整个游戏会话，看门狗随之关闭，并由 `GameSessionState.close()` 按被踢、连接异常或重连耗尽类型投放一次结束提示词。
@@ -176,7 +174,7 @@ kind 变化先 release 再套新）：
 | POST `/api/mc/branch-plus` | 「创建MC+分支」：**fork 一条分支 + 把新会话改成 MC+**（`{sessionId, messageId}`；`messageId` 反查 `atSeq` 对齐原生落点）。见下 |
 
 - **设置类 API 的错误形态统一 200 + `{ok:false, error, needUserAction?, hint?}`**（前端 `apiFetch` 要求 `payload.ok===true`）。
-- **「连接到MC」的注入时机（2026-10-04）**：`/api/mc/connect` 只**注入 + 唤醒**——`sess.interruptWait('connect')` → `agent.steer(message)`（空闲起一轮、运行中插话）。正文由 `src/connect-prompt.mjs` 组装（追加插槽 `CONNECT_PROMPT_APPENDERS`）。历史只记 `via!=='lan'` 的地址（`src/serverhistory.mjs`，全局 `servers.json`）。
+- **「连接到MC」的注入时机（2026-10-04）**：`/api/mc/connect` 只**注入 + 唤醒**——`agent.steer(message)`（空闲起一轮、运行中插话）。正文由 `src/connect-prompt.mjs` 组装（追加插槽 `CONNECT_PROMPT_APPENDERS`）。历史只记 `via!=='lan'` 的地址（`src/serverhistory.mjs`，全局 `servers.json`）。
   ⚠️ **对话中**用插件提示行（`source.kind='plugin:whale_craft'` + notice，**绝不冒充用户**）；**新对话页**（`asUser:true`）改用**玩家消息**（`kind:'user'` + 正文前 `[system] `）——用户明确要求的例外，因为在全新会话里插件提示行不触发那一轮。
 - **「创建MC+分支」的改模式机制（2026-10-05）**：`POST /api/mc/branch-plus` 在宿主侧做三件事——
   ① `ctx.get('sessionController').fork({sessionId, atSeq})`；② 把新会话的 preset 改成 `minecraft-plus`；
@@ -211,7 +209,7 @@ kind 变化先 release 再套新）：
 
 ## 11. 停止、归档与保护
 
-- 状态条 `/api/mc/stop`、`mc_stop` 与 `mc_disconnect` 都直接调用 `closeGameSession()`，由游戏会话管理器关闭连接与看门狗并 `steer` 结束提示词；不存在另一套强停或后台任务清理流程。
+- 状态条 `/api/mc/stop` 与唯一主动退出工具 `mc_disconnect` 都直接调用 `closeGameSession()`，由游戏会话管理器关闭连接与看门狗并 `steer` 结束提示词；不存在另一套强停或后台任务清理流程。
 - **归档保护**：使用 DSH 0.2.2 官方接缝。`workspace/session-activity` 是 waterfall：MC 在线、重连中或看门狗挂着时，在 `await next()` 的结果前追加 `{kind:'minecraft'}`，普通归档因此拒绝；调用方选择 `archiveSession(id,{stopActivity:true})` 后，宿主先持久化归档再派发 `workspace/session-stop`，插件只关闭自己拥有的看门狗和机器人。LLM、通用 job、subagent 由各自 provider 停止；**不得再包装 `workspaceRegistry.archiveSession`**。
 
 ## 12. 落盘地图

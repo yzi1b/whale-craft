@@ -24,7 +24,6 @@ interface WatchdogSession {
   agentId?: string
   bot?: { online?: boolean }
   watchdogEngine?: WatchdogEngineView | null
-  interruptWait?: (kind: string | null) => unknown
 }
 
 interface JobResult {
@@ -252,7 +251,6 @@ export class Watchdog {
       }
     }
     const running = this.agent?.status === 'running'
-    try { this.sess.interruptWait?.(kind) } catch {}
     if (this.agent?.steer) {
       try {
         this.agent.steer(userMessage({

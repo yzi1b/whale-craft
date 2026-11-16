@@ -172,7 +172,7 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   const idx = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
   console.log(`  ${!tools.has('mc_kit_share') ? '✅' : '❌'} 🔴 mc_kit_share 已移除（它只是在调宿主**另装**的 dsh-file-host，插件本身没有文件服务器）`)
   console.log(`  ${!tools.has('mc_kit_express') ? '✅' : '❌'} 🔴 mc_kit_express 已移除（文件分享整体撤下，图片走回复内嵌）`)
-  console.log(`  ${tools.size === 37 ? '✅' : '❌'} 工具数 37（实际 ${tools.size}）：mc_* 30 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 2`)
+  console.log(`  ${tools.size === 34 ? '✅' : '❌'} 工具数 34（实际 ${tools.size}）：mc_* 27 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 2`)
   console.log(`  ${!tools.has('mc_config') ? '✅' : '❌'} 🔴 旧配置工具 mc_config 已移除（只保留 mc_watchdog_* 配置面）`)
   // 只看**代码**，不看注释：注释里留着"为什么删"的说明（那是要留的）
   const codeOnly = idx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
@@ -267,13 +267,7 @@ for (const n of ['mc_status', 'mc_map', 'mc_say', 'mc_connect']) {
 // ── 看门狗：与游戏会话强绑定 / 新版配置面 ──
 console.log('\n--- 看门狗 v2 ---')
 {
-  // 没有游戏会话时，看门狗不存在，也不能单独启动或关闭。
-  const s0 = await tools.get('mc_watch').execute({}, A)
-  console.log(`  ${s0.active === false && s0.gameSessionId === null ? '✅' : '❌'} 没有游戏会话时没有看门狗实例`)
-
-  const armError = await tools.get('mc_watch').execute({ action: 'arm' }, A).then(() => null, (error) => error.message)
-  const disarmError = await tools.get('mc_watch').execute({ action: 'disarm' }, A).then(() => null, (error) => error.message)
-  console.log(`  ${/可用 status\/log/.test(String(armError)) && /可用 status\/log/.test(String(disarmError)) ? '✅' : '❌'} mc_watch 不再提供独立 arm/disarm`)
+  console.log(`  ${!tools.has('mc_watch') && !tools.has('mc_events') && !tools.has('mc_stop') ? '✅' : '❌'} 旧 mc_watch / mc_events / mc_stop 工具均未注册`)
 
   // scene/effective/focus 都属于游戏会话；离线时不得预建或跨局残留。
   const sceneWithoutGame = await tools.get('mc_watchdog_config').execute({
@@ -326,7 +320,7 @@ console.log('\n--- 看门狗 v2 ---')
 
     // 三处链路都得在（删掉任何一处就等于又把状态丢了）
     const idxSrc = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
-    console.log(`  ${/bot\.on\('offline'/.test(idxSrc) && /连接断开：/.test(idxSrc) ? '✅' : '❌'} 会话把 offline 转进事件队列（mc_events 能看到）`)
+    console.log(`  ${/bot\.on\('offline'/.test(idxSrc) && /observeWatchdog\('connection\.disconnect'/.test(idxSrc) ? '✅' : '❌'} 会话把 offline 转进结构化看门狗队列`)
     console.log(`  ${/reconnecting: Boolean\(this\.bot\.reconnecting \|\| this\.bot\.reconnectPending\)/.test(idxSrc) && /Boolean\(sess\.bot\.reconnecting \|\| sess\.bot\.reconnectPending\)/.test(idxSrc) ? '✅' : '❌'} 🔴 modeView 与 /api/mc/status 都带上"正在重连"（含"正在尝试连接"那段，否则状态条会中途退回"未上线"）`)
     const cliSrc = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
     console.log(`  ${/正在重连/.test(cliSrc) && /data-mc-reconnecting/.test(cliSrc) ? '✅' : '❌'} 🔴 状态条会显示"重连中…"（不再假装在游戏中）`)
@@ -335,66 +329,10 @@ console.log('\n--- 看门狗 v2 ---')
     console.log(`  ${/if \(willReconnect\) this\.reconnectPending = true/.test(coreSrc3) && /this\.reconnectPending = false/.test(coreSrc3) ? '✅' : '❌'} 🔴 断线期标记：掉线置位 →（重连成功 / 手动进服）才清`)
   }
 
-  // ── 等待会不会"堵住唤醒"（2026-09-19 用户实测：等到消息、提及了也没唤醒，空等特别久）──
-  // 机制：宿主把 steer 放在**下一个 step 边界**投递，而 step 边界要等当前工具返回 ⇒
-  //      `mc_events {waitSec:120}` 会把唤醒文案压在等待后面。修法：唤醒前先打断等待。
-  {
-    const { waitForEvents } = await import('./src/wait.mjs')
-    const { Watchdog } = await import('./src/watchdog.ts')
-    const { readFileSync } = await import('node:fs')
-
-    // ① 等到事件 → 立刻回
-    {
-      const sess = { events: [] }
-      const p = waitForEvents({ sess, from: 0, kind: 'chat', waitSec: 5, pollMs: 25 })
-      setTimeout(() => sess.events.push({ kind: 'chat', text: 'hi' }), 120)
-      const t0 = Date.now(); const r = await p; const dt = Date.now() - t0
-      console.log(`  ${r.interrupted === false && r.reason === '有事件' && dt < 1000 ? '✅' : '❌'} 等到事件立刻回（${dt}ms，不等满 5s）`)
-    }
-    // ② 被唤醒打断 → 立刻回（这条就是修的东西）
-    {
-      const sess = { events: [], waitInterruptedAt: 0, waitInterruptReason: null }
-      const p = waitForEvents({ sess, from: 0, waitSec: 30, pollMs: 25 })
-      setTimeout(() => { sess.waitInterruptedAt = Date.now(); sess.waitInterruptReason = 'mention' }, 120)
-      const t0 = Date.now(); const r = await p; const dt = Date.now() - t0
-      console.log(`  ${r.interrupted === true && r.reason === 'mention' && dt < 1000 ? '✅' : '❌'} 🔴 被唤醒打断 → 立刻回（${dt}ms，而不是干等 30 秒）：reason=${r.reason}`)
-    }
-    // ③ 用户按停止 → 立刻回
-    {
-      const sess = { events: [] }
-      const ac = new AbortController()
-      const p = waitForEvents({ sess, from: 0, waitSec: 30, pollMs: 25, signal: ac.signal })
-      setTimeout(() => ac.abort(), 100)
-      const t0 = Date.now(); const r = await p; const dt = Date.now() - t0
-      console.log(`  ${r.interrupted === false && r.reason === '用户停止' && dt < 1000 ? '✅' : '❌'} 用户停止 → 立刻回（${dt}ms，不空等）`)
-    }
-    // ④ 没人找它 → 到点才回
-    {
-      const sess = { events: [] }
-      const t0 = Date.now()
-      const r = await waitForEvents({ sess, from: 0, waitSec: 0.5, pollMs: 50 })
-      const dt = Date.now() - t0
-      console.log(`  ${!r.interrupted && dt >= 400 && dt < 1300 ? '✅' : '❌'} 没人找它就等到点（${dt}ms ≈ 500ms）`)
-    }
-    // ⑤ 看门狗注入前**真的**会打断（stub 会话记录调用）
-    {
-      let interruptedWith = null
-      const stub = { bot: { online: true }, interruptWait: (reason) => { interruptedWith = reason } }
-      const wd = new Watchdog({
-        ctx: fakeCtx, sess: stub,
-        agent: { id: 'w', status: 'running', steer: () => {} },
-      })
-      wd.notifyEvent({ timestamp: Date.now(), name: 'message.chat', content: { who: 'someone', content: 'deepseek 在吗' }, modifiers: {} }, 1, { minInterval: 5000 })
-      console.log(`  ${interruptedWith ? '✅' : '❌'} 🔴 看门狗注入前会打断等待（interruptWait("${interruptedWith ?? ''}")）`)
-    }
-    // ⑥ 接线不能丢（在 mc_events 的工具侧 + 看门狗的注入口）
-    const idxSrc2 = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
-    const wdSrc2 = readFileSync(new URL('./src/watchdog.ts', import.meta.url), 'utf8')
-    console.log(`  ${/await waitForEvents\(/.test(idxSrc2) && /interrupted: true/.test(idxSrc2) ? '✅' : '❌'} mc_events 用抽出来的等待逻辑，并把"被打断"告诉 AI`)
-    console.log(`  ${/this\.sess\.interruptWait\?\./.test(wdSrc2) ? '✅' : '❌'} 🔴 看门狗在**所有事件注入**前都打断等待（一个口子覆盖所有新版事件）`)
-    console.log(`  ${/watchdogEngine\?\.config\['harness\.heartbeat'\]/.test(wdSrc2) ? '✅' : '❌'} 看门狗挂载日志读取事件引擎心跳配置`)
-    console.log(`  ${/被传送 \/ 捡物 \/ 其他玩家上下线不在这里/.test(idxSrc2) ? '✅' : '❌'} 工具描述不再谎称"含被传送/捡物/上下线"（那些只在 mc_watch log 里）`)
-  }
+  const { readFileSync: readWatchdogSource, existsSync: oldWaitExists } = await import('node:fs')
+  const watchdogSource = readWatchdogSource(new URL('./src/watchdog.ts', import.meta.url), 'utf8')
+  console.log(`  ${/watchdogEngine\?\.config\['harness\.heartbeat'\]/.test(watchdogSource) ? '✅' : '❌'} 看门狗挂载日志读取事件引擎心跳配置`)
+  console.log(`  ${!oldWaitExists(new URL('./src/wait.mjs', import.meta.url)) && !/interruptWait|waitForEvents/.test(watchdogSource) ? '✅' : '❌'} 旧阻塞事件等待与打断补丁已彻底删除`)
 
   // base 是全局持久配置，不依赖具体游戏会话；非法项仍要清晰报错。
   try {
@@ -404,11 +342,9 @@ console.log('\n--- 看门狗 v2 ---')
   const baseReplaceError = await tools.get('mc_watchdog_config').execute({ action: 'edit', type: 'base', merge: false, config: {} }, A).then(() => null, (error) => error.message)
   console.log(`  ${/base 配置不支持 merge:false/.test(String(baseReplaceError)) && /设为 null/.test(String(baseReplaceError)) ? '✅' : '❌'} base merge:false 不再被静默忽略`)
 
-  const badAction = await tools.get('mc_watch').execute({ action: 'stats' }, A).then(() => null).catch((e) => e.message)
-  console.log(`  ${/未知 action/.test(String(badAction)) ? '✅' : '❌'} mc_watch 未知 action 明确报错`)
 }
 
-// ── 新工具：mc_act / mc_give / mc_sequence / mc_stop ──
+// ── 新工具：mc_act / mc_give / mc_sequence / mc_disconnect ──
 console.log('\n--- 工具重整后的新能力 ---')
 
 // mc_act：未知 mode 要清晰报错（不静默）
@@ -474,24 +410,24 @@ for (const [label, args, want] of [
   console.log(`  ${r.failed === 1 && r.results.length === 1 && r.results[0]?.ok === false ? '✅' : '❌'} 🔴 序列不再把 arrived:false 记成成功`)
 }
 
-// ── mc_stop：与其它来源共用唯一的游戏会话关闭入口 ──
-console.log('\n--- mc_stop（直接进入游戏会话关闭）---')
+// ── mc_disconnect：与其它来源共用唯一的游戏会话关闭入口 ──
+console.log('\n--- mc_disconnect（直接进入游戏会话关闭）---')
 try {
-  await tools.get('mc_stop').execute({})
-  console.log('  ❌ mc_stop 无 exec 竟然成功')
+  await tools.get('mc_disconnect').execute({})
+  console.log('  ❌ mc_disconnect 无 exec 竟然成功')
 } catch (e) {
-  console.log(`  ${/拿不到当前会话/.test(e.message) ? '✅' : '❌'} mc_stop 无 exec 清晰报错：${e.message.slice(0, 30)}`)
+  console.log(`  ${/拿不到当前会话/.test(e.message) ? '✅' : '❌'} mc_disconnect 无 exec 清晰报错：${e.message.slice(0, 30)}`)
 }
 {
   // 参数面只剩 reason（不再有 hard）
   // ⚠️ 注册表里的 `parameters` 是包好的 JSON schema，参数名在 .properties 下
-  const params = Object.keys(tools.get('mc_stop').parameters?.properties ?? {})
-  console.log(`  ${!params.includes('hard') && params.includes('reason') ? '✅' : '❌'} mc_stop 参数面只有 reason：[${params.join(', ')}]`)
+  const params = Object.keys(tools.get('mc_disconnect').parameters?.properties ?? {})
+  console.log(`  ${!params.includes('hard') && params.includes('reason') ? '✅' : '❌'} mc_disconnect 参数面只有 reason：[${params.join(', ')}]`)
   try {
-    await tools.get('mc_stop').execute({ reason: '自检' }, A)
-    console.log('  ❌ 没有游戏会话时 mc_stop 竟然成功')
+    await tools.get('mc_disconnect').execute({ reason: '自检' }, A)
+    console.log('  ❌ 没有游戏会话时 mc_disconnect 竟然成功')
   } catch (e) {
-    console.log(`  ${/当前没有游戏会话/.test(e.message) ? '✅' : '❌'} mc_stop 不再走会话外强停兜底：${e.message}`)
+    console.log(`  ${/当前没有游戏会话/.test(e.message) ? '✅' : '❌'} mc_disconnect 不再走会话外强停兜底：${e.message}`)
   }
   const { readFileSync } = await import('node:fs')
   const indexSource = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
@@ -2265,7 +2201,7 @@ console.log('\n--- 行事准则 RULES.md / 新开关 / 边界信息 ---')
   const { join } = await import('node:path')
 
   console.log(`  ${/Whale Craft 行事准则/.test(DEFAULT_AGENTS_MD) && /DeepSeek/.test(DEFAULT_AGENTS_MD) && /Master/.test(DEFAULT_AGENTS_MD) ? '✅' : '❌'} 默认准则像样（标题 / 称呼都在）`)
-  console.log(`  ${/mc_accounts/.test(DEFAULT_AGENTS_MD) && /mc_capabilities/.test(DEFAULT_AGENTS_MD) && /mc_watch/.test(DEFAULT_AGENTS_MD) && /README\.md/.test(DEFAULT_AGENTS_MD) ? '✅' : '❌'} 默认准则里的关键工具/索引名都在`)
+  console.log(`  ${/mc_accounts/.test(DEFAULT_AGENTS_MD) && /mc_capabilities/.test(DEFAULT_AGENTS_MD) && /mc_watchdog_queue/.test(DEFAULT_AGENTS_MD) && /README\.md/.test(DEFAULT_AGENTS_MD) ? '✅' : '❌'} 默认准则里的关键工具/索引名都在`)
   console.log(`  ${!/xxx/.test(DEFAULT_AGENTS_MD) ? '✅' : '❌'} 草稿里的 "xxx" 占位符已全部替换`)
   // 🔴 凭据边界：默认准则**不得**再指路到明文凭据文件、也不得出现已删除的连接参数
   console.log(`  ${!/mc-servers\.md/.test(DEFAULT_AGENTS_MD) ? '✅' : '❌'} 默认准则不再指路 .agent-docs/mc-servers.md（那里曾有明文密码）`)
@@ -2814,41 +2750,23 @@ console.log('\n--- 看门狗 job 结算 ---')
   console.log(`  ${killCallers.every((c) => c === 's') && killCallers.length > 0 ? '✅' : '❌'} 🔴 kill 的 caller 是会话 id 字符串（收到：${JSON.stringify(killCallers)}）`)
 
   // 🔴 拿不到会话 id → **不许挂"无主 job"**（无主 job 对**所有会话**可见）：降级 + 留档
-  const wdNoId = new Watchdog({ ctx: wdCtx, sess: { bot: new EventEmitter(), events: [], config: {} } })
+  const wdNoId = new Watchdog({ ctx: wdCtx, sess: { bot: new EventEmitter(), config: {} } })
   wdNoId.arm()
   const degraded = wdNoId.jobId === null && (wdNoId.log ?? []).some((e) => /拿不到会话 id/.test(e.text))
   console.log(`  ${degraded ? '✅' : '❌'} 拿不到会话 id：不挂无主 job（降级 + 留档）`)
   wdNoId.disarm('自检结束')
 }
 
-// ── 结构不变量：会话事件队列只能有一个写入方 ──
-// 曾经的真 bug：McSession.ensureWired 与看门狗 onFire **都**往 sess.events 写，
-// 于是同一句聊天进队列两遍（chat/damage/death 三类）。修法是删掉看门狗那一路。
-// 这条测试锁死"别再加回来"——重复事件会让 AI 误判"对方说了两遍"。
-console.log('\n--- 结构不变量：事件队列单一写入方 ---')
+// ── 结构不变量：只保留游戏会话绑定的结构化事件队列 ──
+console.log('\n--- 结构不变量：旧事件队列彻底移除 ---')
 {
   const { readFileSync } = await import('node:fs')
   const { fileURLToPath } = await import('node:url')
   const wdSrc = readFileSync(fileURLToPath(new URL('./src/watchdog.ts', import.meta.url)), 'utf8')
   const idxSrc = readFileSync(fileURLToPath(new URL('./index.js', import.meta.url)), 'utf8')
 
-  // 看门狗不得调用 onFire（那正是"第二个写入方"）
-  const wdPushes = /this\.onFire\s*\(/.test(wdSrc)
-  console.log(`  ${!wdPushes ? '✅' : '❌'} 看门狗不写会话事件队列（无 this.onFire 调用）`)
-
-  // 看门狗不得直接 push 到 sess.events
-  const wdSessPush = /sess\.events\.push|this\.sess\.events\.push/.test(wdSrc)
-  console.log(`  ${!wdSessPush ? '✅' : '❌'} 看门狗不直接 push sess.events`)
-
-  // index.js 里 ensureWired 必须仍然是写入方（别把它也删了，否则 mc_events 空了）
-  const wired = /const observeChat = \([\s\S]{0,160}#pushEvent\('chat'/.test(idxSrc)
-    && /this\.bot\.on\('chat', \(event\) => observeChat\(event, false\)\)/.test(idxSrc)
-    && /this\.bot\.on\('selfChat', \(event\) => observeChat\(event, true\)\)/.test(idxSrc)
-  console.log(`  ${wired ? '✅' : '❌'} ensureWired 仍是唯一写入方（mc_events 事件来源）`)
-
-  // 看门狗构造签名里不该再收 onFire
-  const ctorTakesOnFire = /constructor \(\{ ctx, sess, agent, onFire/.test(wdSrc)
-  console.log(`  ${!ctorTakesOnFire ? '✅' : '❌'} 看门狗构造签名已不含 onFire`)
+  console.log(`  ${!/this\.events|sess\.events|#pushEvent|drainEvents|waitForEvents|interruptWait/.test(idxSrc + wdSrc) ? '✅' : '❌'} 生产代码无旧 sess.events 队列及等待补丁`)
+  console.log(`  ${/watchdogEngine\?\.observe/.test(idxSrc) && /watchdogEngine\.read/.test(idxSrc) ? '✅' : '❌'} 事件只写入并读取游戏会话的 WatchdogEngine`)
 }
 
 // ── 无 OP 也能建造：创造模式自动取物（真机 mc 就是 creative）──
@@ -3966,9 +3884,9 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
   console.log(`  ${userStopped.delivery === 'wake' && /持续时间：1 分 5 秒/.test(userStopped.text) && /仍可使用 mc_status、mc_connect/.test(userStopped.text) ? '✅' : '❌'} 用户停止立即投放结束提示，且不会误禁离线可用工具`)
   console.log(`  ${!redacted.includes('secret') && !redacted.includes('abc') && redacted.includes('[已隐藏]') ? '✅' : '❌'} 结束原因中的凭据字段会被遮蔽`)
 
-  const closeKinds = ['assistant-disconnect', 'assistant-stop', 'user-stop', 'kicked', 'connection-lost', 'reconnect-failed', 'archived', 'runtime-shutdown', 'watchdog-cancelled', 'server-switch']
+  const closeKinds = ['assistant-disconnect', 'user-stop', 'kicked', 'connection-lost', 'reconnect-failed', 'archived', 'runtime-shutdown', 'watchdog-cancelled', 'server-switch']
   const renderedKinds = closeKinds.map((kind) => buildGameSessionCloseNotice({ gameSessionId: game.id, kind, reason: '测试原因', startedAt: 0, endedAt: 1_000, attempts: 3, lastReconnectError: '超时' }))
-  console.log(`  ${renderedKinds.every((notice) => notice.text.includes('【Minecraft 游戏会话已结束】') && !notice.text.includes('${')) ? '✅' : '❌'} 十种关闭情形都能生成无残留占位符的提示词`)
+  console.log(`  ${renderedKinds.every((notice) => notice.text.includes('【Minecraft 游戏会话已结束】') && !notice.text.includes('${')) ? '✅' : '❌'} 九种关闭情形都能生成无残留占位符的提示词`)
 
   let now = 1_000
   const wakes = []
@@ -4009,7 +3927,7 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
   console.log(`  ${selfEngine.queue.length === 1 && selfEvent && Object.keys(selfEvent.modifiers).length === 0 ? '✅' : '❌'} includeSelf=true 记录自己的话但不命中唤醒修饰；false 时不记录`)
 
   const { Watchdog } = await import('./src/watchdog.ts')
-  const watchdog = new Watchdog({ ctx: fakeCtx, sess: { interruptWait: () => {}, bot: {} }, agent: { id: 'stats', steer: () => {} } })
+  const watchdog = new Watchdog({ ctx: fakeCtx, sess: { bot: {} }, agent: { id: 'stats', steer: () => {} } })
   watchdog.notifyEvent({ name: 'self.teleport', content: {}, modifiers: {}, timestamp: Date.now() }, 1, { minInterval: 5_000 })
   const watchdogStatus = watchdog.status()
   console.log(`  ${watchdogStatus.lastWakeAt !== null && watchdogStatus.lastWakeKind === 'self.teleport' && watchdogStatus.stats.fired === 1 && watchdogStatus.stats.injected === 1 ? '✅' : '❌'} 新版提醒更新 lastWakeAt/lastWakeKind/fired/injected`)

@@ -1,6 +1,6 @@
 # src/ 模块参考
 
-> 快照：**0.2.0**（开发中，未发布）。所有模块都是纯 ESM；内部模块依赖见 §17，宿主数据根统一由官方 `@deepseek-ai/dsh-home-paths` 解析。
+> 快照：**0.2.0**（开发中，未发布）。所有模块都是纯 ESM；内部模块依赖见 §16，宿主数据根统一由官方 `@deepseek-ai/dsh-home-paths` 解析。
 > 通用规矩：任何可能永不 settle 的 await 套 `withTimeout`/`raceAbort`；日志走 `logLine()`。
 
 ---
@@ -28,24 +28,18 @@
   - 顶号（`already connected|already logged` 且建连 <9s）最多重试 4 次 × 3.5s；失败**保留原连接**；
   - yggdrasil 才设 `sessionServer`；`fakeHost: sub` 过 HAProxy 子服路由；等 spawn 超时 `connectTimeoutMs`（45s）。
 - **重连**：网络断开后固定等待 1s，最多尝试 3 次；被踢、认证失败不重连。`reconnecting` 覆盖等待与尝试，`reconnectPending` 覆盖**整个断线期**（直到真重连成功/尝试耗尽）。
-- **`offline` 事件**（`b.on('end')` 里 emit）：`{sub, reason: lastError ?? '连接结束', willReconnect, at}`；`willReconnect = autoReconnect && bot===b && !stopped`。**断线必须进上层队列**（0.1.7 修）。
+- **`offline` 事件**（`b.on('end')` 里 emit）：`{sub, reason: lastError ?? '连接结束', willReconnect, at}`；`willReconnect = autoReconnect && bot===b && !stopped`。断线由上层写入当前游戏会话的结构化事件引擎。
 - `disconnect(reason)`：停重连/观察器 → `quit()` 宽限 3s（计时器故意不 unref）→ 没走掉才强断；返回 `{graceful,forced,ms}`。`authOnly()`：只认证不连接（账户 refresh 用）。
 - **事件清单**：`spawn {sub,position,gamemode}`、`offline`、`reconnect {sub}`、`death {position}`、`damage {damage,type,source,health,position}`（每次实际掉血；1.20+ 从 `damage_event`/动态注册表解析类型）、`chat {who,text}`、`selfChat {who,text}`、`system {text}`（含现代协议以 `profileless_chat` 发送的 `/say` 广播）、观察器 `playerJoin/playerLeave {who}`、`teleport`（mineflayer `forcedMove`，无距离阈值）、`pushed`（仅水平 X/Z 非自主位移；自走/自飞、纯垂直移动和已识别传送均排除；事件引擎再按 `minDistance` 过滤并用 `once` 分轮）、`pickup`（同名物品汇总为 `名称*数量`）、`log`。
   - ⚠️ **core 没有 `heartbeat` 事件** —— 心跳是看门狗配置项，靠 `stats.lastEventAt` 判。
-- **聊天识别**（`wireChatEvents`/`#playerChatFrom`）：`player_chat` 包（签名）直接处理；`message` 事件里 `position==='chat'` 跳过防重复；`game_info` 必 system；其余先试玩家聊天判据（`chat.type.text` / `chat.type.team.*` / `commands.message.display.incoming` / 兜底渲染形状正则 `<who> text`）——覆盖"被服务端塞进 system 位置的玩家聊天"。
+- **聊天识别**（`wireChatEvents`/`#playerChatFrom`）：`position==='chat'` 先缓存渲染文本，再由原始 `player_chat` 归为玩家聊天、`profileless_chat` 归为 `/say` 等系统广播，避免重复或漏报；`game_info` 必 system；其余先试玩家聊天判据（`chat.type.text` / `chat.type.team.*` / `commands.message.display.incoming` / 兜底渲染形状正则 `<who> text`）——覆盖"被服务端塞进 system 位置的玩家聊天"。
 - **按键上报兼容层（`player_input`，为 26.2 加的）已于 2026-10-02 整体移除**：上游还连不了 26.2（mineflayer 4.39.0 的 testedVersions 只到 26.1；minecraft-data 3.117.0 只有元数据、无数据目录），半吊子支持先撤。将来重建**必须**沿用"先查后发"护栏——教训见 [history.md](history.md)（protodef 对未知包名不报错，写出 `02 00 00` 会被服务端当 `accept_teleportation` → 秒踢）。
 - **动作方法**（全部经 `#t()` 超时包装，超时/中断自动松 7 个控制位）：`walkTo`（arrive 1.6、|dy|≤1.5、一直按 forward、1.2s 无进展跳）、`flyTo`（仅创造，finally 必 `stopFlying` 恢复重力）、`dig`（自动换收割工具；返回 requested/succeeded/failed + 逐项结果）、`placeBlock`（判据链：选块→缺货自动给→距离>5.5 直接抛"够不着"→目标必须 `canPlaceInto`（boundingBox 'empty'，水/岩浆/草花可放）→ 找 6 邻域参照→**复验 `blockAt` 才报 placed**）、`breakBlock`（复验 `now!==name` 才报 broken）、`build`（只累计 `placed:true`）、`giveItem`（协议级 `creative.setInventorySlot`）、`clearInventory`、`useBlock`、`attack`、`tossItem`、`runSequence`（≤64 步；识别 arrived/placed/broken/failed 的语义失败，见工具表）、`command`（必须 `/` 开头，带 allow 回调）、`chatSay`。物品统一经 `itemView()` 输出 `{name,count,slot?}`。
 - **观察**：`scan` / `heightmap`（R≤96）/ `mapImage`（RGBA，白框标自己）/ `entities` / `inventory`（held/items 为结构化物品）/ `waitForChunks`（默认 20s；`blockAt` 脚下出现即算到）/ `status()`（含 ghost 特判）/ `connectionView()`（只出 host/port/**version**，不带账号）/ `context({survival})`（游戏上下文；装备为结构化物品）/ `players()`（tab 名/档案名/uuid）/ `heightGrid·heightImage·heightGlyphs`（mc_height 高度/地势图；`surfaceY` 单列地表 Y）。
 - **错误纪律**：`#reportError` 是唯一错误上报口 —— 记 lastError+日志，**仅在有 listener 时才 emit('error')**（EventEmitter 无监听者 emit('error') 会 throw，曾把整个 DSH 带走）。
 - 不变量：`setInterval` 回调必须自兜异常（宿主只对 `unhandledRejection` fail-loud，`uncaughtException` **直接杀进程**）；`_selfMovingAt` 在自走/自飞期间持续刷新并保留 3s 收尾窗口；`forcedMove` 设置一次性优先标记，使同一次位移不会再归为 pushed。
 
-## 2. `src/wait.mjs` —— waitForEvents
-
-- 参数 `{sess, from, kind=null, waitSec=0, signal=null, pollMs=250}`（`now`/`sleep` 可注入，供测试）。
-- 返回 `{waitedMs, interrupted, reason}`。收工条件按序检查：① `signal.aborted` → `reason:'用户停止'`（interrupted:false）；② `sess.waitInterruptedAt > startedAt` → `interrupted:true, reason: waitInterruptReason`；③ 新事件出现 → `reason:'有事件'`；④ 超时 → `reason:null`。
-- **存在的理由**：宿主 `agent.steer` 在**下一步 step 边界**消费，而 step 边界要等当前工具调用返回 —— 没有打断机制时，`mc_events{waitSec:120}` 会把看门狗的唤醒文案**压到等待结束**才投递（"等待堵住了它正在等的那件事"，0.1.7 事故）。
-
-## 3. `src/game-session.ts` + `src/watchdog.ts` —— 游戏会话与单脑看门狗
+## 2. `src/game-session.ts` + `src/watchdog.ts` —— 游戏会话与单脑看门狗
 
 `GameSessionState` 是生产生命周期聚合根：每个实例独占一个 `Watchdog`、一个 `WatchdogEngine`、场景配置和注意配置；看门狗不能脱离游戏会话单独存在、启停或复用。`McSession.closeGameSession()` 是唯一关闭入口，自动重连期间保留原聚合；彻底断开、主动退出、用户停止、归档、实例销毁、换服或看门狗 job 被取消都会关闭整个聚合。首次 `close()` 还会经 `src/game-session-close.ts` 构造一次结束提示词；重复关闭不会重复投放，初始化失败可显式 `notify:false`。
 
@@ -59,10 +53,10 @@
 - `disarm(reason, {fromJob})`：底层幂等 teardown，并结算 job（`readOutput` = 留档末 30 条）；它不再拥有关闭通知能力，生产只由 `GameSessionState.close()` 调用。job cancel 反向请求关闭整个游戏会话。
 - 事件匹配、修饰器、延迟、心跳、注意项与 `type.once` 全在 `src/watchdog-engine.ts` / `src/watchdog-catalog.ts`；`Watchdog` 内没有另一套规则、默认值或兼容路径。
 - 队列读取会按“事件事实名 + 修饰名 + 载荷”精简重复修饰；修饰目录元数据可声明 `simplifiable:false`，当前 `self.damage/type.once` 不可精简，因此每次出现都保留。
-- **`inject`（唯一注入口）**：① gate（非 MC 模式只记账 drop）；② **先 `sess.interruptWait(kind)`**；③ 首选 `agent.steer(userMessage(...))`（`source:{kind:'plugin:whale_craft',form:'notice'}`——v4 规范值，宿主渲染成折叠一行；空闲时起一轮、运行中下一步插话）；④ 兜底 `sessionController.prompt({mode:'steer'}, promptSignal)`。**绝不用** `followup`/queue 类"冒充用户发言"的通道。
-- 留档 `this.log`（内存，上限 200，`#record` 是唯一写入点）—— 与 `sess.events` 分开，双写曾是 bug。
+- **`inject`（唯一注入口）**：① gate（非 MC 模式只记账 drop）；② 首选 `agent.steer(userMessage(...))`（`source:{kind:'plugin:whale_craft',form:'notice'}`——v4 规范值，宿主渲染成折叠一行；空闲时起一轮、运行中下一步插话）；③ 兜底 `sessionController.prompt({mode:'steer'}, promptSignal)`。**绝不用** `followup`/queue 类"冒充用户发言"的通道。
+- 运行日志 `this.log`（内存，上限 200，`#record` 是唯一写入点）仅供宿主 job 输出与内部诊断，不是另一套事件队列。
 
-## 4. `src/memory.mjs` —— MemoryStore（记忆树）
+## 3. `src/memory.mjs` —— MemoryStore（记忆树）
 
 - 构造 `(root, {create=true})`；**生产用 `create:false`**：目录只在两个时机建（首次 MC 模式会话 / 点开 MC设置，`ensureMemoryRootCwd` + `seededRoots` 去重）。
 - 常量：单文件文本 256KB、图片 16MB、最多 2000 文件、深度 ≤5、段名 `^[\w.\-一-龥 ]+$`。
@@ -71,7 +65,7 @@
 - `append/write/delete/put` 对 `protected` 目标一律抛"只读"（`protectedWriteError`）。写后清 `_textCache`（投递的索引恒新）。⚠️ `list()` 只跳过**根级**的 README 与受保护文件，`.out/` 会被遍历进去（未专门跳过）。
 - 🔴 **工具 `mc_kit_memory` 已于 2026-10-07 移除**（同日又去掉 README 索引的**自动注入**）：agent 改用宿主受限文件工具（read/write/edit/glob/grep/read_image）直接读写 `.whale-craft/`。本模块**保留为库**——`put/append/write/delete/search/overview/read` 与读侧的 `indexText/renderTree/list` 均不再有生产消费方，仍由自检单元测试直接覆盖；`read()` 的图片附件化接线随工具移除（看图改由宿主 `read_image` 承担）。
 
-## 5. `src/agentsmd.mjs` —— RULES.md 行事准则
+## 4. `src/agentsmd.mjs` —— RULES.md 行事准则
 
 - 路径：`agentsMdPath(dir)=<记忆根>/RULES.md`；`legacyAgentsMdPath`（老 AGENTS.md，只用于迁移/守卫）。
 - `DEFAULT_AGENTS_MD`（默认准则）小节：宗旨 / 称呼 / 记忆 / 边界信息 / 登录游戏 / 看门狗 / 聊天 / 建筑须知 / 较长思考 / 硬规矩。
@@ -80,20 +74,20 @@
 - 路径守卫（原 `isAgentsMdPath`）已**移出**到 `src/protected.mjs`（与 config.json 统一判定）。
 - `syncRulesVersion(dir, version, {follow})`：无文件→建默认+`created`；有文件无版本记录→只记版本 `marked`（**不覆盖**）；版本变+follow 开→替换为默认 `replaced`；follow 关→只更新记录 `kept`（以后打开**不翻旧账**）。版本读写走 `src/wsconfig.mjs` 的 `readRulesVersion/setRulesVersion`（存 `<记忆根>/config.json` 的 `rulesVersion` 字段；旧 `.rules-version` 标记由 wsconfig.migrate 迁入后删除）。
 
-## 6. `src/version-prompt.mjs` —— 版本硬提示词
+## 5. `src/version-prompt.mjs` —— 版本硬提示词
 
 - 导出 `versionPromptText/versionPromptHash/versionPromptTitle/versionPromptSource`。哈希 = 正文 sha256 前 8 位（只标正文；正文**不含版本号**，跨版本稳定）。
 - 正文两条：① 本版本 `mc_move/mc_act/mc_build` 不成熟 → 优先 `mc_command`（`/tp` `/setblock` `/fill` `/clone`），被拒再回退；② 本版本生存/冒险能力极弱 → 先明确告知用户再尽力（已有记忆优先按记忆行事）。
 - **不可编辑、无开关**（硬编码随版本发布）——与 RULES.md（Master 维护）、记忆（玩出来的经验）三分工。
 
-## 7. `src/user-message.mjs` —— 插件提示行构造
+## 6. `src/user-message.mjs` —— 插件提示行构造
 
 - `userMessage(input)`：宿主 `@deepseek-ai/dsh-llm` 的 `createUserMessage` 优先；解析不到/异常 → `builtinUserMessage`（自带等价实现：`{role:'user', content, source:{kind:'plugin:whale_craft'}, id}`）。
 - `messageFactoryKind()`：诊断 `'host'|'builtin'`。
 - ⚠️ 存在理由：0.1.4 时该包漏进依赖声明 → 别人 npm 装出来"工具都在、提示词全无"。**依赖声明不能少**，兜底只是保险。
 - 🔴 `source.kind` 必须是 **v4 规范值 `plugin:whale_craft`**（v4 会话格式拒绝裸露的 `'plugin'`；宿主对 source 原样透传）——2026-10-04 按 PR #2（@swan3146）的真机实验 + 宿主 `dsh-session-format-v3-to-v4` 源码核实。
 
-## 8. `src/config.mjs` —— 配置 + preset 规划
+## 7. `src/config.mjs` —— 配置 + preset 规划
 
 ### DEFAULT_CONFIG（键 → 默认 → 含义）
 
@@ -118,7 +112,7 @@
 - `legacyPromptSwitches()`：从**文件原值**里取旧版全局存过的三个提示词开关（只取显式设过且类型合法的）—— 只作工作区建档时的一次性 seed 来源（消费方 index.js → `wsconfig.migrate`）。
 - `resolveStateDir`：`WHALE_CRAFT_STATE_DIR` → `WHALE_CRAFT_DIR`+whaleDir → 官方 `resolveDshHome()`（显式路径 / `$DSH_HOME` / `~/.dsh`）下的 `whale_craft`。`core.mjs` 的默认日志根也复用同一官方 helper，不再自行复制解析规则。
 
-## 9. `src/accounts.mjs` —— 账户与凭据
+## 8. `src/accounts.mjs` —— 账户与凭据
 
 - **存储分离**：元数据 `$DSH_HOME/whale_craft/accounts.json`；凭据（password/token/clientToken）**只进宿主凭据服务**（`ctx.credentials`，key=`whale-craft/<innerID>` → `$DSH_HOME/.credentials.yaml` owner-only）。凭据服务不可用 → **直接抛错拒绝，绝不降级写明文**（MC agent 手里有 read 工具）。
 - 类型：`offline` / `yggdrasil`（第三方皮肤站，authlib-injector 风格）/ microsoft（`add` 抛"暂不支持"）。
@@ -127,24 +121,24 @@
 - 凭据方法：`setCredential`（`kind:'grant'` payload）/`getCredential`（**仅内部登录流程**）/`deleteCredential`/`refreshCredentialIndex`（宿主 credentials `listRecords` 是同步的）。
 - 认证服务器：`listAuthServers/addAuthServer/renameAuthServer`（id 永不变）/`removeAuthServer`（被账户占用拒删）。网络登录本身在 core.mjs（yggdrasil 流程），本模块只承载元数据/凭据脚手架。
 
-## 10. 文件交付（原生）
+## 9. 文件交付（原生）
 
 - `src/express.mjs` / `src/express-server.mjs` **已删除**（文件分享整体撤下）。`OUT_DIR='.out'` 与 `outRootOf()` 现在定义在 `index.js` 顶部（`mc_kit_image` 默认输出用）。
 - 图片：写到工作区（默认 `.whale-craft/.out/`），回复里用 `![说明](相对工作区路径)`；宿主聊天 UI 通过认证 `/api/file` 内嵌显示。
 - 非图片/文件卡片：宿主 `present`（MC 模式白名单已放行；guard 限制交付路径在本会话工作区）。
 - 没有"发布区/对外 URL"概念；旧的 `.express/` 用户文件不主动删除，也不再被插件读取或服务。
 
-## 11. `src/image.mjs` + `src/png.mjs` —— 图像
+## 10. `src/image.mjs` + `src/png.mjs` —— 图像
 
 - `image.mjs`：`sharp` 是**可选依赖**（`createRequire` 懒加载）；`imageEngineAvailable()/imageEngineError()`；缺失时 `need()` 抛"图像引擎不可用（sharp 解析失败：…）"，**不静默假装成功**。`ImageEngine`：`info` / `embed`（图片→data URI + `<image>` tag，引图进 SVG）/ `render`（SVG→PNG，density×scale，scale 夹 0.05-16）/ `grid`（≤64 张拼网格，**返回 SVG 文本**可继续编辑）/ `save`。
 - `png.mjs`：零依赖 RGBA8 PNG 编码器（color type 6、8bit、filter 0、deflate 9）；`encodePng(width,height,rgba)`。用途：`mc_map` 出真地形图时避免给宿主多加原生依赖。
 
-## 12. `src/lan.mjs` —— 局域网公告监听
+## 11. `src/lan.mjs` —— 局域网公告监听
 
 - `LAN_BROADCAST={group:'224.0.2.60', port:4445}`；`parseLanBroadcast`（`[AD]…[/AD]` 取 1-65535 端口，`[MOTD]` 可选）。
 - `listenLanBroadcast({seconds=3})`：udp4 + reuseAddr 绑 4445 → `addMembership`（禁多播环境**静默降级**为只听本机广播）；按 `host+port` 去重；时长夹 [0.5, 15]s；**错误/超时全 resolve 空数组、绝不 reject**；`timer.unref`。**只被动听，不扫端口**（2026-09-18 砍掉扫网段）。
 
-## 13. `src/ping.mjs` —— STATUS ping
+## 12. `src/ping.mjs` —— STATUS ping
 
 - 协议栈锚点：`requireFromMineflayer` 从 mineflayer 自己的依赖树 `require('minecraft-protocol')`（与 mc_connect 同栈同版本表）。
 - `parseAddress`（默认 25565；认 `host`、`host:port`、`[::1]:25565`；裸 IPv6 抛错）；`formatAddress`（**逆操作**：IPv6 加方括号、默认端口省略）；`flattenMotd`（拍平 + 去 `§` 色码）；`friendlyNetError`（ECONNREFUSED/ETIMEDOUT/ENOTFOUND/… → 人话；`unsupported protocol` → 建议手填 version）。
@@ -171,7 +165,7 @@
 - **两套规则都认**：经典 `1.21.11` 与**新 26.x 规则** `26.1`（26>1，序关系天然成立）；快照含老式 `25w46a`、新式 `26.3-snapshot-10`/`26.3-pre-2`、旧式 `1.21.4-pre1`。
 - 调用点：`index.js::probeLan`（局域网行加 `supported` 给前端）、`core.mjs::libraryInfo`（复用区间）。
 
-## 14. `src/wsconfig.mjs` —— 按工作区的配置
+## 13. `src/wsconfig.mjs` —— 按工作区的配置
 
 > 用户 2026-10-03 定：按工作区独立的设置（提示词版本 + 「MC设置→提示词」三开关）统一存 `<记忆根>/config.json`（默认 `<工作区>/.whale-craft/config.json`），取代原来的 `.rules-version` 独立标记 + 全局三开关。
 
@@ -181,7 +175,7 @@
 - `migrate(root, {seed})`：建档 + 迁移（幂等）—— 无文件则写 `{schema:1}` + seed 里显式给过的旧全局值 + 旧标记值；**写后回读校验通过才删**旧 `.rules-version`；非本格式文件一概不碰（报 error）。调用点：`ensureMemoryRootForCwd`，**必须在 syncRulesVersion 之前**（否则旧版本值这一轮看不到）。
 - 保护：config.json 对 MC 模式 AI **可读不可写**（见 §15）。
 
-## 15. `src/protected.mjs` —— 受保护文件（可读不可写）
+## 14. `src/protected.mjs` —— 受保护文件（可读不可写）
 
 > 用户 2026-10-03 定：RULES.md / AGENTS.md（老名）/ config.json 对 MC 模式 AI **只读**。统一收编前身的散落判定：`agentsmd.mjs:isAgentsMdPath`（工具参数 JSON 全文匹配，已删）、`memory.mjs` 的根级文件名封锁。
 
@@ -227,14 +221,14 @@
   - 🔴 **踩过的坑（真机卡死，自检的本地服务用例抓到）**：`requestOnce` 里"响应到达"只能有**一个**处理点（回调里判完 `Content-Length` 再 `resolve`）。曾经把 `resolve` 当请求回调、**另**挂 `req.on('response')` 判长度 —— 超限时 `destroy()` 掉的正是**已经 resolve 出去的那个响应**，随后读 body 的 await **永不 settle**。`readBody` 另有 `close` 兜底（流被提前关掉也必须 settle）。
 - 测试缝（照宿主同款）：`lookup` / `assertPublic` 可注入 —— selfcheck 用它对着**本机 http 服务**跑通链路（本机是私网地址，正常路径会拒，注入后才走得到）。
 
-## 16. `src/tool-def.mjs` —— 工具定义（宿主优先 + 内置兜底）
+## 15. `src/tool-def.mjs` —— 工具定义（宿主优先 + 内置兜底）
 
 > 2026-10-04（GitHub issue #5）：`index.js` 顶层曾**静态** import 两个 optional peer（`@deepseek-ai/dsh-tools` / `schemastery`）⇒ 干净安装 / 官方 dsh-desktop 上模块**链接期**失败，宿主只报一句 `failed to import`。本模块沿用 `user-message.mjs` 的同款模式（宿主优先、内置兜底、`kind()` 诊断）。
 
 - `defineTool(options)`：`toolDefKind()==='host'` 时用宿主的 defineTool（本机 CLI/源码安装行为完全不变）；解析不到用 `builtinDefineTool`。
 - 内置 compiler：`parameters`（属性表 DSL）→ JSON Schema，**key 顺序与宿主逐字一致**（标量 `{type,注解,enum,const}`；object `{type,注解,additionalProperties,properties(声明了才有),required(非空才有)}`；`type:'json'` → 仅注解无 type；属性 `required:true` 收进**父级** required）；`timeoutMs` 透传；oneOf / 未声明 additionalProperties 的 object / presenter 类选项 → **明确抛错**（防静默走样，自检会当场红）。
 - 内置 validator：宿主 `validateJsonSchemaValue` 的子集，违规文案/路径逐字对齐（`"arguments" must be an object` 等）；违规抛 `BuiltinToolArgsError`（name=`ToolArgsError`、code=`INVALID_ARGS`）。⚠️ 它不是宿主 `HarnessError` 子类（拿不到宿主类）——宿主显示层会退化成通用错误，文案保持一致（任务书认可的退化）。
-- 自检：段 A 直接与宿主编译器对拍；段 B 用 `tools/no-host-init.mjs`（module.register 解析钩子）屏蔽两个包，子进程**整树自检** + 37 个工具注册形状**逐字比对**。CI 另有 `tools/check-standalone-import.mjs`（干净安装 import 回归；改回静态 import 必红）。
+- 自检：段 A 直接与宿主编译器对拍；段 B 用 `tools/no-host-init.mjs`（module.register 解析钩子）屏蔽两个包，子进程**整树自检** + 34 个工具注册形状**逐字比对**。CI 另有 `tools/check-standalone-import.mjs`（干净安装 import 回归；改回静态 import 必红）。
 
 ## 16b. `src/resolver-shim.mjs` —— 宿主解析器兜底（绕过 DSH rc.2 的 bug；2026-10-06）
 
@@ -245,7 +239,7 @@
 - **修法**：包一层 `Module._resolveFilename`——先原样调宿主那份；**只在它抛该特定 TypeError 时**兜底（去尾斜杠后是内置名 ⇒ 直接返回；否则退回 `_findPath`）。其余请求行为逐字不变。
 - ⚠️ 对宿主内部的 monkey-patch，属**临时手段**；DSH 修好后删除（history.md §4 待办有记）。
 
-## 17. 模块依赖与不变式
+## 16. 模块依赖与不变式
 
 - 模块间 import：`agentsmd.mjs → wsconfig.mjs`（版本读写）；`memory.mjs → protected.mjs`（保护判定）；`core.mjs` / `config.mjs → @deepseek-ai/dsh-home-paths`（官方数据根解析）；`webfetch.mjs` / `webget.mjs` **不依赖任何模块**（纯文本转换 / 自带公网抓取，index.js 组装）；`tool-def.mjs` 自解析宿主包（可缺省）；index.js 组装其余；`resolver-shim.mjs` 无导出、纯副作用（index.js 首条 import，必须早于其余全部）。
 - 记忆根定位（index.js `memoryRootFor`）：**就是** `<会话 cwd>/.whale-craft`；没有会话工作区 → `null`（无兜底目录、无 env/config 重定向 —— 2026-10-08 删掉旧的 `WHALE_CRAFT_MEMORY_DIR` 与 `config.memoryDir`）。

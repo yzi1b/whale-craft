@@ -1,7 +1,7 @@
-# 工具目录（37 个）
+# 工具目录（34 个）
 
 > 快照：**0.2.0**（开发中，未发布）。注册全部在 `index.js` 的 `apply()` 内（`ctx.tools.register(asTool({...}))`），
-> 分四段：`mc_*`（游戏内，30）/ `mc_kit_*`（游戏外辅助，4）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
+> 分四段：`mc_*`（游戏内，27）/ `mc_kit_*`（游戏外辅助，4）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
 > 可见性按模式分档（2026-10-04）：**MC模式** 只见 mc/mckit + 文件工具 + `job_*`/`goal_*`/`todo_write` + 宿主 `web_search` + 文件交付 `present`；**MC+模式** 全量可见（含 admin）；
 > **其他模式** 隐藏 mc_* / mc_kit_*（仅保留 `mc_admin_*`），另有 guard 硬拒兜底。
 > 🔴 **调试工具（`mc_debug_*`）另受「MC设置 → 调试」的 `exposeDebugTools` 开关门控**（2026-10-05）：关时在 MC/MC+ 也不暴露（白名单 / MC+ deny / guard 三处）。
@@ -20,7 +20,7 @@
 
 ---
 
-## 一、连接与会话（8）
+## 一、连接与会话（7）
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
@@ -29,13 +29,12 @@
 | `mc_ping` | **已知地址**的探路 | 发一次 STATUS ping（握手+状态请求），**不登录、不用账户、不进服**；参数只有 `address`（host[:port]，端口默认 25565）+ `timeoutMs`（默认 5s 上限 30s）；拿通不通/版本/协议号/MOTD/人数/延迟；错误说人话。**`subserver`/`port` 已删**（2026-10-05：地址自带端口；无子服概念） |
 | `mc_connect` | 进服（唯一连接入口） | 参数只有 `address`（host[:port]）+ `account`（innerID）。**不再有 `host/port/subserver/version`**；地址内部 `parseAddress`，握手 serverHost 就用该地址（DNS+Velocity 自行路由）；**版本永远自动探测**；版本不受支持（mineflayer 无该版本协议数据）→ **建连期间快速失败 + 明确版本错误**（不是"连接超时"；另有 spawn 后 `isVersionSupported` 兜底，复用 `src/mcversion.mjs`）；连接后等区块并**自动挂看门狗**；**返回 = `mc_status` 的内容** |
 | `mc_accounts` | 账户管理（会话内） | `list/search/refresh`（**`use` 已删**，2026-10-05）；`refresh` 走 `bot.authOnly`（只认证不连接），`innerID` 缺省用本会话选定/默认；返回值**永不含密码/token** |
-| `mc_disconnect` | 主动退服 | 经唯一的游戏会话关闭入口优雅 quit；看门狗、结构化队列和会话配置同步销毁；GameSession 投放一次结束提示词 |
-| `mc_stop` | 停本会话 | 直接进入唯一的 `closeGameSession()`；与状态条停止使用同一游戏会话关闭机制。 |
+| `mc_disconnect` | 主动退服 | 原 `mc_stop` 的现代实现改名而来：直接进入唯一的 `closeGameSession()`，优雅 quit；看门狗、结构化队列和会话配置同步销毁；GameSession 投放一次结束提示词 |
 | `mc_capabilities` | 能力/限制自述 | 报 plugin 版本、mineflayer testedVersions、超时上限、指令白名单等；不返回插件安装目录，配置路径用 `$DSH_HOME` 占位符或工作区相对路径 |
 
 > `mc_sessions` / `mc_diag` 已改名并移入「调试」（见 §七）。
 
-## 二、观察（8）
+## 二、观察（7）
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
@@ -46,13 +45,11 @@
 | `mc_scan` | 范围扫描 | 半径 ≤24、高 ≤16；25 类方块计数或按名搜索 |
 | `mc_entities` | 附近实体 | 半径默认 24，返回前 40 |
 | `mc_inventory` | 背包 | `held` 与 `items[]` 均为 `{name,count,slot?}` |
-| `mc_events` | 事件队列（拉） | `limit ≤100`、`waitSec ≤120`（阻塞等新事件，**只是兜底**）；被看门狗唤醒打断时返回 `interrupted:true` + `interruptReason` + "先别再 wait"提示；内部 `timeoutMs` 130s。⚠️ 被传送/捡物/上下线**不在这个队列**（只进看门狗留档） |
 
-## 三、看门狗控制（6）
+## 三、看门狗控制（5）
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
-| `mc_watch` | 看门狗只读状态面 | `action: status / log`；看门狗随游戏会话自动建立、关闭，不提供独立 arm/disarm；status 只回运行状态，`log` 返回 `{gameSessionId, armed, stats, recent}` |
 | `mc_watchdog_info` | 事件目录 | 总览或按 `事实名/修饰名` 查询；支持 `事实名/*` 与数组；顶层返回 `{markdown}` 对象并直接渲染 Markdown |
 | `mc_watchdog_global_settings` | 全局提醒配置 | 持久化 `minInterval` / `interruptLevel` / `minInterruptInterval` |
 | `mc_watchdog_config` | 三层配置 | 编辑/读取 base、scene、effective；base 落 `$DSH_HOME/whale_craft/watchdog.json`；返回 `gameSessionId`（无会话的 base 操作为 null） |
@@ -92,7 +89,7 @@
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
 | `mc_debug_sessions` | 列全部会话实例 | （原 `mc_sessions`）每会话独立性的直观证据 |
-| `mc_debug_diag` | 诊断快照 | （原 `mc_diag`）物理状态/控制位/收包统计/事件队列 + `promptInjection` |
+| `mc_debug_diag` | 诊断快照 | （原 `mc_diag`）物理状态/控制位/收包统计 + `promptInjection` |
 
 > 两者受「MC设置 → 调试」的 `exposeDebugTools` 开关门控（默认关）+ **只在 MC/MC+ 模式**暴露；其他模式一律摘掉。
 
@@ -106,7 +103,6 @@
 | 走路预算 | 40s（工具侧 ≤90s） |
 | 等区块 | 20s |
 | 飞行预算 | 20s（2500ms 无进展早停） |
-| `mc_events` 等待 | `waitSec ≤120` + 1 个轮询周期，内部兜底 130s |
 | `mc_sequence` 总预算 | 300s（DEFAULTS）/ 工具上限 570s |
 | 聊天历史 | 300 条 |
 
@@ -117,4 +113,4 @@
 - **`mc_kit_share`（及 `mc_map` 的 `share` 参数）已删除**（2026-09-16）：它只是在调宿主**另装**的 `dsh-file-host`，插件本身没有文件服务器。后来短暂用过 `present` + `mc_kit_express`，2026-11-08 起全部收束到宿主原生交付。自检里有"mc_kit_share / mc_kit_express 已移除 / 源码无文件服务器残留"的断言——老名字不要再出现。
 - ~~文件分享 2026-10-04 起是开关 / 2026-10-07 按宿主模式拆键~~：该功能已于 2026-11-08 整体移除；`PluginConfig.migrate()` 会删除所有 express 旧键。
 - **2026-10-08 网页抓取 `mc_kit_web_fetch`（新工具）**：宿主 `web_fetch` 在 MC 模式被我们关掉（preset 的 tool-web 只挂 search），这个补位。初版是「文本走宿主 `ctx.web` seam、图片走自己的下载器」；**当天用户定「全改成自己的可控逻辑，宿主的强关联就不要了」** ⇒ 文本与图片统一到 `src/webget.mjs`（唯一出网口；防 SSRF 规则照宿主但**更严**：tunnelling / 转换前缀按内嵌 IPv4 复核；不依赖 ipaddr.js）。收益：**一次请求**（按真实 Content-Type 判型，不用先试一次宿主）、不依赖宿主 `web` 服务、类型判定精确；代价：charset / 解压 / 分类 / 上限自己扛，且**没有代理支持**。HTML→markdown 仍用 `src/webfetch.mjs` 的轻量转换（**不引 turndown**：实测宿主对非 link 插件的 CJS 依赖树有解析 bug）。内置图片格式**不可配置**（用户：「只有内置的格式和未知的格式」）。参数另加 `reply` / `dist`（语义照 `mc_map`）。
-- **2026-11-15 看门狗配置面收口**：移除旧 `mc_config`；`mc_watch status` 不再返回旧 `wakeOn/nearRadius/mentionPatterns`。事件配置统一走 `mc_watchdog_config` / `mc_watchdog_global_settings` / `mc_watchdog_focus`。
+- **2026-11-16 旧事件面彻底移除**：删除 `mc_events`、`mc_watch`、旧 `sess.events` 队列、阻塞等待与 `interruptWait` 补丁；事件统一进入游戏会话绑定的 `WatchdogEngine`，由 `mc_watchdog_queue` 读取。删除旧 `mc_disconnect` 实现后，将现代 `mc_stop` 原位改名为唯一的 `mc_disconnect`。

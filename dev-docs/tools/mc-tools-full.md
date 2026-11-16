@@ -277,30 +277,15 @@ refresh 刷新某账户的登录状态，皮肤站会去认证服换新令牌。
 
 ### mc_disconnect
 
-> 临时使用，即将大幅变更。
-
 结束当前游戏会话。不影响其他会话；机器人连接、看门狗、结构化事件队列与会话内配置同步关闭，并由游戏会话管理器投放一次结束提示词。
 
-- reason: **string** 下线原因（写进日志）
+- reason: **string** 退出原因（写进日志，默认「AI 主动退出」）
 
 **返回**
 
 - online: **boolean** 固定为 false
 - gameSessionId: **string** 本次刚刚关闭的游戏会话 ID
-- quit: **object** `graceful`、`forced`、`ms`
-- watchdog: **string** 固定为 `已随游戏会话关闭`
-
-### mc_stop
-
-停止当前 Minecraft 游戏会话。机器人连接、看门狗、结构化事件队列与会话配置会同步关闭，并立即插入游戏会话结束提示词。
-
-- reason: **string** 原因（写进日志，默认「AI 主动下线」）
-
-**返回**
-
-- online: **boolean** 固定为 false
-- gameSessionId: **string** 本次刚刚关闭的游戏会话 ID
-- quit: **object | null** 下线结果
+- quit: **object | null** `graceful`、`forced`、`ms`
 - watchdog: **string** 固定为 `已随游戏会话关闭`
 
 **错误**
@@ -1265,11 +1250,11 @@ mode：
 **返回**
 
 - note: **string** 固定说明事件按会话隔离
-- sessions: **array<object>** 每项含 `agentId`、`online`、`sub`、`mode`、`connection`、`pendingEvents`、`watching`
+- sessions: **array<object>** 每项含 `agentId`、`online`、`sub`、`mode`、`connection`、`watching`
 
 ### mc_debug_diag
 
-【调试】诊断：当前会话的机器人内部状态（物理 / 控制位 / 收包 / 事件队列）——排查"走不动 / 收不到消息"用。同时报**提示词注入状态**（`promptInjection`：三段提示词各自会不会注入、为什么不会）。
+【调试】诊断：当前会话的机器人内部状态（物理 / 控制位 / 收包）——排查"走不动 / 收不到消息"用。同时报**提示词注入状态**（`promptInjection`：三段提示词各自会不会注入、为什么不会）。
 
 （无参数）
 
@@ -1291,7 +1276,6 @@ mode：
 - velocity: **object** 无损化后的速度向量
 - onGround / inWater: **boolean**
 - position: **object** 整数坐标
-- pendingEvents: **number**
 - mode: **string**
 - stats / connection: **object**
 - watching: **object | null** 看门狗状态

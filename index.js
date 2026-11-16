@@ -5,13 +5,13 @@
  *
  *  1. 原生工具：mc_status / mc_say / mc_move / mc_map / mc_dig / ... 直接注册进
  *     ctx.tools（所有会话可见），不再依赖 @deepseek-ai/dsh-mcp-client。
- *  2. 🔴 **每会话独立实例**：每个 agent（会话）有自己的 McBot + 事件队列 + 看门狗。
+ *  2. 🔴 **每会话独立实例**：每个 agent（会话）有自己的 McBot；每个游戏会话独占结构化事件队列与看门狗。
  *     不同会话可以连不同服务器、用不同账号，互不干扰。
  *     同一个会话内只能有一个 bot 实例（一个游戏角色）。
  *  3. 🔴 **连接参数工具化**：服务器地址/端口/登录凭据/子服 全部由 mc_connect 工具
  *     运行时传参，AI 根据用户指令或记忆文件决定连哪里。Config 里不再有硬编码的
  *     服务器/凭据（0.1 时代的遗留 fallback 字段已于 2026-10-02 清理）。
- *  4. 游戏内事件唤醒**只有一条通道**：`mc_watch` 看门狗用插件提示行唤醒**同一个会话**；
+ *  4. 游戏内事件唤醒**只有一条通道**：游戏会话绑定的看门狗用插件提示行唤醒**同一个会话**；
  *     游戏会话结束提示则只由 `GameSessionState.close()` 投放。本插件不存在跨会话唤醒。
  *
  * 机器人核心在 ./src/core.mjs（不依赖 DSH，可独立测试）。
@@ -50,7 +50,6 @@ import { statusPing, parseAddress, formatAddress, flattenMotd } from './src/ping
 import { isVersionSupported } from './src/mcversion.mjs'
 import { ServerHistory } from './src/serverhistory.mjs'
 import { buildConnectPrompt } from './src/connect-prompt.mjs'
-import { waitForEvents } from './src/wait.mjs'
 import { GameSessionState } from './src/game-session.ts'
 import { WatchdogEngine } from './src/watchdog-engine.ts'
 import { WatchdogConfigStore, editWatchdogLayer } from './src/watchdog-config.ts'
@@ -179,26 +178,10 @@ class McSession {
     //    （装进 node_modules 后可能是只读的，升级时也会被覆盖）——与日志同一条理由。
     this.bot = new McBot({ instanceId: agentId, ...(lockDir ? { lockDir } : {}) })
     this.mode = 'standby'           // standby / active / sleep
-    this.events = []                // 未消费的 MC 事件
-    this.maxEvents = 200
     this.gameSession = null         // 成功进服后原子建立；唯一持有看门狗、结构化引擎与会话配置
     this._closingGameSession = null
     this.selectedAccount = null     // 本会话选定的账户 innerID（mc_accounts{action:"use"}）
-    // 「正在等待」被打断的标记（看门狗要唤醒 AI 时置位）——见 src/wait.mjs 的文件头说明：
-    // 宿主把 steer 放在下一个 step 边界投递，而 step 边界要等当前工具返回 ⇒
-    // 一个 mc_events{waitSec} 就能把唤醒拖到最后。这个标记让等待提前收工。
-    this.waitInterruptedAt = 0
-    this.waitInterruptReason = null
     this._wired = false
-  }
-
-  /**
-   * 打断本会话正在进行的 `mc_events {waitSec}` 等待（看门狗注入前调用）。
-   * 只置一个标记：等待循环每 250ms 看一眼，见到就立刻返回（工具一返回，step 结束，唤醒文案当场投出去）。
-   */
-  interruptWait(reason = null) {
-    this.waitInterruptedAt = Date.now()
-    this.waitInterruptReason = reason ? String(reason) : null
   }
 
   /* ── 事件绑定（懒绑：首次使用时才 wire，避免未连接的 bot 产生无意义事件）── */
@@ -210,18 +193,13 @@ class McSession {
 
     this.bot.on('log', (line) => pluginCtx.logger?.info?.(`[${self.agentId}] ${line}`))
     this.bot.on('spawn', (e) => {
-      self.#pushEvent('lifecycle', `已上线 ${e.sub} @ ${JSON.stringify(e.position)}`)
       self.observeWatchdog('connection.spawn', { sub: e.sub ?? '', gameMode: e.gamemode ?? '', position: e.position ?? null, isReconnect: true })
     })
     this.bot.on('death', (e) => {
-      self.#pushEvent('lifecycle', `我死了 @ ${JSON.stringify(e.position)}`)
       self.observeWatchdog('self.death', { message: '我死了', position: e.position ?? null, allowRespawn: true })
     })
-    this.bot.on('reconnect', (e) => self.#pushEvent('lifecycle', `已重连 ${e.sub}`))
-    // 🔴 断线也要进事件队列（2026-09-19）：`mc_events` 里看得见，AI 才不会以为"一直在线"。
     this.bot.on('offline', (e) => {
       if (e?.current === false) return
-      self.#pushEvent('lifecycle', `连接断开：${e?.reason ?? '连接结束'}${e?.willReconnect ? '（正在自动重连）' : '（不会自动重连）'}`)
       self.observeWatchdog('connection.disconnect', { sub: self.bot.sub ?? '', reason: String(e?.reason ?? '连接结束'), willReconnect: Boolean(e?.willReconnect), at: Number(e?.at ?? Date.now()) })
       if (!e?.willReconnect && self.gameSession?.active) {
         const reason = String(e?.reason ?? '连接结束')
@@ -239,7 +217,6 @@ class McSession {
       }
     })
     const observeChat = ({ who, text }, isSelf = false) => {
-      self.#pushEvent('chat', `<${who}> ${text}`, { who })
       const raw = self.bot.bot
       const me = raw?.entity?.position
       const them = raw?.players?.[who]?.entity?.position
@@ -248,9 +225,8 @@ class McSession {
     }
     this.bot.on('chat', (event) => observeChat(event, false))
     this.bot.on('selfChat', (event) => observeChat(event, true))
-    this.bot.on('system', ({ text }) => { self.#pushEvent('system', text); self.observeWatchdog('message.system', { content: text }) })
+    this.bot.on('system', ({ text }) => self.observeWatchdog('message.system', { content: text }))
     this.bot.on('damage', (e) => {
-      self.#pushEvent('damage', `血量降到 ${e.health} @ ${JSON.stringify(e.position)}`)
       self.observeWatchdog('self.damage', { damage: Number(e.damage ?? 0), type: e.type ?? null, source: e.source ?? null, health: Number(e.health), position: e.position ?? null })
     })
     this.bot.on('teleport', (e) => self.observeWatchdog('self.teleport', e))
@@ -262,7 +238,6 @@ class McSession {
 
   async destroy() {
     try { await this.closeGameSession('运行实例关闭', { kind: 'runtime-shutdown' }) } catch {}
-    this.events = []
   }
 
   get watchdog() { return this.gameSession?.watchdog ?? null }
@@ -312,24 +287,6 @@ class McSession {
     try { return await closing } finally { if (this._closingGameSession === closing) this._closingGameSession = null }
   }
 
-  /* ── 事件队列 ── */
-
-  #pushEvent(kind, text, extra = {}) {
-    this.events.push({ at: Date.now(), kind, text, ...extra })
-    if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents)
-  }
-
-  drainEvents(limit = 20, kind = null) {
-    const taken = []
-    const rest = []
-    for (const e of this.events) {
-      if (taken.length < limit && (!kind || e.kind === kind)) taken.push(e)
-      else rest.push(e)
-    }
-    this.events = rest
-    return taken
-  }
-
   observeWatchdog(name, content, context = {}) {
     try { return this.watchdogEngine?.observe(name, content, context) ?? null } catch { return null }
   }
@@ -345,7 +302,6 @@ class McSession {
       reconnecting: Boolean(this.bot.reconnecting || this.bot.reconnectPending),
       sub: this.bot.sub,
       connection: this.bot.connectionView(),
-      pendingEvents: this.events.length,
       watch: this.watchdog?.status() ?? null,
     }
   }
@@ -410,7 +366,6 @@ class McRegistry {
       sub: sess.bot.sub,
       mode: sess.mode,
       connection: sess.bot.connectionView(),
-      pendingEvents: sess.events.length,
       watching: sess.watchdog?.status() ?? null,
     }))
   }
@@ -1280,7 +1235,7 @@ export function apply(ctx, rawConfig) {
     /* ── 「连接到MC」弹窗点「连接」/ 局域网行：**注入提示词 + 让该会话跑一轮** ──────────
      * 🔴 这里**只注入、不真连**：真正的连接由 LLM 去调 `mc_connect` 完成（用户 2026-10-04 定）。
      * 🔴 注入走**插件提示行**（`source.kind='plugin:whale_craft'`），**绝不冒充用户发言**；
-     *    唤醒范式照抄看门狗（先 interruptWait，再 steer——空闲起一轮、运行中插话）。
+     *    唤醒范式照抄看门狗（steer：空闲起一轮、运行中插话）。
      * 历史只记**手动输入**的地址（`via!=='lan'`）；局域网直连不记。 */
     if (req.method === 'POST' && path === '/api/mc/connect') {
       const body = await readJsonBody(req)
@@ -1297,8 +1252,6 @@ export function apply(ctx, rawConfig) {
       const asUser = body.asUser === true
       const text = buildConnectPrompt({ address, account: accountLabel, via })
       if (via !== 'lan') serverHistory.record(address)
-      // 唤醒范式（照抄 src/watchdog.ts）：先打断可能的 mc_events 等待，再 steer
-      try { registry.peek(sessionId)?.interruptWait?.('connect') } catch { /* 没在等就算了 */ }
       /**
        * 🔴 **新对话页**（`asUser:true`）：插件提示行在新会话里不灵（实测）⇒ **模拟玩家发言**：
        *    来源 `kind:'user'`、正文前加 `[system] `。**对话中**仍走插件提示行（`plugin:whale_craft` + notice）。
@@ -1554,7 +1507,6 @@ export function apply(ctx, rawConfig) {
       }
       return false
     }
-    try { sess.interruptWait('game-session-close') } catch {}
     if (notice.delivery === 'wake' && typeof agent.steer === 'function') {
       try {
         agent.steer(message)
@@ -1787,8 +1739,8 @@ export function apply(ctx, rawConfig) {
   }))
 
   ctx.tools.register(asTool({
-    name: 'mc_stop',
-    description: '停止当前 Minecraft 游戏会话。机器人连接、看门狗、结构化事件队列与会话配置会同步关闭，并立即插入游戏会话结束提示词。',
+    name: 'mc_disconnect',
+    description: '结束当前 Minecraft 游戏会话。机器人连接、看门狗、结构化事件队列与会话配置会同步关闭，并立即插入游戏会话结束提示词。',
     parameters: {
       reason: { type: 'string', description: '原因（写进日志）' },
     },
@@ -1796,22 +1748,8 @@ export function apply(ctx, rawConfig) {
     async execute(args, exec) {
       const sess = getSession(exec)
       if (!sess.gameSession?.active) throw new Error('当前没有游戏会话')
-      const reason = args.reason ? String(args.reason) : 'AI 主动停止'
-      const closed = await sess.closeGameSession(reason, { kind: 'assistant-stop' })
-      return { online: false, gameSessionId: closed.gameSessionId, quit: closed.quit, watchdog: '已随游戏会话关闭' }
-    },
-  }))
-
-  ctx.tools.register(asTool({
-    name: 'mc_disconnect',
-    description: '结束当前 Minecraft 游戏会话。机器人连接、看门狗、结构化事件队列与会话配置会同步关闭。',
-    parameters: { reason: { type: 'string' } },
-    output: text(),
-    async execute(args, exec) {
-      const sess = getSession(exec)
-      const why = args.reason ? String(args.reason) : 'agent 主动下线'
-      if (!sess.gameSession?.active) throw new Error('当前没有游戏会话')
-      const closed = await sess.closeGameSession(why, { kind: 'assistant-disconnect' })
+      const reason = args.reason ? String(args.reason) : 'AI 主动退出'
+      const closed = await sess.closeGameSession(reason, { kind: 'assistant-disconnect' })
       return { online: false, gameSessionId: closed.gameSessionId, quit: closed.quit, watchdog: '已随游戏会话关闭' }
     },
   }))
@@ -1826,25 +1764,6 @@ export function apply(ctx, rawConfig) {
     async execute(args, exec) {
       const sess = getSession(exec)
       return { sent: sess.bot.chatSay(String(args.message)) }
-    },
-  }))
-
-  ctx.tools.register(asTool({
-    name: 'mc_watch',
-    description: '读取当前游戏会话看门狗的运行状态或最近事件留档。看门狗与游戏会话一对一强绑定，不能单独启动或关闭。',
-    parameters: {
-      action: { type: 'string', description: 'status（默认）/ log' },
-    },
-    output: text(),
-    async execute(args, exec) {
-      const sess = getSession(exec)
-      const action = String(args.action ?? 'status')
-      if (action !== 'status' && action !== 'log') throw new Error(`未知 action："${action}"（可用 status/log）`)
-      if (action === 'status' && !sess.gameSession?.active) return { active: false, gameSessionId: null }
-      const gameSession = requireGameSession(sess)
-      const wd = gameSession.watchdog
-      if (action === 'log') return { gameSessionId: gameSession.id, armed: wd.armed, stats: { ...wd.stats }, recent: wd.log.slice(-30) }
-      return { gameSessionId: gameSession.id, ...wd.status() }
     },
   }))
 
@@ -2078,61 +1997,8 @@ export function apply(ctx, rawConfig) {
     output: text(),
     async execute() {
       return {
-        note: '每会话独立实例；事件只经 mc_watch 回各自会话。',
+        note: '每个游戏会话独占看门狗与结构化事件队列。',
         sessions: registry.listSessions(),
-      }
-    },
-  }))
-
-  ctx.tools.register(asTool({
-    name: 'mc_events',
-    description: '读取/消费当前会话的 MC 事件队列（**看门狗记下来的**：聊天、系统消息、受伤、上线/死亡/重连/断线）。'
-      + '默认消费掉；`peek=true` 只看不清。\n'
-      + '⚠️ **被传送 / 捡物 / 其他玩家上下线不在这里**（那些只在看门狗的留档里，用 `mc_watch {action:"log"}` 看）。\n'
-      + '⚠️ `waitSec` 是**兜底**，别用它长时间空等：有人叫你（mention）/ 受击 / 死亡 / 断线时，'
-      + '**看门狗会主动叫醒你**，而且**会打断这个等待**（返回里 `interrupted:true` 就是在告诉你"有人找你了，'
-      + '唤醒内容马上会作为提示注入进来"）。真需要盯着某一类事件时才给 waitSec（建议 ≤30）。',
-    parameters: {
-      limit: { type: 'number', description: '最多取几条（默认 20）' },
-      kind: { type: 'string', description: '只看某类：chat / system / damage / lifecycle' },
-      peek: { type: 'boolean', description: 'true=只看不消费' },
-      waitSec: { type: 'number', description: '先等最多几秒（默认 0=不等，上限 120）。⚠️ 会被看门狗唤醒打断，别长等' },
-    },
-    output: text(),
-    timeoutMs: 130_000,
-    async execute(args, exec) {
-      const sess = getSession(exec)
-      const limit = Math.min(Math.max(Number(args.limit ?? 20), 1), 100)
-      const kind = args.kind ? String(args.kind) : null
-
-      // 可选阻塞等待（吸收原 mc_wait）。⚠️ 等待逻辑在 src/wait.mjs：**看门狗唤醒会打断它**
-      //    —— 否则 steer 注入要等这个工具跑完（2026-09-19 真机：用户空等特别久）。
-      const waitSec = Math.min(Math.max(Number(args.waitSec ?? 0), 0), 120)
-      let waitedMs = 0
-      let interrupted = false
-      let interruptReason = null
-      if (waitSec > 0) {
-        const r = await waitForEvents({
-          sess, from: sess.events.length, kind, waitSec, signal: exec?.signal ?? null,
-        })
-        waitedMs = r.waitedMs
-        interrupted = r.interrupted
-        interruptReason = r.reason
-      }
-
-      const list = args.peek
-        ? sess.events.filter((e) => !kind || e.kind === kind).slice(-limit)
-        : sess.drainEvents(limit, kind)
-      return {
-        waitedMs, count: list.length, events: list,
-        ...(interrupted
-          ? {
-              interrupted: true,
-              interruptReason,
-              hint: '等待被打断：看门狗命中唤醒条件（有人叫你 / 受击 / 死亡 / 断线…），'
-                + '唤醒内容马上会作为提示注入——**先别急着再 wait**，等那条提示进来（或直接看上面的 events）。',
-            }
-          : {}),
       }
     },
   }))
@@ -4064,7 +3930,7 @@ export function apply(ctx, rawConfig) {
 
   ctx.tools.register(asTool({
     name: 'mc_debug_diag',
-    description: '【调试】诊断：当前会话的机器人内部状态（物理/控制位/收包/事件队列）——排查"走不动/收不到消息"用。'
+    description: '【调试】诊断：当前会话的机器人内部状态（物理/控制位/收包）——排查"走不动/收不到消息"用。'
       + '同时报**提示词注入状态**（`promptInjection`：三段提示词各自会不会注入、为什么不会）。',
     parameters: {},
     output: text(),
@@ -4078,7 +3944,7 @@ export function apply(ctx, rawConfig) {
         controlState: { forward: b.controlState?.forward, jump: b.controlState?.jump, sneak: b.controlState?.sneak },
         velocity: b.entity.velocity, onGround: b.entity.onGround, inWater: b.entity.isInWater,
         position: { x: Math.floor(b.entity.position.x), y: Math.floor(b.entity.position.y), z: Math.floor(b.entity.position.z) },
-        pendingEvents: sess.events.length, mode: sess.mode, stats: sess.bot.stats,
+        mode: sess.mode, stats: sess.bot.stats,
         connection: sess.bot.connectionView(),
         watching: sess.watchdog?.status() ?? null,
         promptInjection: injection,
