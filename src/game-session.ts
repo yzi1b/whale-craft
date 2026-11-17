@@ -8,6 +8,7 @@ export interface GameSessionWatchdog {
   armed: boolean
   disarm: (reason?: string, options?: { fromJob?: boolean }) => unknown
   status: () => Record<string, unknown>
+  wait: (ms: number, signal?: AbortSignal | null) => Promise<{ waitedMs: number, interrupted: boolean, reason: string | null }>
 }
 
 export interface GameSessionWatchdogEngine {

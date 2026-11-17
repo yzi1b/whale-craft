@@ -172,7 +172,7 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   const idx = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
   console.log(`  ${!tools.has('mc_kit_share') ? '✅' : '❌'} 🔴 mc_kit_share 已移除（它只是在调宿主**另装**的 dsh-file-host，插件本身没有文件服务器）`)
   console.log(`  ${!tools.has('mc_kit_express') ? '✅' : '❌'} 🔴 mc_kit_express 已移除（文件分享整体撤下，图片走回复内嵌）`)
-  console.log(`  ${tools.size === 34 ? '✅' : '❌'} 工具数 34（实际 ${tools.size}）：mc_* 27 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 2`)
+  console.log(`  ${tools.size === 35 ? '✅' : '❌'} 工具数 35（实际 ${tools.size}）：mc_* 28 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 2`)
   console.log(`  ${!tools.has('mc_config') ? '✅' : '❌'} 🔴 旧配置工具 mc_config 已移除（只保留 mc_watchdog_* 配置面）`)
   // 只看**代码**，不看注释：注释里留着"为什么删"的说明（那是要留的）
   const codeOnly = idx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
@@ -332,7 +332,7 @@ console.log('\n--- 看门狗 v2 ---')
   const { readFileSync: readWatchdogSource, existsSync: oldWaitExists } = await import('node:fs')
   const watchdogSource = readWatchdogSource(new URL('./src/watchdog.ts', import.meta.url), 'utf8')
   console.log(`  ${/watchdogEngine\?\.config\['harness\.heartbeat'\]/.test(watchdogSource) ? '✅' : '❌'} 看门狗挂载日志读取事件引擎心跳配置`)
-  console.log(`  ${!oldWaitExists(new URL('./src/wait.mjs', import.meta.url)) && !/interruptWait|waitForEvents/.test(watchdogSource) ? '✅' : '❌'} 旧阻塞事件等待与打断补丁已彻底删除`)
+  console.log(`  ${!oldWaitExists(new URL('./src/wait.mjs', import.meta.url)) && !/waitForEvents|sess\.events/.test(watchdogSource) ? '✅' : '❌'} 旧事件队列阻塞等待已删除；现代等待只绑定 Watchdog`)
 
   // base 是全局持久配置，不依赖具体游戏会话；非法项仍要清晰报错。
   try {
@@ -2765,7 +2765,7 @@ console.log('\n--- 结构不变量：旧事件队列彻底移除 ---')
   const wdSrc = readFileSync(fileURLToPath(new URL('./src/watchdog.ts', import.meta.url)), 'utf8')
   const idxSrc = readFileSync(fileURLToPath(new URL('./index.js', import.meta.url)), 'utf8')
 
-  console.log(`  ${!/this\.events|sess\.events|#pushEvent|drainEvents|waitForEvents|interruptWait/.test(idxSrc + wdSrc) ? '✅' : '❌'} 生产代码无旧 sess.events 队列及等待补丁`)
+  console.log(`  ${!/this\.events|sess\.events|#pushEvent|drainEvents|waitForEvents/.test(idxSrc + wdSrc) ? '✅' : '❌'} 生产代码无旧 sess.events 队列及其阻塞等待`)
   console.log(`  ${/watchdogEngine\?\.observe/.test(idxSrc) && /watchdogEngine\.read/.test(idxSrc) ? '✅' : '❌'} 事件只写入并读取游戏会话的 WatchdogEngine`)
 }
 
@@ -3928,6 +3928,16 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
 
   const { Watchdog } = await import('./src/watchdog.ts')
   const watchdog = new Watchdog({ ctx: fakeCtx, sess: { bot: {} }, agent: { id: 'stats', steer: () => {} } })
+  const pendingWait = watchdog.wait(2_000)
+  const interruptedCount = watchdog.interruptWait('看门狗事件：message.chat')
+  const interruptedWait = await pendingWait
+  const beforeNoticeStatus = watchdog.status()
+  console.log(`  ${interruptedCount === 1 && interruptedWait.interrupted && interruptedWait.reason === '看门狗事件：message.chat' && beforeNoticeStatus.lastWakeAt === null ? '✅' : '❌'} mc_watchdog_wait 可被提醒结束，且单独结束等待不改提醒/打断冷却状态`)
+  const abortWait = new AbortController()
+  const abortedPromise = watchdog.wait(2_000, abortWait.signal).then(() => null, (error) => error)
+  abortWait.abort('自检停止')
+  const abortedWait = await abortedPromise
+  console.log(`  ${abortedWait?.mcAborted === true ? '✅' : '❌'} mc_watchdog_wait 响应 exec.signal，用户停止立即结算`)
   watchdog.notifyEvent({ name: 'self.teleport', content: {}, modifiers: {}, timestamp: Date.now() }, 1, { minInterval: 5_000 })
   const watchdogStatus = watchdog.status()
   console.log(`  ${watchdogStatus.lastWakeAt !== null && watchdogStatus.lastWakeKind === 'self.teleport' && watchdogStatus.stats.fired === 1 && watchdogStatus.stats.injected === 1 ? '✅' : '❌'} 新版提醒更新 lastWakeAt/lastWakeKind/fired/injected`)

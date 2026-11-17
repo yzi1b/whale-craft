@@ -63,6 +63,17 @@ interface PendingNotice {
   count: number
 }
 
+export interface WatchdogWaitResult {
+  waitedMs: number
+  interrupted: boolean
+  reason: string | null
+}
+
+interface PendingWait {
+  startedAt: number
+  settle: (result: WatchdogWaitResult) => void
+}
+
 interface LogEntry {
   at: number
   kind: string
@@ -93,6 +104,7 @@ export class Watchdog {
   private pendingNotice: PendingNotice | null = null
   private notifyTimer: NodeJS.Timeout | null = null
   private resolveJob: ((result: JobResult) => void) | null = null
+  private readonly pendingWaits = new Set<PendingWait>()
 
   constructor ({ ctx, sess, agent = null, promptSignal = null, tickMs = 1000, onCancel = null }: WatchdogOptions) {
     this.ctx = ctx
@@ -137,7 +149,59 @@ export class Watchdog {
     this.sendEvent(event, pendingCount)
   }
 
+  wait (ms: number, signal: AbortSignal | null = null): Promise<WatchdogWaitResult> {
+    const startedAt = Date.now()
+    if (ms === 0) return Promise.resolve({ waitedMs: 0, interrupted: false, reason: null })
+    return new Promise((resolve, reject) => {
+      let timer: NodeJS.Timeout | null = null
+      let remaining = ms
+      let lastTickAt = startedAt
+      const pending: PendingWait = {
+        startedAt,
+        settle: (result) => finish(() => resolve(result)),
+      }
+      const finish = (settle: () => void): void => {
+        if (!this.pendingWaits.delete(pending)) return
+        if (timer) clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        settle()
+      }
+      const onAbort = (): void => {
+        const error = new Error('看门狗等待被中断（用户停止 / 会话取消）') as Error & { mcAborted?: boolean, reason?: unknown }
+        error.mcAborted = true
+        try { error.reason = signal?.reason } catch {}
+        finish(() => reject(error))
+      }
+      const schedule = (): void => {
+        const delay = Math.min(remaining, 2_147_483_647)
+        timer = setTimeout(() => {
+          const now = Date.now()
+          remaining -= Math.max(0, now - lastTickAt)
+          lastTickAt = now
+          if (remaining > 0) schedule()
+          else pending.settle({ waitedMs: now - startedAt, interrupted: false, reason: null })
+        }, delay)
+      }
+      this.pendingWaits.add(pending)
+      if (signal?.aborted) onAbort()
+      else {
+        signal?.addEventListener('abort', onAbort, { once: true })
+        schedule()
+      }
+    })
+  }
+
+  interruptWait (reason = '看门狗提醒'): number {
+    const pending = [...this.pendingWaits]
+    const now = Date.now()
+    for (const wait of pending) {
+      wait.settle({ waitedMs: now - wait.startedAt, interrupted: true, reason })
+    }
+    return pending.length
+  }
+
   private sendEvent (event: WatchdogEvent, pendingCount: number): void {
+    this.interruptWait(`看门狗事件：${event.name}`)
     const extra = pendingCount > 1 ? `；另有 ${pendingCount - 1} 个事件一并到达` : ''
     this.inject(`【MC 看门狗｜${event.name}】${JSON.stringify(event.content)}${extra}\n请读取 mc_watchdog_queue 检查完整事件队列。`, event.name)
     const now = Date.now()
@@ -180,6 +244,7 @@ export class Watchdog {
   private teardown (reason: string): void {
     if (!this.armed) return
     this.armed = false
+    this.interruptWait(`游戏会话结束：${reason}`)
     if (this.tickTimer) { clearInterval(this.tickTimer); this.tickTimer = null }
     if (this.notifyTimer) { clearTimeout(this.notifyTimer); this.notifyTimer = null }
     this.pendingNotice = null

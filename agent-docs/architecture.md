@@ -86,8 +86,9 @@ DSH host 进程
 
 1. `McSession.ensureWired()` 把事实交给唯一的 `WatchdogEngine.observe()`；引擎按 `src/watchdog-catalog.ts` 的事件和修饰器配置决定记录、延迟与唤醒；
 2. 延迟事件由 `WatchdogEngine.tick()` 冲刷；命中唤醒后交给 `Watchdog.notifyEvent()`，再按全局 `minInterval` 合并相邻提醒；
-3. 优先 `agent.steer(userMessage(...))`（运行中 = 下一步插话；空闲 = 起一轮 = 唤醒）；`steer` 不可用时兜底 `sessionController.prompt({mode:'steer'}, promptSignal)` —— **promptSignal 必传**（`sessionController.prompt` 是 @Remote 签名，不传会 `throwIfAborted` 炸）；
-4. 注入被 `gate` 检查：**不在 MC 模式只记账不注入**（drop）。
+3. 若当前工具是 `mc_watchdog_wait`，先由 `Watchdog.interruptWait()` 结算等待、释放 step 边界；这一步不受 `interruptLevel` 限制，也不读写打断冷却；
+4. 优先 `agent.steer(userMessage(...))`（运行中 = 下一步插话；空闲 = 起一轮 = 唤醒）；`steer` 不可用时兜底 `sessionController.prompt({mode:'steer'}, promptSignal)` —— **promptSignal 必传**（`sessionController.prompt` 是 @Remote 签名，不传会 `throwIfAborted` 炸）；
+5. 注入被 `gate` 检查：**不在 MC 模式只记账不注入**（drop）。
 
 - 看门狗挂宿主 job（`jobs.start({kind:'mc-watch', label:'MC 看门狗（整局存活）', owner:agent, run})`）：job 存活期=整局游戏；`disarm` 幂等结算（`#settleJob`）。宿主 kill job 时 `cancel` 也必须进入 `closeGameSession()`，不得只关看门狗。
 - 断线由会话层观察并交给事件引擎；`willReconnect=false` 时上层关闭整个游戏会话，看门狗随之关闭，并由 `GameSessionState.close()` 按被踢、连接异常或重连耗尽类型投放一次结束提示词。

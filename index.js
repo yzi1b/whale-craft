@@ -1924,6 +1924,24 @@ export function apply(ctx, rawConfig) {
   }))
 
   ctx.tools.register(asTool({
+    name: 'mc_watchdog_wait',
+    description: '等待指定毫秒数后继续当前回合；等待期间若看门狗发出提醒，会先结束本工具，再注入提醒。'
+      + '本等待始终可被看门狗结束，不受 interruptLevel 限制，也不读写看门狗的打断冷却。',
+    parameters: {
+      ms: { type: 'number', required: true, description: '等待时间（毫秒），必须是 ≥0 的有限数' },
+    },
+    output: text(),
+    async execute(args, exec) {
+      const sess = getSession(exec)
+      const gameSession = requireGameSession(sess)
+      const ms = Number(args.ms)
+      if (!Number.isFinite(ms) || ms < 0) throw new Error('ms 必须是大于等于 0 的有限数')
+      const result = await gameSession.watchdog.wait(ms, exec?.signal)
+      return { gameSessionId: gameSession.id, ...result }
+    },
+  }))
+
+  ctx.tools.register(asTool({
     name: 'mc_capabilities',
     description: '【边界信息】这个插件能做什么、边界在哪：**支持的 MC 版本范围**（testedVersions）、底层 mineflayer 版本、'
       + '支持的登录方式、工具命名空间、各种上限（序列步数/记忆大小/事件队列）以及当前配置要点。\n'

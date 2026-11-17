@@ -1,7 +1,7 @@
-# 工具目录（34 个）
+# 工具目录（35 个）
 
 > 快照：**0.2.0**（开发中，未发布）。注册全部在 `index.js` 的 `apply()` 内（`ctx.tools.register(asTool({...}))`），
-> 分四段：`mc_*`（游戏内，27）/ `mc_kit_*`（游戏外辅助，4）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
+> 分四段：`mc_*`（游戏内，28）/ `mc_kit_*`（游戏外辅助，4）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
 > 可见性按模式分档（2026-10-04）：**MC模式** 只见 mc/mckit + 文件工具 + `job_*`/`goal_*`/`todo_write` + 宿主 `web_search` + 文件交付 `present`；**MC+模式** 全量可见（含 admin）；
 > **其他模式** 隐藏 mc_* / mc_kit_*（仅保留 `mc_admin_*`），另有 guard 硬拒兜底。
 > 🔴 **调试工具（`mc_debug_*`）另受「MC设置 → 调试」的 `exposeDebugTools` 开关门控**（2026-10-05）：关时在 MC/MC+ 也不暴露（白名单 / MC+ deny / guard 三处）。
@@ -46,7 +46,7 @@
 | `mc_entities` | 附近实体 | 半径默认 24，返回前 40 |
 | `mc_inventory` | 背包 | `held` 与 `items[]` 均为 `{name,count,slot?}` |
 
-## 三、看门狗控制（5）
+## 三、看门狗控制（6）
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
@@ -55,6 +55,7 @@
 | `mc_watchdog_config` | 三层配置 | 编辑/读取 base、scene、effective；base 落 `$DSH_HOME/whale_craft/watchdog.json`；返回 `gameSessionId`（无会话的 base 操作为 null） |
 | `mc_watchdog_focus` | 注意配置 | 会话内 list/edit/read/remove；remove 单项同时接受 `name` 与 `names`；支持敏感/钝感合并；返回 `gameSessionId` |
 | `mc_watchdog_queue` | 结构化事件队列 | 与游戏会话同寿命；读取时本地化时间，可精简修饰按“事实+修饰+载荷”只留首次，不可精简修饰全部保留；返回 `gameSessionId` |
+| `mc_watchdog_wait` | 可打断定时等待 | 等满后继续当前回合；看门狗提醒会先结束等待再注入，不受 `interruptLevel` 限制且不改打断冷却；用户停止与游戏会话关闭也会立即结算 |
 
 ## 四、交互与动作（8）
 
