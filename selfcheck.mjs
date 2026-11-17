@@ -272,7 +272,7 @@ console.log('\n--- 看门狗 v2 ---')
   // scene/effective/focus 都属于游戏会话；离线时不得预建或跨局残留。
   const sceneWithoutGame = await tools.get('mc_watchdog_config').execute({
     action: 'edit', type: 'scene', merge: false,
-    config: { 'self.pickup': { wake: true }, 'message.chat/nearby': { distance: 20 } },
+    config: { 'self.pickup': { wake: true, includeData: true }, 'message.chat/nearby': { distance: 20 } },
   }, A).then(() => null, (error) => error.message)
   const focusWithoutGame = await tools.get('mc_watchdog_focus').execute({ action: 'list' }, A).then(() => null, (error) => error.message)
   console.log(`  ${/当前没有游戏会话/.test(String(sceneWithoutGame)) && /当前没有游戏会话/.test(String(focusWithoutGame)) ? '✅' : '❌'} scene/effective/focus 不能脱离游戏会话存在`)
@@ -815,26 +815,21 @@ console.log('\n--- 聊天识别（未签名 system_chat 也要算玩家说话）
   const pushedMoves = []
   const fallStarts = []
   const fallEnds = []
-  const pickups = []
-  let forcedInventory = []
   const forcedBot = new McBot({ instanceId: 'sc-forced-' + Math.random().toString(36).slice(2, 7) })
   const forcedRaw = new EventEmitter()
   forcedRaw.entity = { position: { x: 10, y: 64, z: 10 } }
   forcedRaw.players = {}
-  forcedRaw.inventory = { items: () => forcedInventory }
   forcedRaw.controlState = {}
   forcedBot.bot = forcedRaw
   forcedBot.on('teleport', (event) => forcedMoves.push(event))
   forcedBot.on('pushed', (event) => pushedMoves.push(event))
   forcedBot.on('fallStart', (event) => fallStarts.push(event))
   forcedBot.on('fallEnd', (event) => fallEnds.push(event))
-  forcedBot.on('pickup', (event) => pickups.push(event))
   forcedBot.setFallMinHeight(2)
   forcedBot.startObserver()
   forcedRaw.entity.position = { x: 13, y: 64, z: 10 }
   forcedRaw.emit('forcedMove')
   forcedRaw.entity.position = { x: 13.3, y: 64, z: 10 }
-  forcedInventory = [{ name: 'stone', count: 2 }, { name: 'stone', count: 3 }, { name: 'dirt', count: 1 }]
   await new Promise((resolve) => setTimeout(resolve, 1_100))
   const pushedAfterTeleport = pushedMoves.length
   forcedRaw.entity.position = { x: 13.3, y: 63.1, z: 10 }
@@ -868,7 +863,13 @@ console.log('\n--- 聊天识别（未签名 system_chat 也要算玩家说话）
   const { readFileSync: readCoreSource } = await import('node:fs')
   const coreSource = readCoreSource(new URL('./src/core.mjs', import.meta.url), 'utf8')
   console.log(`  ${/async walkTo[\s\S]{0,700}this\._selfMovingAt = Date\.now\(\)/.test(coreSource) ? '✅' : '❌'} walkTo 持续标记自主移动，松键后采样不会误报`)
-  console.log(`  ${pickups.length === 1 && pickups[0].items.includes('stone*5') && pickups[0].items.includes('dirt*1') ? '✅' : '❌'} 拾取载荷按同名物品合并并使用“名称*数量”格式`)
+  const { pickupPayload } = await import('./src/core.mjs')
+  const pickup = pickupPayload(
+    { pickupItemCount: 2 },
+    { getDroppedItem: () => ({ name: 'diamond', count: 5, nbt: { value: { seed: { value: 7n } } }, components: [{ type: 'custom_data', data: { level: 3 } }] }) },
+  )
+  console.log(`  ${pickup?.item === 'diamond' && pickup.count === 2 && pickup.data?.nbt?.value?.seed?.value === '7' && pickup.data?.components?.[0]?.type === 'custom_data' ? '✅' : '❌'} collect 载荷优先协议实际数量，并把 NBT/组件压成纯 JSON`)
+  console.log(`  ${!/lastInv|#invSignature/.test(coreSource) && /_client\.on\('collect'/.test(coreSource) ? '✅' : '❌'} 拾取只走 collect 包，不保留背包轮询兜底`)
 
   const { FallTracker } = await import('./src/fall-tracker.ts')
   const fallTracker = new FallTracker()
@@ -3974,6 +3975,23 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
   console.log(`  ${pushedEngine.queue.length === 2 && pushedFirst.modifiers.once?.count === -1 && !pushedRepeated.modifiers.once ? '✅' : '❌'} pushed 低于 minDistance 不记录，连续推动只命中首次`)
   console.log(`  ${pushedNextRound.modifiers.once?.count === 2 && pushedNextRound.modifiers.once?.distanceSum === 0.5 && pushedNextRound.modifiers.once?.from?.x === 0 ? '✅' : '❌'} pushed 新一轮携带上一轮次数、累计位移和起点`)
   console.log(`  ${pushedWakes.length === 2 && pushedSuppressed === 1 ? '✅' : '❌'} pushed.once 两轮唤醒两次，轮内静默计入 suppressed`)
+
+  const pickupConfig = cloneWatchdogDefaults()
+  pickupConfig['self.pickup'].wake = true
+  let pickupNow = 20_000
+  const pickupWakes = []
+  const pickupEngine = new WatchdogEngine(pickupConfig, (event) => pickupWakes.push(event), () => pickupNow)
+  const pickupWithoutData = pickupEngine.observe('self.pickup', { item: 'diamond', count: 2, data: { components: [{ type: 'custom_data' }] } })
+  pickupNow += 1_999
+  pickupEngine.tick(false)
+  const wakesBeforeDelay = pickupWakes.length
+  pickupNow += 1
+  pickupEngine.tick(false)
+  pickupConfig['self.pickup'].includeData = true
+  pickupEngine.setConfig(pickupConfig)
+  const pickupWithData = pickupEngine.observe('self.pickup', { item: 'diamond', count: 1, data: { nbt: { custom: true } } })
+  console.log(`  ${pickupWithoutData.content.data === undefined && pickupWithData.content.data?.nbt?.custom === true ? '✅' : '❌'} pickup 默认剥离物品数据，includeData=true 时保留`)
+  console.log(`  ${wakesBeforeDelay === 0 && pickupWakes.length === 1 ? '✅' : '❌'} pickup 默认延迟 2000ms 后唤醒`)
 
   const selfConfig = cloneWatchdogDefaults()
   const selfEngine = new WatchdogEngine(selfConfig)

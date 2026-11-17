@@ -63,10 +63,12 @@ export class WatchdogEngine {
     const config = this.config[name]
     if (!config) throw new Error(`该事件或修饰不存在：${name}`)
     const timestamp = this.now()
+    const eventContent = clone(content)
+    if (name === 'self.pickup' && config.includeData !== true) delete eventContent.data
     const selfChat = name === 'message.chat' && context.isSelf === true
-    const pushedDistance = Number(content.distance)
+    const pushedDistance = Number(eventContent.distance)
     const belowPushedThreshold = name === 'self.pushed' && (!Number.isFinite(pushedDistance) || pushedDistance < Number(config.minDistance ?? 0))
-    const modifiers = selfChat || belowPushedThreshold ? {} : this.modifiers(name, content, context, timestamp)
+    const modifiers = selfChat || belowPushedThreshold ? {} : this.modifiers(name, eventContent, context, timestamp)
     let record = !belowPushedThreshold && config.record === true
     let wake = !belowPushedThreshold && config.wake === true
     if (selfChat && config.includeSelf !== true) {
@@ -84,7 +86,7 @@ export class WatchdogEngine {
       if (modifierDelay >= 0) delay = Math.min(delay, modifierDelay)
     }
     if (wake) record = true
-    const event: WatchdogEvent = { timestamp, name, content: clone(content), modifiers }
+    const event: WatchdogEvent = { timestamp, name, content: eventContent, modifiers }
     if (record) {
       this.queue.push(event)
       if (this.queue.length > this.maxQueue) this.queue.splice(0, this.queue.length - this.maxQueue)

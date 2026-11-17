@@ -494,14 +494,19 @@ AI 调用工具获得指定修饰的全面概述：
 
 ### 拾取 `self.pickup` 事件事实
 
-背包物品总数增加。当前实现：每秒对比一次背包快照。
+捡到掉落物。
+
+当前实现直接消费服务端 `collect` 包，只处理收集者为机器人自身的包；不再轮询或对比背包。一个掉落实体产生一个事件，不跨事件合并；同一掉落实体可以包含多个同种物品，其实际拾取数优先使用协议中的 `pickupItemCount`。
 
 **配置：**
 
 - record: `true`
 - wake: `false`
-- delay: `0`
+- delay: `2_000`
+- includeData: (boolean) 在事件载荷中反映物品的NBT或数据组件，默认 `false`。
 
 **载荷：**
 
-- items: (string[]) 新增物品，格式为 `名称*数量`，如 `stone*3`。
+- item: (string) 物品的 ID
+- data?: (object) 物品的NBT或数据组件，只有在 includeData 为 true 时包含此项。
+- count: (number) 物品的数量

@@ -40,7 +40,7 @@ export const WATCHDOG_EVENT_DEFAULTS = {
   } },
   'self.fall.start': { minHeight: 3, record: true, wake: true, delay: 0, modifiers: {} },
   'self.fall.end': { record: true, wake: true, delay: 0, modifiers: {} },
-  'self.pickup': { record: true, wake: false, delay: 0, modifiers: {} },
+  'self.pickup': { includeData: false, record: true, wake: false, delay: 2_000, modifiers: {} },
 } as const
 
 export type WatchdogEventName = keyof typeof WATCHDOG_EVENT_DEFAULTS
@@ -83,7 +83,7 @@ export function validateWatchdogPatch (item: string, patch: unknown): Record<str
   const out: Record<string, unknown> = {}
   for (const [field, value] of Object.entries(patch)) {
     if (field === 'modifiers' || !Object.hasOwn(defaults, field)) throw new Error(`${item}.${field} 字段不存在`)
-    if (['record', 'wake', 'includeSelf', 'treatSystemAsChat'].includes(field) && typeof value !== 'boolean') throw new Error(`${item}.${field} 不接受值 ${JSON.stringify(value)}`)
+    if (['record', 'wake', 'includeSelf', 'includeData', 'treatSystemAsChat'].includes(field) && typeof value !== 'boolean') throw new Error(`${item}.${field} 不接受值 ${JSON.stringify(value)}`)
     if (['delay', 'interval', 'distance', 'minDistance', 'minHeight', 'count', 'resetAfterMs'].includes(field) && !Number.isFinite(value)) throw new Error(`${item}.${field} 不接受值 ${JSON.stringify(value)}`)
     if (field === 'delay' && Number(value) < (modifier ? -1 : 0)) throw new Error(`${item}.delay 不接受值 ${value}`)
     if (field === 'minDistance' && Number(value) < 0) throw new Error(`${item}.minDistance 不接受值 ${value}`)

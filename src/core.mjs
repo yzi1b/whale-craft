@@ -356,6 +356,24 @@ export function lossless (value, seen = new WeakSet()) {
   return out
 }
 
+/** 把一次服务端 collect 包与对应掉落实体转换为稳定、纯 JSON 的拾取事件载荷。 */
+export function pickupPayload (packet, collected) {
+  const item = collected?.getDroppedItem?.()
+  if (!item?.name) return null
+  const packetCount = Number(packet?.pickupItemCount)
+  const entityCount = Number(item.count)
+  const count = Number.isInteger(packetCount) && packetCount > 0 ? packetCount : entityCount
+  if (!Number.isInteger(count) || count <= 0) return null
+  const data = {}
+  if (item.nbt) data.nbt = lossless(item.nbt)
+  if (Array.isArray(item.components) && item.components.length) data.components = lossless(item.components)
+  return {
+    item: String(item.name),
+    count,
+    ...(Object.keys(data).length ? { data } : {}),
+  }
+}
+
 /** 方块名 → 单字符（给没有视觉的模型"看"地形） */
 export function glyphOf (name) {
   if (!name) return '?'
@@ -553,7 +571,7 @@ export class McBot extends EventEmitter {
    *   'teleport'    服务端 forcedMove = 服务器强制改变位置
    *   'pushed'      非自主移动（没按方向键却位移）= 被推/水流
    *   'fallStart' / 'fallEnd'  达到阈值的坠落开始 / 停止
-   *   'pickup'      背包总数变多 = 捡到物品
+   *   'pickup'      服务端 collect 包确认自己捡到一个掉落实体
    *   'playerJoin' / 'playerLeave'
    *
    * 为什么放这里而不是看门狗里：这是"世界读取"，属于机器人核心的能力；
@@ -565,7 +583,6 @@ export class McBot extends EventEmitter {
     this._obs = {
       lastPos: this.#observerPosition(),
       lastPlayers: new Set(Object.keys(this.bot?.players ?? {})),
-      lastInv: this.#invSignature(),
       skipPushedOnce: false,
     }
     this._forcedMoveBot = this.bot
@@ -619,18 +636,6 @@ export class McBot extends EventEmitter {
     this._obs = null
   }
 
-  #invSignature () {
-    const items = this.bot?.inventory?.items?.() ?? []
-    let total = 0
-    const map = {}
-    for (const it of items) {
-      const c = it?.count ?? 0
-      total += c
-      map[it.name] = (map[it.name] ?? 0) + c
-    }
-    return { total, map }
-  }
-
   #observerPosition () {
     const position = this.bot?.entity?.position
     return position ? { x: position.x, y: position.y, z: position.z } : null
@@ -665,17 +670,6 @@ export class McBot extends EventEmitter {
     }
     obs.lastPos = pos
 
-    // ③ 捡到物品（背包总数变多）
-    const inv = this.#invSignature()
-    if (inv.total > obs.lastInv.total) {
-      const gained = []
-      for (const [n, c] of Object.entries(inv.map)) {
-        const delta = c - (obs.lastInv.map[n] ?? 0)
-        if (delta > 0) gained.push(`${n}*${delta}`)
-      }
-      if (gained.length) this.emit('pickup', { items: gained })
-    }
-    obs.lastInv = inv
   }
 
   /* ───────────── 连接与保活 ───────────── */
@@ -786,6 +780,11 @@ export class McBot extends EventEmitter {
           type: damageTypes.get(Number(packet.sourceTypeId)) ?? damageTypes.get(Number(packet.sourceTypeId) - 1) ?? null,
           source: sourceEntity?.username ?? sourceEntity?.displayName ?? sourceEntity?.name ?? sourceEntity?.type ?? null,
         }
+      })
+      b._client.on('collect', (packet) => {
+        if (Number(packet?.collectorEntityId) !== Number(b.entity?.id)) return
+        const payload = pickupPayload(packet, b.entities?.[Number(packet.collectedEntityId)])
+        if (payload) this.emit('pickup', payload)
       })
 
       let dupe = false
