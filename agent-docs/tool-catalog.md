@@ -16,6 +16,7 @@
 - **物品形态**：背包、手持、装备、给予和丢弃统一返回纯 JSON `{name,count,slot?}`，不把 mineflayer Item 实例或易歧义字符串交给模型。
 - **交付状态**：`mc_map` / `mc_height` / `mc_kit_web_fetch` 返回 `replyOk`、`writeOk`；图片另有 `attachmentOk`。未请求对应交付方式时为 `null`，请求后为明确布尔值。
 - **语义失败**：动作即使没有抛异常，只要返回 `arrived:false`、`placed:false`、`broken:false` 或 `failed>0`，`mc_sequence` 就按失败步骤处理；`mc_build` 只把落地方块复验成功计为 placed。
+- **返回值必须精简**：不回显 `action/type/name/source/merge` 等调用参数；写操作只回实际变化/执行结果，不顺带回完整对象（需要时再读）；读操作不回显筛选条件，也不返回可由正文直接计算的数量。允许保留实际命中/缺失、是否新建、规范化结果、执行计数、耗时与中断原因。
 - 工具名列表由 `ourToolNames` 收集（注册时自动登记）：MC 模式白名单用它 + `MC_FILE_TOOLS` + `MC_EXTRA_HOST_TOOLS`（宿主 `job_*` / `goal_*` / `todo_write`）+ `MC_WEB_SEARCH_TOOL`（宿主 `web_search`，按 `allowWebSearch` 开关）+ `present`；其中 `mc_kit_web_fetch` 与 `mc_debug_*` 按各自开关从白名单里摘（`hidden` 判定）。其他模式的 deny 名单也用它（`mc_kit_*` + 非 admin 的 `mc_*`）。
 
 ---

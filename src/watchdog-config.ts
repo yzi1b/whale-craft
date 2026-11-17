@@ -86,13 +86,13 @@ export class WatchdogConfigStore {
     return output
   }
 
-  editBase (input: Record<string, unknown>): { changed: string[], removed: string[], config: Record<string, Record<string, unknown>> } {
+  editBase (input: Record<string, unknown>): { changed: string[], removed: string[] } {
     const result = editWatchdogLayer(this.data.config, input)
     this.save()
-    return { ...result, config: this.base }
+    return result
   }
 
-  editGlobal (patch: Record<string, unknown>): { ok: true, changed: string[], global: StoredWatchdogConfig['global'] } {
+  editGlobal (patch: Record<string, unknown>): { global: StoredWatchdogConfig['global'] } | { ok: true, changed: string[] } {
     const changed: string[] = []
     for (const [field, value] of Object.entries(patch)) {
       if (!Object.hasOwn(WATCHDOG_GLOBAL_DEFAULTS, field)) throw new Error(`${field} 字段不存在`)
@@ -100,11 +100,13 @@ export class WatchdogConfigStore {
         ? ['never', 'llm', 'toolCall'].includes(String(value))
         : Number.isFinite(value) && Number(value) >= (field === 'minInterruptInterval' ? 10_000 : 5_000)
       if (!valid) throw new Error(`${field} 不接受值 ${JSON.stringify(value)}`)
+      if ((this.data.global as unknown as Record<string, unknown>)[field] === value) continue
       ;(this.data.global as unknown as Record<string, unknown>)[field] = value
       changed.push(field)
     }
-    if (changed.length) this.save()
-    return { ok: true, changed, global: this.global }
+    if (!changed.length) return { global: this.global }
+    this.save()
+    return { ok: true, changed }
   }
 
   private load (): void {

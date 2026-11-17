@@ -277,8 +277,13 @@ console.log('\n--- 看门狗 v2 ---')
   const focusWithoutGame = await tools.get('mc_watchdog_focus').execute({ action: 'list' }, A).then(() => null, (error) => error.message)
   console.log(`  ${/当前没有游戏会话/.test(String(sceneWithoutGame)) && /当前没有游戏会话/.test(String(focusWithoutGame)) ? '✅' : '❌'} scene/effective/focus 不能脱离游戏会话存在`)
   console.log(`  ${tools.get('mc_watchdog_focus')?.parameters?.properties?.dieTime?.type === 'number' ? '✅' : '❌'} mc_watchdog_focus 暴露 dieTime 自动清除参数`)
+  const globalSettingsRead = await tools.get('mc_watchdog_global_settings').execute({}, A)
+  const changedMinInterval = globalSettingsRead.global.minInterval === 5000 ? 5001 : 5000
+  const globalSettingsEdit = await tools.get('mc_watchdog_global_settings').execute({ minInterval: changedMinInterval }, A)
+  const globalSettingsNoop = await tools.get('mc_watchdog_global_settings').execute({ minInterval: changedMinInterval }, A)
+  console.log(`  ${Object.keys(globalSettingsRead).join(',') === 'global' && Object.keys(globalSettingsEdit).join(',') === 'ok,changed' && globalSettingsEdit.changed.join(',') === 'minInterval' && Object.keys(globalSettingsNoop).join(',') === 'global' ? '✅' : '❌'} 看门狗全局配置：读取/无变化只回正文，编辑只回实际变化`)
   const baseWithoutGame = await tools.get('mc_watchdog_config').execute({ action: 'read', type: 'base' }, A)
-  console.log(`  ${baseWithoutGame.gameSessionId === null ? '✅' : '❌'} 全局 base 配置离线可读且 gameSessionId=null`)
+  console.log(`  ${baseWithoutGame.gameSessionId === null && Object.keys(baseWithoutGame).join(',') === 'gameSessionId,config' ? '✅' : '❌'} 全局 base 配置离线可读，且不回显 type/itemCount`)
 
   // 目录工具的四条路径：总览、单项、通配、数组（含被宿主转成 JSON 字符串的数组）。
   const info = tools.get('mc_watchdog_info')

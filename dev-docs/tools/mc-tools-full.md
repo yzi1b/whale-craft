@@ -66,6 +66,12 @@
 
 ## 特殊说明
 
+### 返回值精简
+
+工具返回值不得重复回显调用参数，以免无意义地占用模型上下文。写操作只返回实际执行结果或变化摘要，不返回 `action`、`type`、`name`、`source`、`merge`、`sensitive` 等已由参数明确的值，也不顺带返回修改后的完整对象；需要完整对象时应另行调用对应的读取操作。读操作不回显筛选参数，也不返回可直接从正文计算出的数量。
+
+只有参数不能表达或不能确认的结果才应返回，例如实际新增/删除项、是否新建、命中/缺失项、规范化后与输入不同的值、执行计数、耗时和中断原因。
+
 ### reply-dist
 
 工具调用所获取到的某些“内容”，有时可能需要直接给到模型进行消化，有时只写到文件以免不必要地消耗模型上下文。对于这些情况，给出相对固定的参数“reply-dist”及其行为。
@@ -556,9 +562,8 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 
 **返回**
 
-- ok: **true**
-- changed: **string[]** 本次实际修改的字段名；只读取时为空数组
-- global: **object** 修改后的完整全局配置，含 `minInterval`、`interruptLevel`、`minInterruptInterval`
+- 只读取：global: **object** 完整全局配置，含 `minInterval`、`interruptLevel`、`minInterruptInterval`
+- 有修改：ok: **true**；changed: **string[]** 本次实际修改的字段名
 
 **错误**
 
@@ -589,17 +594,11 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 1. action 为 "edit"：
 
 - ok: **true**
-- type: **"base" | "scene"** 实际编辑的配置层
-- source: **"config" | "file"** 本次输入来源
-- merge: **boolean** 是否按合并方式编辑；基础配置固定为 true
 - changed: **string[]** 新增或修改的配置项注册名
 - removed: **string[]** 删除覆盖或恢复默认值的配置项注册名
-- config: **object** 编辑后该层的完整原始配置，不包含其他层合并结果
 
 2. action 为 "read"：
 
-- type: **"base" | "scene" | "effective"** 实际读取的配置层；"effective" 表示基础、场景及全部注意配置合并后的结果
-- itemCount: **number** 选中的配置项数量
 - config: **object** 选中的配置正文；`reply` 为 false 时省略
 
 写出文件时，按 [reply-dist](#reply-dist) 的约定在结果末尾报告路径与大小。
@@ -654,21 +653,13 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 2. action 为 "edit"：
 
 - ok: **true**
-- name: **string** 注意配置名称
 - created: **boolean** 是否为本次新建
-- source: **"config" | "file"** 本次输入来源
-- merge: **boolean** 是否按合并方式编辑
-- sensitive: **boolean** 编辑后的敏感性
-- dieTime: **number** 剩余自动清除时间；不自动清除时为 -1
 - changed: **string[]** 新增或修改的配置项注册名
 - removed: **string[]** 删除的配置项注册名
-- config: **object** 编辑后的完整注意配置正文
 
 3. action 为 "read"：
 
-- name: **string** 注意配置名称
 - sensitive: **boolean** 是否为敏感配置
-- itemCount: **number** 选中的配置项数量
 - config: **object** 选中的配置正文；`reply` 为 false 时省略
 - dieTime: **number** 剩余自动清除时间。如不自动清除则为 -1。
 

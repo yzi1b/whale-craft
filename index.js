@@ -1821,17 +1821,13 @@ export function apply(ctx, rawConfig) {
           ? watchdogConfigStore.editBase(args.config)
           : (() => {
               const gameSession = requireGameSession(sess)
-              const changed = editWatchdogLayer(gameSession.watchdogScene, args.config, args.merge !== false)
-              return { ...changed, config: JSON.parse(JSON.stringify(gameSession.watchdogScene)) }
+              return editWatchdogLayer(gameSession.watchdogScene, args.config, args.merge !== false)
             })()
         if (type === 'scene') refreshWatchdogConfig(sess)
         else if (sess.gameSession?.active) refreshWatchdogConfig(sess)
         return {
           ok: true,
           gameSessionId: sess.gameSession?.active ? sess.gameSession.id : null,
-          type,
-          source: 'config',
-          merge: type === 'base' ? true : args.merge !== false,
           ...result,
         }
       }
@@ -1846,8 +1842,6 @@ export function apply(ctx, rawConfig) {
       const selected = items.length ? Object.fromEntries(items.filter((item) => Object.hasOwn(raw, item)).map((item) => [item, raw[item]])) : raw
       return {
         gameSessionId: sess.gameSession?.active ? sess.gameSession.id : null,
-        type,
-        itemCount: Object.keys(selected).length,
         config: selected,
       }
     },
@@ -1893,7 +1887,7 @@ export function apply(ctx, rawConfig) {
           }
         })
         refreshWatchdogConfig(sess)
-        return { ok: true, gameSessionId: gameSession.id, name, created: !previous, source: 'config', merge: args.merge !== false, sensitive: focus.sensitive, dieTime: gameSession.watchdogFocusDieTime(name), ...changes, config: focus.config }
+        return { ok: true, gameSessionId: gameSession.id, created: !previous, ...changes }
       }
       if (action === 'read') {
         const name = String(args.name ?? '')
@@ -1901,7 +1895,7 @@ export function apply(ctx, rawConfig) {
         if (!focus) throw new Error(`注意配置不存在：${name}`)
         const items = Array.isArray(args.items) ? args.items.map(String) : []
         const config = items.length ? Object.fromEntries(items.filter((item) => Object.hasOwn(focus.config, item)).map((item) => [item, focus.config[item]])) : focus.config
-        return { gameSessionId: gameSession.id, name, sensitive: focus.sensitive, itemCount: Object.keys(config).length, dieTime: gameSession.watchdogFocusDieTime(name), config }
+        return { gameSessionId: gameSession.id, sensitive: focus.sensitive, dieTime: gameSession.watchdogFocusDieTime(name), config }
       }
       if (action === 'remove') {
         const input = args.names ?? args.name
