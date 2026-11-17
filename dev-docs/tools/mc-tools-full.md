@@ -630,6 +630,7 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 - file?: (string) 要导入的配置文件路径。后缀必须是 `.focus.wcwc.json`。
 - merge?: (boolean) 如果为 true，则覆盖新值并保留未提及项；否则先清除原有注意配置再应用新值。该注意配置原先不存在时此值无效。默认为 true。
 - sensitive?: (boolean) 为 true 则更敏感，为 false 则更钝感。导入时始终以文件内容为准；使用 config 编辑时，不填写则保留原值，新建时不填写会报错。
+- dieTime?: (number) 自动销毁时间，单位毫秒。若指定此值且大于等于 0，则该注意项将在指定时间后自动清除，不再生效且不再是活动注意配置。如果小于 0，则永不自动销毁，直到手动移除或会话结束。不填写时默认为 -1，不自动销毁。可用于临时注意。该值只能在新建时指定，不能在编辑时指定。指定后自动倒计时且不可修改，除非直接移除。
 
 **参数-读取**
 
@@ -658,6 +659,7 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 - source: **"config" | "file"** 本次输入来源
 - merge: **boolean** 是否按合并方式编辑
 - sensitive: **boolean** 编辑后的敏感性
+- dieTime: **number** 剩余自动清除时间；不自动清除时为 -1
 - changed: **string[]** 新增或修改的配置项注册名
 - removed: **string[]** 删除的配置项注册名
 - config: **object** 编辑后的完整注意配置正文
@@ -668,6 +670,7 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 - sensitive: **boolean** 是否为敏感配置
 - itemCount: **number** 选中的配置项数量
 - config: **object** 选中的配置正文；`reply` 为 false 时省略
+- dieTime: **number** 剩余自动清除时间。如不自动清除则为 -1。
 
 写出文件时，按 [reply-dist](#reply-dist) 的约定在结果末尾报告路径与大小。
 
@@ -683,6 +686,8 @@ format，为chars时用字符模拟高度； 为image时返回分层设色等高
 - name 不符合小写字母、数字、下划线规则 → `注意配置名称不合法`
 - edit 的 config / file 未恰好填写一个 → 对应参数错误
 - 新建注意配置但没有 sensitive → `新建注意配置时必须指定 sensitive`
+- 编辑已有注意配置时传入 dieTime → `dieTime 只能在新建注意配置时指定`
+- dieTime 不是有限数 → `dieTime 必须是有限数`
 - read 的名称不存在 → `注意配置不存在：{{name}}`
 - remove 未提供 name / names → `remove 必须提供 name 或 names`
 - 导入文件后缀、`wcwc` 版本或 `type` 不符 → 对应文件格式错误

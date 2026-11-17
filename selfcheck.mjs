@@ -276,6 +276,7 @@ console.log('\n--- 看门狗 v2 ---')
   }, A).then(() => null, (error) => error.message)
   const focusWithoutGame = await tools.get('mc_watchdog_focus').execute({ action: 'list' }, A).then(() => null, (error) => error.message)
   console.log(`  ${/当前没有游戏会话/.test(String(sceneWithoutGame)) && /当前没有游戏会话/.test(String(focusWithoutGame)) ? '✅' : '❌'} scene/effective/focus 不能脱离游戏会话存在`)
+  console.log(`  ${tools.get('mc_watchdog_focus')?.parameters?.properties?.dieTime?.type === 'number' ? '✅' : '❌'} mc_watchdog_focus 暴露 dieTime 自动清除参数`)
   const baseWithoutGame = await tools.get('mc_watchdog_config').execute({ action: 'read', type: 'base' }, A)
   console.log(`  ${baseWithoutGame.gameSessionId === null ? '✅' : '❌'} 全局 base 配置离线可读且 gameSessionId=null`)
 
@@ -3878,6 +3879,28 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
   console.log(`  ${closed && !closedAgain && !game.active && game.endedAt === 200 && game.endReason === '自检' ? '✅' : '❌'} 游戏会话结束幂等记录时间与原因`)
   console.log(`  ${disarms.length === 1 && disarms[0].reason === '自检' && lifecycleWatchdog.armed === false ? '✅' : '❌'} 游戏会话关闭与唯一看门狗同步发生且只执行一次`)
   console.log(`  ${notices.length === 1 && notices[0].gameSessionId === game.id && notices[0].delivery === 'wake' && /mc\.example:25566/.test(notices[0].text) ? '✅' : '❌'} 游戏会话管理器只投一次带 ID/服务器的结束提示词`)
+
+  const expiryWatchdog = { armed: true, status: () => ({ armed: true }), disarm: () => { expiryWatchdog.armed = false } }
+  const expiryGame = new GameSessionState({ watchdog: expiryWatchdog, watchdogEngine: lifecycleEngine })
+  expiryGame.watchdogFocuses.set('temporary', { sensitive: true, config: {} })
+  let expiredFocus = null
+  expiryGame.setWatchdogFocusExpiry('temporary', 30, (name) => { expiredFocus = name })
+  const remainingDieTime = expiryGame.watchdogFocusDieTime('temporary')
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  console.log(`  ${remainingDieTime >= 0 && remainingDieTime <= 30 && !expiryGame.watchdogFocuses.has('temporary') && expiredFocus === 'temporary' ? '✅' : '❌'} 注意配置 dieTime 到期自动清除并触发配置刷新回调`)
+  expiryGame.watchdogFocuses.set('cancelled', { sensitive: true, config: {} })
+  expiryGame.setWatchdogFocusExpiry('cancelled', 30, () => { expiredFocus = '不应触发' })
+  const manuallyRemoved = expiryGame.removeWatchdogFocus('cancelled')
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  console.log(`  ${manuallyRemoved && expiredFocus === 'temporary' && expiryGame.watchdogFocusDieTime('cancelled') === -1 ? '✅' : '❌'} 手动移除注意配置同步取消自动清除计时器`)
+  const closeExpiryWatchdog = { armed: true, status: () => ({ armed: true }), disarm: () => { closeExpiryWatchdog.armed = false } }
+  const closeExpiryGame = new GameSessionState({ watchdog: closeExpiryWatchdog, watchdogEngine: lifecycleEngine })
+  closeExpiryGame.watchdogFocuses.set('closing', { sensitive: true, config: {} })
+  let expiredAfterClose = false
+  closeExpiryGame.setWatchdogFocusExpiry('closing', 30, () => { expiredAfterClose = true })
+  closeExpiryGame.close('自检关局', { notify: false })
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  console.log(`  ${!expiredAfterClose && closeExpiryGame.watchdogFocuses.has('closing') ? '✅' : '❌'} 游戏会话关闭同步取消注意配置自动清除计时器`)
 
   const userStopped = buildGameSessionCloseNotice({ gameSessionId: game.id, kind: 'user-stop', reason: '用户手动停止', startedAt: 0, endedAt: 65_000 })
   const redacted = sanitizeGameSessionCloseText('password=secret access_token=abc\n连接断开')

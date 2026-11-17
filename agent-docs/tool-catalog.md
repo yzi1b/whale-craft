@@ -53,7 +53,7 @@
 | `mc_watchdog_info` | 事件目录 | 总览或按 `事实名/修饰名` 查询；支持 `事实名/*` 与数组；顶层返回 `{markdown}` 对象并直接渲染 Markdown |
 | `mc_watchdog_global_settings` | 全局提醒配置 | 持久化 `minInterval` / `interruptLevel` / `minInterruptInterval` |
 | `mc_watchdog_config` | 三层配置 | 编辑/读取 base、scene、effective；base 落 `$DSH_HOME/whale_craft/watchdog.json`；返回 `gameSessionId`（无会话的 base 操作为 null） |
-| `mc_watchdog_focus` | 注意配置 | 会话内 list/edit/read/remove；remove 单项同时接受 `name` 与 `names`；支持敏感/钝感合并；返回 `gameSessionId` |
+| `mc_watchdog_focus` | 注意配置 | 会话内 list/edit/read/remove；新建可设 `dieTime` 自动清除，计时器随手动移除/游戏会话关闭清理；remove 单项同时接受 `name` 与 `names`；支持敏感/钝感合并；返回 `gameSessionId` |
 | `mc_watchdog_queue` | 结构化事件队列 | 与游戏会话同寿命；读取时本地化时间，可精简修饰按“事实+修饰+载荷”只留首次，不可精简修饰全部保留；返回 `gameSessionId` |
 | `mc_watchdog_wait` | 可打断定时等待 | 等满后继续当前回合；看门狗提醒会先结束等待再注入，不受 `interruptLevel` 限制且不改打断冷却；用户停止与游戏会话关闭也会立即结算 |
 

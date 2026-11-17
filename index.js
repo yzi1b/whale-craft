@@ -1855,7 +1855,7 @@ export function apply(ctx, rawConfig) {
 
   ctx.tools.register(asTool({
     name: 'mc_watchdog_focus',
-    description: '列出、编辑、读取或移除当前游戏会话的注意配置。名称只允许小写字母、数字和下划线。',
+    description: '列出、编辑、读取或移除当前游戏会话的注意配置。名称只允许小写字母、数字和下划线；新建时可用 dieTime 设置自动清除时间。',
     parameters: {
       action: { type: 'string', required: true, description: 'list / edit / read / remove' },
       name: { type: 'string', description: '注意配置名称' },
@@ -1863,6 +1863,7 @@ export function apply(ctx, rawConfig) {
       config: { type: 'object', additionalProperties: true, description: 'edit 的配置正文' },
       merge: { type: 'boolean', description: '是否保留未提及项，默认 true' },
       sensitive: { type: 'boolean', description: '敏感=true，钝感=false' },
+      dieTime: { type: 'number', description: '仅新建可设；≥0 时经过这些毫秒自动清除，<0 永不自动清除，默认 -1' },
       items: { type: 'array', items: { type: 'string' }, description: 'read 时筛选项' },
     },
     output: text(),
@@ -1875,14 +1876,24 @@ export function apply(ctx, rawConfig) {
         const name = String(args.name ?? '')
         if (!/^[a-z][a-z0-9_]*$/.test(name)) throw new Error('注意配置名称不合法')
         const previous = gameSession.watchdogFocuses.get(name)
+        if (previous && args.dieTime !== undefined) throw new Error('dieTime 只能在新建注意配置时指定')
+        const dieTime = args.dieTime === undefined ? -1 : Number(args.dieTime)
+        if (!Number.isFinite(dieTime)) throw new Error('dieTime 必须是有限数')
         if (!previous && typeof args.sensitive !== 'boolean') throw new Error('新建注意配置时必须指定 sensitive')
         if (!args.config || typeof args.config !== 'object' || Array.isArray(args.config)) throw new Error('edit 必须提供 config 对象')
         const focus = previous ?? { sensitive: args.sensitive, config: {} }
         const changes = editWatchdogLayer(focus.config, args.config, args.merge !== false)
         if (typeof args.sensitive === 'boolean') focus.sensitive = args.sensitive
         gameSession.watchdogFocuses.set(name, focus)
+        if (!previous) gameSession.setWatchdogFocusExpiry(name, dieTime, () => {
+          try {
+            if (gameSession.active) refreshWatchdogConfig(sess)
+          } catch (error) {
+            logLine(`注意配置 ${name} 自动清除后重算失败：${error?.message ?? error}`)
+          }
+        })
         refreshWatchdogConfig(sess)
-        return { ok: true, gameSessionId: gameSession.id, name, created: !previous, source: 'config', merge: args.merge !== false, sensitive: focus.sensitive, ...changes, config: focus.config }
+        return { ok: true, gameSessionId: gameSession.id, name, created: !previous, source: 'config', merge: args.merge !== false, sensitive: focus.sensitive, dieTime: gameSession.watchdogFocusDieTime(name), ...changes, config: focus.config }
       }
       if (action === 'read') {
         const name = String(args.name ?? '')
@@ -1890,14 +1901,14 @@ export function apply(ctx, rawConfig) {
         if (!focus) throw new Error(`注意配置不存在：${name}`)
         const items = Array.isArray(args.items) ? args.items.map(String) : []
         const config = items.length ? Object.fromEntries(items.filter((item) => Object.hasOwn(focus.config, item)).map((item) => [item, focus.config[item]])) : focus.config
-        return { gameSessionId: gameSession.id, name, sensitive: focus.sensitive, itemCount: Object.keys(config).length, config }
+        return { gameSessionId: gameSession.id, name, sensitive: focus.sensitive, itemCount: Object.keys(config).length, dieTime: gameSession.watchdogFocusDieTime(name), config }
       }
       if (action === 'remove') {
         const input = args.names ?? args.name
         if (input === undefined || input === null || input === '') throw new Error('remove 必须提供 name 或 names')
         const requested = input === '*' ? [...gameSession.watchdogFocuses.keys()] : (Array.isArray(input) ? input : [input]).filter(Boolean).map(String)
         const removed = []; const missing = []
-        for (const name of requested) (gameSession.watchdogFocuses.delete(name) ? removed : missing).push(name)
+        for (const name of requested) (gameSession.removeWatchdogFocus(name) ? removed : missing).push(name)
         refreshWatchdogConfig(sess)
         return { gameSessionId: gameSession.id, removed, missing: input === '*' ? [] : missing, remainingCount: gameSession.watchdogFocuses.size }
       }

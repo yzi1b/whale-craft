@@ -48,7 +48,7 @@ DSH host 进程
 ## 3. 会话与实例模型（index.js）
 
 - `McSession`：`agentId / config / bot(McBot, instanceId=agentId) / mode(standby|active|sleep) / gameSession / selectedAccount`；`watchdog` 等只读 getter 均从 `gameSession` 派生。
-- `GameSessionState`：一次成功进服创建一个 ID，并**独占** `Watchdog + WatchdogEngine + scene + focuses`。游戏会话与看门狗一对一强绑定：同步建立、同步关闭，不能单独存在、启停或跨游戏会话复用；自动重连保留同一个聚合。结束提示词也只由该对象在首次 `close()` 时构造一次，调用方只能传关闭类型与原因。
+- `GameSessionState`：一次成功进服创建一个 ID，并**独占** `Watchdog + WatchdogEngine + scene + focuses`。游戏会话与看门狗一对一强绑定：同步建立、同步关闭，不能单独存在、启停或跨游戏会话复用；自动重连保留同一个聚合。注意配置的 `dieTime` 到期计时器也归它持有，自动到期、手动移除或关局都会清理。结束提示词只由该对象在首次 `close()` 时构造一次，调用方只能传关闭类型与原因。
 - `McRegistry`：`getOrCreate(agent)` / `peek(id)`（**只读不建**，HTTP 用）/ `destroy(id)` / `destroyAll()`（插件卸载时 `ctx.effect` 里调）。所有退出路径统一走 `McSession.closeGameSession()`：先断开机器人，再幂等关闭 GameSession（其中同步 disarm 看门狗并投结束提示词），最后清引用。立即类提示走插件来源 `steer`；强停/归档/运行时关闭只排下一步，避免重新唤醒。
 - `McSession.ensureWired` 把 bot 事件直接转换为结构化事实并写入当前 `GameSessionState.watchdogEngine`；不存在会话外第二事件队列。
 - **状态量语义**（`modeView()` / `mc_status` / `GET /api/mc/status`）：
