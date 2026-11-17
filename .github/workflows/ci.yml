@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           tar -tzf whale_craft-*.tgz | sort > files.txt
           cat files.txt
-          for f in package/index.js package/client.js package/selfcheck.mjs \
+          for f in package/index.js package/dist/index.js package/dist/src/watchdog.js package/client.js package/selfcheck.mjs \
                    package/cordis.patch.yml package/LICENSE package/README.md \
                    package/tools/check-core.mjs package/src/types.ts package/src/ts-platform.ts; do
             grep -qx "$f" files.txt || { echo "::error::tarball 缺文件：$f"; exit 1; }

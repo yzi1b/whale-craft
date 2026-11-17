@@ -39,7 +39,7 @@
 npm run typecheck             # TS 严格检查；allowJs 只用于解析旧模块，暂不 checkJs
 node tools/check-core.mjs     # ① 全树 JS/MJS/TS 语法 ② 动态 import src 纯模块 ③ 私有字段一致性
 node selfcheck.mjs            # 600+ 条离线断言（含 Node 原生加载 .ts 与无宿主模拟）
-npm run build                 # TS → dist；声明文件 + source map + 构建产物动态 import
+npm run build                 # TS/旧 MJS/根入口 → dist；发布入口只运行编译后的 JS
 npm run check                 # = typecheck + check-core + selfcheck + build
 node tools/check-standalone-import.mjs   # 干净环境回归（pack→独立目录 install→import；要联网装依赖，CI 跑）
 
@@ -51,7 +51,7 @@ npm run dev:status            # 看实例状态（link 是否接上 / pid / 端�
 npm run dev:stop              # 按 pidfile 停实例
 ```
 
-- **渐进迁移规则**：新模块一律 `.ts`；旧 `.mjs` 不要求一次搬完。TS 源码由 Node ≥24.9 原生执行，构建产物只用于校验/分发准备，不提交 `dist/`。
+- **渐进迁移规则**：新模块一律 `.ts`；旧 `.mjs` 不要求一次搬完。仓库内 TS 源码由 Node ≥24.9 原生执行；npm 包的根导出固定为 `dist/index.js`，避免 Node 拒绝擦除 `node_modules` 内的 `.ts`。`dist/` 由构建生成，不提交。
 - **只用可擦除语法**：禁止 `enum`、`namespace`、参数属性等需要转译才能运行的语法；`erasableSyntaxOnly` 会在类型检查时拦截。TS 内部相对导入写真实 `.ts` 后缀，构建时由 `rewriteRelativeImportExtensions` 改写为 `.js`。
 - **共享类型**：通用 JSON、坐标、游戏会话、看门狗事件与工具执行上下文先集中在 `src/types.ts`；迁移旧模块时再按领域拆分，避免先造一个巨型类型文件。
 

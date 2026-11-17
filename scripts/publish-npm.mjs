@@ -99,11 +99,13 @@ step(2, 'CHANGELOG.md 里有这个版本的一节？')
   ok(`有 ## [${version}]`)
 }
 
-step(3, '离线自检（check-core + selfcheck）')
-if (SKIP_CHECKS) warn('--skip-checks：跳过了')
+step(3, '离线自检与发布构建（typecheck + check-core + selfcheck + build）')
+if (SKIP_CHECKS) {
+  warn('--skip-checks：跳过检查，但仍生成发布必需的 dist/')
+  run('npm', ['run', 'build'])
+}
 else {
-  run(process.execPath, ['tools/check-core.mjs'])
-  run(process.execPath, ['selfcheck.mjs'])
+  run('npm', ['run', 'check'])
   ok('全绿')
 }
 
@@ -148,7 +150,7 @@ step(7, 'GitHub 那边有对应的 tag / Release 吗？（只提醒）')
   else warn(`本地没有 tag ${tag}（npm 与 GitHub 版本会对不上，建议先发 Release）`)
 }
 
-// --ignore-scripts：③ 已经把 prepublishOnly 那套（check-core + selfcheck）跑过了，不加会被
+// --ignore-scripts：③ 已经把 prepublishOnly 那套完整检查与 dist 构建跑过了，不加会被
 // lifecycle 再跑一遍 —— 重复又慢。prepublishOnly 留着拦"裸跑 npm publish"的人。
 const cmdArgs = ['publish', '--access', 'public', '--ignore-scripts', '--tag', DIST_TAG, ...(OTP ? ['--otp', OTP] : [])]
 step(8, DRY ? '（dry-run 到此为止，没有发布）' : `npm ${cmdArgs.join(' ')}`)

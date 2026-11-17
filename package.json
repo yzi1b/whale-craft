@@ -24,9 +24,9 @@
     "dsh": ">=0.2.2-rc.1 <0.3.0"
   },
   "type": "module",
-  "main": "index.js",
+  "main": "dist/index.js",
   "exports": {
-    ".": "./index.js",
+    ".": "./dist/index.js",
     "./client": "./client.js",
     "./locale/en.json": "./locale/en.json",
     "./locale/zh.json": "./locale/zh.json",
@@ -34,6 +34,7 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "dist",
     "index.js",
     "client.js",
     "selfcheck.mjs",

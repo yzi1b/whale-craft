@@ -92,6 +92,7 @@ node scripts/publish-npm.mjs --yes --otp 123456 --tag next
 - **token 放哪**：首选 `npm login`（凭据进 `~/.npmrc`）；或环境变量 `NODE_AUTH_TOKEN`；写进本仓库 `.npmrc` 也行——**已在 `.gitignore` 里忽略**。
 - `publishConfig` 钉死 `registry: https://registry.npmjs.org/` + `access: public`（避免本机镜像 registry 把包发错地方）。
 - `prepublishOnly` = `npm run check`（**坏树发不出去**，即使不经脚本直接 `npm publish` 也拦得住）。
+- npm 根导出是 `dist/index.js`；发布脚本即使传 `--skip-checks` 也必须执行 `npm run build`，绝不能把缺少 `dist/` 或直接引用 `src/*.ts` 的包发出去。
 - ⚠️ **别让检查跑两遍**：CI 的「发布前必须全绿」和本机脚本的 ③ 已经跑过 `check-core` + `selfcheck`，
   所以两处的 `npm publish` 都带 `--ignore-scripts`，免得 lifecycle 再触发一次 `prepublishOnly`（重复又慢）。
   `prepublishOnly` 本身保留，只为"绕过脚本裸跑 `npm publish`"兜底。

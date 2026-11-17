@@ -3733,12 +3733,13 @@ console.log('\n--- 依赖面 + 打包完整性（mineflayer 是**依赖**不是"
   const localeFiles = (() => { try { return readdirSync(join(root, 'locale')).filter((n) => n.endsWith('.json')).sort() } catch { return [] } })()
 
   const packChecks = [
-    ['files 覆盖运行入口（index.js / client.js / cordis.patch.yml）', ['index.js', 'client.js', 'cordis.patch.yml'].every(covered)],
+    ['发布入口指向已编译 JS（node_modules 内不直接加载 .ts）', pkg.main === 'dist/index.js' && pkg.exports?.['.'] === './dist/index.js'],
+    ['files 覆盖运行入口（dist / index.js / client.js / cordis.patch.yml）', ['dist', 'index.js', 'client.js', 'cordis.patch.yml'].every(covered)],
     ['files 覆盖 selfcheck.mjs（README 让人跑它，就必须在包里）', covered('selfcheck.mjs')],
     [`files 覆盖 src/ 下每个 .mjs（现 ${srcFiles.length} 个；新增文件忘了加会当场红）`, srcFiles.every(covered)],
     ['files 覆盖 tools/check-core.mjs 与 extensions/', covered('tools/check-core.mjs') && covered('extensions')],
     ['files 里没有运行期产物（node_modules / logs / config / accounts）', !files.some((f) => /node_modules|^logs|config\.json|accounts\.json/.test(String(f)))],
-    ['files 里每个条目都真实存在', files.every((f) => existsSync(join(root, String(f))))],
+    ['files 里每个源码条目都真实存在（dist/ 由 npm run build 生成）', files.every((f) => String(f) === 'dist' || existsSync(join(root, String(f))))],
     // ── 插件页本地化（见上方 locale 注释）──
     // 🔴 exports 必须**逐文件**导出：试过模式写法 `"./locale/*": "./locale/*.json"`——'*' 会把
     //    'en.json' 整体吞掉，映射成 en.json.json（2026-10-02 实测踩到，且是静默失效，

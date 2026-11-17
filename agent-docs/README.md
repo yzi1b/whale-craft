@@ -69,7 +69,7 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 npm run typecheck             # TypeScript 严格类型检查
 node tools/check-core.mjs     # 全树 JS/MJS/TS 语法 + 动态 import + 私有字段一致性
 node selfcheck.mjs            # 600+ 条离线断言（含原生加载 .ts）
-npm run build                 # TS → dist，生成声明/source map 并烟测产物
+npm run build                 # 根入口 + TS/MJS → dist，生成声明/source map 并烟测发布入口
 npm run dev:web               # 起隔离调试实例验证"整树加载"（web 用 npm 全局 dsh）
 npm run dev:types             # 监听类型错误；与 dev:web 分两个终端运行
 npm run check                 # = typecheck + check-core + selfcheck + build
