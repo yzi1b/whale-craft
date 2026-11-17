@@ -813,6 +813,8 @@ console.log('\n--- 聊天识别（未签名 system_chat 也要算玩家说话）
 
   const forcedMoves = []
   const pushedMoves = []
+  const fallStarts = []
+  const fallEnds = []
   const pickups = []
   let forcedInventory = []
   const forcedBot = new McBot({ instanceId: 'sc-forced-' + Math.random().toString(36).slice(2, 7) })
@@ -824,7 +826,10 @@ console.log('\n--- 聊天识别（未签名 system_chat 也要算玩家说话）
   forcedBot.bot = forcedRaw
   forcedBot.on('teleport', (event) => forcedMoves.push(event))
   forcedBot.on('pushed', (event) => pushedMoves.push(event))
+  forcedBot.on('fallStart', (event) => fallStarts.push(event))
+  forcedBot.on('fallEnd', (event) => fallEnds.push(event))
   forcedBot.on('pickup', (event) => pickups.push(event))
+  forcedBot.setFallMinHeight(2)
   forcedBot.startObserver()
   forcedRaw.entity.position = { x: 13, y: 64, z: 10 }
   forcedRaw.emit('forcedMove')
@@ -842,16 +847,41 @@ console.log('\n--- 聊天识别（未签名 system_chat 也要算玩家说话）
   forcedBot._selfMovingAt = 0
   forcedRaw.entity.position = { x: 14, y: 63.1, z: 10 }
   await new Promise((resolve) => setTimeout(resolve, 1_100))
+  forcedRaw.entity.onGround = true
+  forcedRaw.entity.velocity = { y: 0 }
+  forcedRaw.emit('physicsTick')
+  forcedRaw.entity.position = { x: 14, y: 60.5, z: 10 }
+  forcedRaw.entity.onGround = false
+  forcedRaw.entity.velocity = { y: -0.8 }
+  forcedRaw.emit('physicsTick')
+  forcedRaw.entity.position = { x: 14, y: 59.5, z: 10 }
+  forcedRaw.entity.onGround = true
+  forcedRaw.entity.velocity = { y: 0 }
+  forcedRaw.emit('physicsTick')
   forcedBot.stopObserver()
   console.log(`  ${forcedMoves.length === 1 && forcedMoves[0].distance === 3 && forcedMoves[0].serverForced === true ? '✅' : '❌'} 服务端 forcedMove 无距离阈值地识别为传送`)
   console.log(`  ${pushedAfterTeleport === 0 ? '✅' : '❌'} 传送优先，同一次位置变化不再产出 pushed`)
-  console.log(`  ${pushedAfterFall === 0 ? '✅' : '❌'} 纯垂直移动不属于 pushed（留给后续坠落事件）`)
+  console.log(`  ${pushedAfterFall === 0 ? '✅' : '❌'} 纯垂直移动不属于 pushed（交给坠落追踪器）`)
   console.log(`  ${pushedAfterSelfMove === 0 ? '✅' : '❌'} 自主移动收尾窗口内不产出 pushed`)
   console.log(`  ${pushedMoves.length === 1 && pushedMoves[0].distance === 0.4 ? '✅' : '❌'} 真实水平非自主位移产出 pushed，距离只计 X/Z`)
+  console.log(`  ${fallStarts.length === 1 && fallStarts[0].height === 2.6 && fallEnds.length === 1 && fallEnds[0].height === 3.6 && fallEnds[0].impactVelocityY === -0.8 ? '✅' : '❌'} physicsTick 达阈值产生一对 fallStart/fallEnd 并总结坠落`)
   const { readFileSync: readCoreSource } = await import('node:fs')
   const coreSource = readCoreSource(new URL('./src/core.mjs', import.meta.url), 'utf8')
   console.log(`  ${/async walkTo[\s\S]{0,700}this\._selfMovingAt = Date\.now\(\)/.test(coreSource) ? '✅' : '❌'} walkTo 持续标记自主移动，松键后采样不会误报`)
   console.log(`  ${pickups.length === 1 && pickups[0].items.includes('stone*5') && pickups[0].items.includes('dirt*1') ? '✅' : '❌'} 拾取载荷按同名物品合并并使用“名称*数量”格式`)
+
+  const { FallTracker } = await import('./src/fall-tracker.ts')
+  const fallTracker = new FallTracker()
+  const sample = (y, velocityY, onGround, at, safeDescent = false) => fallTracker.sample({ position: { x: 0, y, z: 0 }, velocityY, onGround, safeDescent, at }, 3)
+  sample(64, 0, true, 0)
+  const shortFall = sample(62, -0.5, false, 50)
+  const shortEnd = sample(62, 0, true, 100)
+  sample(64, 0, true, 200)
+  sample(62, -0.5, false, 250)
+  fallTracker.reset({ x: 0, y: 20, z: 0 }, 275)
+  const afterTeleport = sample(19, 0, true, 300)
+  console.log(`  ${shortFall.length === 0 && shortEnd.length === 0 ? '✅' : '❌'} 未达到 minHeight 的短距离下落不产生坠落事件`)
+  console.log(`  ${afterTeleport.length === 0 ? '✅' : '❌'} 传送重置坠落追踪，不把向下传送误报为坠落`)
 
   chats.length = 0
   fake.emit('message', ...sysText('Tester joined the game'))

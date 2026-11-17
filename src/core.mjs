@@ -26,9 +26,11 @@ import { writeFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, appendF
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { FallTracker } from './fall-tracker.ts'
 
 const Vec3 = vec3pkg.Vec3 ?? vec3pkg
 const HERE = dirname(fileURLToPath(import.meta.url))
+const CLIMBABLE_BLOCKS = new Set(['ladder', 'vine', 'weeping_vines', 'weeping_vines_plant', 'twisting_vines', 'twisting_vines_plant', 'scaffolding'])
 
 /**
  * 从 mineflayer **自己的**依赖树里解析包（同一份 node_modules）。
@@ -438,6 +440,10 @@ export class McBot extends EventEmitter {
     this._obs = null
     this._forcedMoveBot = null
     this._forcedMoveHandler = null
+    this._physicsBot = null
+    this._physicsHandler = null
+    this._fallTracker = new FallTracker()
+    this._fallMinHeight = 3
     this._selfMovingAt = 0        // 我们自己发起移动的时刻（排除"被传送"误判）
     this.stats = { connects: 0, deaths: 0, chats: 0, lastEventAt: 0, timeouts: 0 }
   }
@@ -535,12 +541,18 @@ export class McBot extends EventEmitter {
    */
   setAbortSignal (signal) { this.abortSignal = signal ?? null }
 
+  setFallMinHeight (value) {
+    const height = Number(value)
+    if (Number.isFinite(height) && height >= 0) this._fallMinHeight = height
+  }
+
   /* ───────────── 世界观察器（把"变化"变成语义事件，供看门狗判定唤醒）───────────── */
 
   /**
    * 启动观察器：每 1s 对比快照，产出 mineflayer 本身**不提供**的语义事件：
    *   'teleport'    服务端 forcedMove = 服务器强制改变位置
    *   'pushed'      非自主移动（没按方向键却位移）= 被推/水流
+   *   'fallStart' / 'fallEnd'  达到阈值的坠落开始 / 停止
    *   'pickup'      背包总数变多 = 捡到物品
    *   'playerJoin' / 'playerLeave'
    *
@@ -549,6 +561,7 @@ export class McBot extends EventEmitter {
    */
   startObserver () {
     if (this._forcedMoveBot && this._forcedMoveHandler) this._forcedMoveBot.removeListener?.('forcedMove', this._forcedMoveHandler)
+    if (this._physicsBot && this._physicsHandler) this._physicsBot.removeListener?.('physicsTick', this._physicsHandler)
     this._obs = {
       lastPos: this.#observerPosition(),
       lastPlayers: new Set(Object.keys(this.bot?.players ?? {})),
@@ -564,9 +577,29 @@ export class McBot extends EventEmitter {
       const distance = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z)
       this._obs.lastPos = to
       this._obs.skipPushedOnce = true
+      this._fallTracker.reset(to)
       if (distance > 0) this.emit('teleport', { from, to, distance: Number(distance.toFixed(1)), serverForced: true })
     }
     this._forcedMoveBot?.on?.('forcedMove', this._forcedMoveHandler)
+    this._fallTracker.reset(this.#observerPosition())
+    this._physicsBot = this.bot
+    this._physicsHandler = () => {
+      const entity = this.bot?.entity
+      const position = this.#observerPosition()
+      if (!entity || !position) return
+      let onClimbable = false
+      try { onClimbable = CLIMBABLE_BLOCKS.has(this.bot?.blockAt?.(entity.position)?.name) } catch {}
+      const safeDescent = Boolean(entity.isInWater || entity.isInLava || entity.isInWeb || onClimbable || entity.elytraFlying || this.bot?.physics?.gravity === 0)
+      const observations = this._fallTracker.sample({
+        position,
+        velocityY: Number(entity.velocity?.y ?? 0),
+        onGround: entity.onGround === true,
+        safeDescent,
+        at: Date.now(),
+      }, this._fallMinHeight)
+      for (const observation of observations) this.emit(observation.kind === 'start' ? 'fallStart' : 'fallEnd', observation.content)
+    }
+    this._physicsBot?.on?.('physicsTick', this._physicsHandler)
     if (this.observerTimer) return
     // 🔴 回调自己兜住异常：`setInterval` 回调里抛错 = **uncaughtException** = 整个宿主进程死
     //    （宿主只对 `unhandledRejection` 做 fail-loud，这条通道它不防）。观察 tick 出错最多是少看一眼世界。
@@ -577,8 +610,12 @@ export class McBot extends EventEmitter {
   stopObserver () {
     if (this.observerTimer) { clearInterval(this.observerTimer); this.observerTimer = null }
     if (this._forcedMoveBot && this._forcedMoveHandler) this._forcedMoveBot.removeListener?.('forcedMove', this._forcedMoveHandler)
+    if (this._physicsBot && this._physicsHandler) this._physicsBot.removeListener?.('physicsTick', this._physicsHandler)
     this._forcedMoveBot = null
     this._forcedMoveHandler = null
+    this._physicsBot = null
+    this._physicsHandler = null
+    this._fallTracker.reset()
     this._obs = null
   }
 
@@ -616,7 +653,7 @@ export class McBot extends EventEmitter {
     }
     obs.lastPlayers = players
 
-    // ② 水平非自主位移。传送优先于推动；垂直位移留给后续的坠落事件。
+    // ② 水平非自主位移。传送优先于推动；垂直位移由 physicsTick 坠落追踪器处理。
     const selfMovedRecently = now - (this._selfMovingAt ?? 0) < 3000
     const teleported = obs.skipPushedOnce === true
     obs.skipPushedOnce = false

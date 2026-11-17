@@ -231,6 +231,8 @@ class McSession {
     })
     this.bot.on('teleport', (e) => self.observeWatchdog('self.teleport', e))
     this.bot.on('pushed', (e) => self.observeWatchdog('self.pushed', e))
+    this.bot.on('fallStart', (e) => self.observeWatchdog('self.fall.start', e))
+    this.bot.on('fallEnd', (e) => self.observeWatchdog('self.fall.end', e))
     this.bot.on('pickup', (e) => self.observeWatchdog('self.pickup', e))
   }
 
@@ -1472,6 +1474,7 @@ export function apply(ctx, rawConfig) {
     if (!gameSession?.active) throw new Error('当前没有游戏会话；场景与注意配置只在游戏会话期间存在')
     const effective = watchdogConfigStore.effective(gameSession.watchdogScene, gameSession.watchdogFocuses)
     gameSession.watchdogEngine.setConfig(effective)
+    sess.bot.setFallMinHeight(effective['self.fall.start']?.minHeight)
     return effective
   }
 
@@ -1535,13 +1538,15 @@ export function apply(ctx, rawConfig) {
       onCancel: (reason) => { void sess.closeGameSession(reason, { kind: 'watchdog-cancelled', fromWatchdogJob: true }).catch(() => {}) },
     })
     watchdog.gate = watchdogGate(sess)
+    const effectiveWatchdogConfig = watchdogConfigStore.effective(watchdogScene, watchdogFocuses)
     const watchdogEngine = new WatchdogEngine(
-      watchdogConfigStore.effective(watchdogScene, watchdogFocuses),
+      effectiveWatchdogConfig,
       (event, count) => watchdog.notifyEvent?.(event, count, watchdogConfigStore.global),
       Date.now,
       200,
       (count) => { watchdog.stats.suppressed += count },
     )
+    sess.bot.setFallMinHeight(effectiveWatchdogConfig['self.fall.start']?.minHeight)
     const connection = sess.bot.connectionView()
     const server = connection?.host ? formatAddress(connection.host, connection.port ?? 25565) : null
     const gameSession = new GameSessionState({
