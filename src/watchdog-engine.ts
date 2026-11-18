@@ -11,23 +11,13 @@ const text = (value: unknown): string => String(value ?? '')
 const lower = (value: unknown): string => text(value).toLowerCase()
 const selectedPlayer = (players: unknown, player: string): boolean => !Array.isArray(players) || players.length === 0 || players.some((value) => lower(value) === lower(player))
 
-function parsePlayerConnection (value: unknown): { player: string, kind: 'join' | 'leave' } | null {
-  const body = text(value).trim()
-  for (const [pattern, kind] of [
-    [/^(.+?) (?:joined the game|加入了游戏)$/, 'join'],
-    [/^(.+?) (?:left the game|离开了游戏)$/, 'leave'],
-  ] as const) {
-    const match = body.match(pattern)
-    if (match?.[1]) return { player: match[1], kind }
-  }
+function playerAnnouncement (key: string): 'join' | 'leave' | 'death' | null {
+  if (key === 'multiplayer.player.joined' || key === 'multiplayer.player.joined.renamed') return 'join'
+  if (key === 'multiplayer.player.left') return 'leave'
+  // 这两个键是死亡界面提示和说明链接。死亡公告的首个参数始终是死者。
+  if (key === 'death.attack.message_too_long' || key === 'death.attack.badRespawnPoint.link') return null
+  if (key.startsWith('death.attack.') || key.startsWith('death.fell.')) return 'death'
   return null
-}
-
-function parsePlayerDeath (value: unknown): { player: string, message: string } | null {
-  const body = text(value).trim()
-  const match = body.match(/^([^ ]+) (?:died|was |fell |hit |tried |blew |burned |went |walked |starved |suffocated |drowned |experienced |discovered |froze |withered )/i)
-    ?? body.match(/^(.+?)(?:死了|死亡|被.+杀死|摔死|淹死|烧死|饿死|窒息)/)
-  return match?.[1] ? { player: match[1], message: body } : null
 }
 
 export class WatchdogEngine {
@@ -155,16 +145,19 @@ export class WatchdogEngine {
       const watched = config.player!
       if ((watched.players as string[]).length && selectedPlayer(watched.players, player)) out.player = true
     } else if (name === 'message.system') {
-      const connection = parsePlayerConnection(content.content)
-      const death = connection ? null : parsePlayerDeath(content.content)
-      if (connection) {
+      const player = context.firstArgument
+      if (typeof player !== 'string' || !player || typeof context.translate !== 'string') return out
+      const kind = playerAnnouncement(context.translate)
+      if (kind === 'join' || kind === 'leave') {
+        const connection = { player, kind }
         out.playerConnection = connection
         const watched = config['playerConnection.player']!
-        if ((watched.players as string[]).length && selectedPlayer(watched.players, connection.player)) out['playerConnection.player'] = connection
-      } else if (death) {
+        if ((watched.players as string[]).length && selectedPlayer(watched.players, player)) out['playerConnection.player'] = connection
+      } else if (kind === 'death') {
+        const death = { player, message: text(content.content).trim() }
         out.playerDeath = death
         const watched = config['playerDeath.player']!
-        if ((watched.players as string[]).length && selectedPlayer(watched.players, death.player)) out['playerDeath.player'] = death
+        if ((watched.players as string[]).length && selectedPlayer(watched.players, player)) out['playerDeath.player'] = death
       }
     } else if (name === 'self.damage' && typeof content.type === 'string') {
       const damageType = content.type

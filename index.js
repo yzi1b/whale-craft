@@ -225,7 +225,9 @@ class McSession {
     }
     this.bot.on('chat', (event) => observeChat(event, false))
     this.bot.on('selfChat', (event) => observeChat(event, true))
-    this.bot.on('system', ({ text }) => self.observeWatchdog('message.system', { content: text }))
+    this.bot.on('system', ({ text, translate, firstArgument }) => {
+      self.observeWatchdog('message.system', { content: text }, { translate, firstArgument })
+    })
     this.bot.on('damage', (e) => {
       self.observeWatchdog('self.damage', { damage: Number(e.damage ?? 0), type: e.type ?? null, source: e.source ?? null, health: Number(e.health), position: e.position ?? null })
     })

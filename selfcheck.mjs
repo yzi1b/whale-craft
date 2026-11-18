@@ -769,10 +769,6 @@ console.log('\n--- 聊天识别（未签名 system_chat 也要算玩家说话）
     }
     return [msg, undefined]        // position = undefined（mineflayer 对 positionId 0 就是这个）
   }
-  const sysText = (text) => {
-    const msg = { translate: 'multiplayer.player.joined', with: [{ text: 'x' }], toString: () => text }
-    return [msg, 'system']
-  }
   const whisper = (who, body) => {
     const msg = {
       translate: 'commands.message.display.incoming',
@@ -885,8 +881,40 @@ console.log('\n--- 聊天识别（未签名 system_chat 也要算玩家说话）
   console.log(`  ${afterTeleport.length === 0 ? '✅' : '❌'} 传送重置坠落追踪，不把向下传送误报为坠落`)
 
   chats.length = 0
-  fake.emit('message', ...sysText('Tester joined the game'))
-  console.log(`  ${chats.length === 0 && systems.length === 1 ? '✅' : '❌'} 服务器系统消息仍然走 system（不会误当玩家说话）`)
+  const { createRequire } = await import('node:module')
+  const { WatchdogEngine } = await import('./src/watchdog-engine.ts')
+  const { cloneWatchdogDefaults } = await import('./src/watchdog-catalog.ts')
+  const req = createRequire(createRequire(import.meta.url).resolve('mineflayer'))
+  const ChatMessage = req('prismarine-chat')('1.21.9')
+  const config = cloneWatchdogDefaults()
+  config['message.system'].modifiers['playerConnection.player'].players = ['tester']
+  config['message.system'].modifiers['playerDeath.player'].players = ['tester']
+  const announcementEngine = new WatchdogEngine(config)
+  b1.on('system', ({ text, translate, firstArgument }) => {
+    announcementEngine.observe('message.system', { content: text }, { translate, firstArgument })
+  })
+  const announce = (translate, args, format) => {
+    const message = new ChatMessage({ translate, with: args })
+    const render = message.toString.bind(message)
+    message.toString = () => render({ [translate]: format })
+    fake.emit('message', message, 'system')
+    return announcementEngine.queue.at(-1)
+  }
+  const tester = { text: '', extra: [{ text: 'Tester', color: 'gold' }] }
+  const join = announce('multiplayer.player.joined', [tester], '%s hat das Spiel betreten')
+  const renamed = announce('multiplayer.player.joined.renamed', [tester, { text: 'OldName' }], '%2$s heißt jetzt %1$s')
+  const leave = announce('multiplayer.player.left', [tester], '%s退出了本局')
+  const death = announce('death.attack.player', [tester, { text: 'Attacker' }], '%2$s a vaincu %1$s')
+  const fall = announce('death.fell.accident.generic', [tester], '%s cayó desde muy alto')
+  console.log(`  ${chats.length === 0 && systems.length === 5 ? '✅' : '❌'} 带翻译键的公告仍走 system`)
+  console.log(`  ${join.modifiers.playerConnection?.kind === 'join' && renamed.modifiers['playerConnection.player']?.player === 'Tester' && leave.modifiers.playerConnection?.kind === 'leave' ? '✅' : '❌'} 加入、改名加入和离开按键识别，玩家名取首参`)
+  console.log(`  ${death.modifiers['playerDeath.player']?.player === 'Tester' && death.modifiers.playerDeath?.message === 'Attacker a vaincu Tester' && fall.modifiers.playerDeath?.player === 'Tester' ? '✅' : '❌'} 击杀和坠亡按键识别，保留公告文本`)
+  const unrelated = announce('death.attack.message_too_long', [{ text: 'Tester' }], '%s')
+  const missingPlayer = announce('multiplayer.player.left', [], '有人退出了')
+  for (const text of ['Tester left the game', 'Tester was promoted to moderator']) {
+    fake.emit('message', new ChatMessage({ text }), 'system')
+  }
+  console.log(`  ${[unrelated, missingPlayer, ...announcementEngine.queue.slice(-2)].every((event) => Object.keys(event.modifiers).length === 0) ? '✅' : '❌'} 纯文本公告、无玩家参数及死亡界面提示不产生玩家修饰`)
 
   chats.length = 0
   fake.emit('message', ...whisper('Tester', '在吗'))
@@ -4025,8 +4053,7 @@ console.log('\n--- 游戏会话 + 新版看门狗事件引擎 ---')
     .observe('self.damage', { damage: 4, type: 'minecraft:player_attack', source: 'Tester', health: 10, position: null })
   console.log(`  ${exact.modifiers.type?.type === 'minecraft:player_attack' && !exact.modifiers['type.once'] ? '✅' : '❌'} type 命中优先，type.once 不重复命中`)
 
-  const system = engine.observe('message.system', { content: 'Tester joined the game' })
-  console.log(`  ${system.modifiers.playerConnection?.player === 'Tester' ? '✅' : '❌'} 系统消息识别玩家连接修饰`)
+  engine.observe('message.system', { content: '服务器公告' })
   const read = engine.read(2, true)
   console.log(`  ${read.selectedCount === 2 && read.consumedCount === 2 && read.queueCountAfterConsume === engine.queue.length ? '✅' : '❌'} 结构化队列按数量读取并消费`)
 

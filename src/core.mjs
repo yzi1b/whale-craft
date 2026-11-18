@@ -1193,12 +1193,22 @@ export class McBot extends EventEmitter {
    */
   wireChatEvents (b) {
     let pendingPositionChat = null
+    const emitSystem = (msg, text) => {
+      const event = { text }
+      if (typeof msg?.translate === 'string') {
+        event.translate = msg.translate
+        const first = msg.with?.[0]
+        if (first != null) event.firstArgument = this.#plain(first).trim()
+      }
+      this.#pushChat('system', null, text)
+      this.emit('system', event)
+    }
     b.on('message', (msg, position) => {
       const text = this.#plain(msg)
       if (position === 'chat') {
         // mineflayer 把 player_chat 与 profileless_chat 都统一映射成这里的 `chat`。
         // 先缓存渲染结果，再由同一次原始包事件决定它是玩家聊天还是 /say 等服务器广播。
-        pendingPositionChat = { text }
+        pendingPositionChat = { msg, text }
         return
       }
       if (position !== 'game_info') {                    // 动作栏除外，其余都按内容再判一次
@@ -1208,8 +1218,7 @@ export class McBot extends EventEmitter {
           return
         }
       }
-      this.#pushChat('system', null, text)
-      this.emit('system', { text })
+      emitSystem(msg, text)
     })
     b._client?.on?.('player_chat', (p) => {
       pendingPositionChat = null
@@ -1218,11 +1227,9 @@ export class McBot extends EventEmitter {
       this.#emitPlayerChat(who, text, b.username)
     })
     b._client?.on?.('profileless_chat', () => {
-      const text = pendingPositionChat?.text
+      const event = pendingPositionChat
       pendingPositionChat = null
-      if (!text) return
-      this.#pushChat('system', null, text)
-      this.emit('system', { text })
+      if (event?.text) emitSystem(event.msg, event.text)
     })
     return b
   }
