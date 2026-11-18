@@ -2583,6 +2583,73 @@ console.log('\n--- 认证请求 URL（真机 bug 回归）---')
     console.log(`  ${/Yggdrasil Connect/.test(coreSrc) && /缺 agent 直接回 \*\*400\*\*/.test(coreSrc) ? '✅' : '❌'} 代码里留了这条事故的说明（免得后人又把 agent 删掉）`)
   }
 
+  // ── 移动包 tick_end workaround（mineflayer #4189；测试真实包装函数）──
+  {
+    const { wrapMovementTickEnd } = await import('./src/core.mjs')
+    const assert = (await import('node:assert/strict')).default
+    const { createRequire } = await import('node:module')
+    const requireMc = createRequire(createRequire(import.meta.url).resolve('mineflayer'))
+    const mcData = requireMc('minecraft-data')
+    const movement = ['position', 'position_look', 'look', 'flying']
+    const makeClient = version => ({
+      version, calls: [],
+      write (name, packet) { this.calls.push([name, packet]); return 42 },
+    })
+    for (const version of ['1.21.2', '1.21.3', '1.21.4', '26.1']) {
+      const client = makeClient(version)
+      wrapMovementTickEnd({ _client: client })
+      for (const name of movement) {
+        client.calls.length = 0
+        const packet = { onGround: true }
+        assert.equal(client.write(name, packet), 42)
+        assert.deepEqual(client.calls, [[name, packet], ['tick_end', {}]])
+        assert.equal(client.calls[0][1], packet)
+      }
+      client.calls.length = 0
+      client.write('keep_alive', {})
+      client.write('tick_end', {})
+      assert.deepEqual(client.calls.map(([name]) => name), ['keep_alive', 'tick_end'])
+      // 真正的 minecraft-protocol 序列化器也要认此包，不能只测调用记录。
+      const protocol = mcData.versions.pc.find(v => v.minecraftVersion === version).version
+      const resolved = mcData(protocol).version.minecraftVersion
+      const serializer = requireMc('minecraft-protocol').createSerializer({ state: 'play', isServer: false, version: resolved })
+      assert.ok(serializer.createPacketBuffer({ name: 'tick_end', params: {} }).length > 0)
+    }
+    console.log('  ✅ tick_end：1.21.2 边界及 26.x 四类移动包逐包追加、顺序/返回值/this/真实序列化正确，其他包不变')
+    const client = makeClient(undefined)
+    wrapMovementTickEnd({ _client: client })
+    for (const version of [undefined, '1.8.8', '1.21.1', 'unknown-version']) {
+      client.version = version
+      client.calls.length = 0
+      for (const name of movement) client.write(name, {})
+      assert.deepEqual(client.calls.map(([name]) => name), movement)
+    }
+    client.version = '26.1' // 自动探测完成后，不重装包装也应启用
+    client.calls.length = 0
+    client.write('flying', {})
+    assert.deepEqual(client.calls.map(([name]) => name), ['flying', 'tick_end'])
+    client.version = '1.21.1'
+    client.calls.length = 0
+    client.write('look', {})
+    assert.equal(client.calls.length, 1)
+    console.log('  ✅ tick_end：旧版/未知协议禁发，异步版本协商与版本切换正确')
+    const fail = new Error('write failed')
+    const broken = { version: '26.1', calls: [], write (name) { this.calls.push(name); throw fail } }
+    wrapMovementTickEnd({ _client: broken })
+    assert.throws(() => broken.write('position', {}), e => e === fail)
+    assert.deepEqual(broken.calls, ['position'])
+    const partial = { version: '26.1', write (name) { if (name === 'tick_end') throw fail; return false } }
+    wrapMovementTickEnd({ _client: partial })
+    assert.equal(partial.write('look', {}), false)
+    const rebuilt = makeClient('26.1')
+    wrapMovementTickEnd({ _client: rebuilt })
+    rebuilt.write('position_look', {})
+    assert.deepEqual(rebuilt.calls.map(([name]) => name), ['position_look', 'tick_end'])
+    const source = (await import('node:fs')).readFileSync(new URL('./src/core.mjs', import.meta.url), 'utf8')
+    assert.match(source, /\}\)\s+wrapMovementTickEnd\(b\)\s+b\._createdAt/)
+    console.log('  ✅ tick_end：原包异常原样抛出且不补包，补包异常兜底，每次 createBot 后重新包装')
+  }
+
   // ── 按键上报兼容层（player_input，为 26.2 加的）已整体移除（2026-10-02 用户决策）──
   // 原因：上游还连不了 26.2——mineflayer 4.39.0 的 testedVersions 只到 26.1；minecraft-data
   //   3.117.0 只收了 26.2 的**元数据**、没有数据目录（`minecraft-data('26.2')` 为 null）。

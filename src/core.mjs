@@ -41,6 +41,43 @@ const requireFromMineflayer = (() => {
   try { return createRequire(createRequire(import.meta.url).resolve('mineflayer')) } catch { return createRequire(import.meta.url) }
 })()
 
+/**
+ * mineflayer #4189：26.3 服务端收到 tick_end 才复位移动包计数。
+ * 每个移动包后补一个；不加定时器，不改变重连/停止生命周期。
+ * 自动探测会异步更新 client.version，故在发包时按实际版本查表并缓存。
+ * 未知包名在 protodef 中可能静默编码成 id=0，不能只依靠 try/catch。
+ */
+export function wrapMovementTickEnd (bot) {
+  const client = bot._client
+  const origWrite = client.write.bind(client)
+  let checkedVersion
+  let supported = false
+  client.write = (name, packet) => {
+    const result = origWrite(name, packet)
+    if (name === 'position' || name === 'position_look' || name === 'look' || name === 'flying') {
+      const version = client.version
+      if (version !== checkedVersion) {
+        checkedVersion = version
+        supported = false
+        try {
+          const mcData = requireFromMineflayer('minecraft-data')
+          // 直接按名称查 1.21.2 在部分数据版本中会回落到 1.21（767）；按元数据协议号解析。
+          const protocol = mcData.versions.pc.find(v => v.minecraftVersion === version)?.version
+          const data = mcData(protocol ?? version)
+          const minimum = mcData.versions.pc.find(v => v.minecraftVersion === '1.21.2')?.version
+          const mappings = data?.protocol?.play?.toServer?.types?.packet?.[1]?.[0]?.type?.[1]?.mappings
+          supported = Number.isInteger(minimum) && data?.version?.version >= minimum &&
+            Object.values(mappings ?? {}).includes('tick_end')
+        } catch { /* 无协议数据时不发未知包 */ }
+      }
+      if (supported) {
+        try { origWrite('tick_end', {}) } catch { /* 兼容不完整的协议实现 */ }
+      }
+    }
+    return result
+  }
+}
+
 /* ─────────── 「Yggdrasil 会话 join」的兼容补丁（用户 2026-09-17：它把整个 DSH 搞崩过）───────────
  * 事故链（真机实测栈）：
  *   minecraft-protocol/src/client/encrypt.js:41
@@ -765,6 +802,7 @@ export class McBot extends EventEmitter {
           }
         },
       })
+      wrapMovementTickEnd(b)
       b._createdAt = Date.now()
       let lastHealth = null
       let pendingDamage = null
