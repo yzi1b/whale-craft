@@ -1,7 +1,7 @@
-# 工具目录（35 个）
+# 工具目录（37 个）
 
 > 快照：**0.2.0**（开发中，未发布）。注册全部在 `index.js` 的 `apply()` 内（`ctx.tools.register(asTool({...}))`），
-> 分四段：`mc_*`（游戏内，28）/ `mc_kit_*`（游戏外辅助，4）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，2）。
+> 分四段：`mc_*`（游戏内，28）/ `mc_kit_*`（游戏外辅助，4）/ `mc_admin_*`（管理，1）/ `mc_debug_*`（调试，4）。
 > 可见性按模式分档（2026-10-04）：**MC模式** 只见 mc/mckit + 文件工具 + `job_*`/`goal_*`/`todo_write` + 宿主 `web_search` + 文件交付 `present`；**MC+模式** 全量可见（含 admin）；
 > **其他模式** 隐藏 mc_* / mc_kit_*（仅保留 `mc_admin_*`），另有 guard 硬拒兜底。
 > 🔴 **调试工具（`mc_debug_*`）另受「MC设置 → 调试」的 `exposeDebugTools` 开关门控**（2026-10-05）：关时在 MC/MC+ 也不暴露（白名单 / MC+ deny / guard 三处）。
@@ -86,12 +86,14 @@
 | --- | --- | --- |
 | `mc_admin_config` | 全局配置读写 | `get/set/unset/reset/list` 点号键；改完**立即热生效**（消费方每次过 getter）。**MC 模式会话看不见、也调不动**（白名单隐藏 + guard 硬拒双保险）；普通模式与 **MC+模式** 可见可用（MC+ 系用户 2026-10-04 定）。只含全局键——提示词三开关已下放为**按工作区**（`<工作区>/.whale-craft/config.json`，在「MC设置→提示词」改），不在本工具里 |
 
-## 七、调试（2，`mc_debug_*`）
+## 七、调试（4，`mc_debug_*`）
 
 | 工具 | 职责 | 关键点 |
 | --- | --- | --- |
 | `mc_debug_sessions` | 列全部会话实例 | （原 `mc_sessions`）每会话独立性的直观证据 |
 | `mc_debug_diag` | 诊断快照 | （原 `mc_diag`）物理状态/控制位/收包统计 + `promptInjection` |
+| `mc_debug_var_set` | 新建或覆盖会话变量 | 合法 JS 变量名 + 任意 JSON 值，返回 `{ created }` |
+| `mc_debug_var_get` | 读取会话变量 | 返回 `{ value }`，不存在时返回 `{}` |
 
 > 两者受「MC设置 → 调试」的 `exposeDebugTools` 开关门控（默认关）+ **只在 MC/MC+ 模式**暴露；其他模式一律摘掉。
 

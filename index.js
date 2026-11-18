@@ -179,6 +179,7 @@ class McSession {
     this.bot = new McBot({ instanceId: agentId, ...(lockDir ? { lockDir } : {}) })
     this.mode = 'standby'           // standby / active / sleep
     this.gameSession = null         // 成功进服后原子建立；唯一持有看门狗、结构化引擎与会话配置
+    this.debugVariables = new Map()
     this._closingGameSession = null
     this.selectedAccount = null     // 本会话选定的账户 innerID（mc_accounts{action:"use"}）
     this._wired = false
@@ -3979,6 +3980,47 @@ export function apply(ctx, rawConfig) {
         watching: sess.watchdog?.status() ?? null,
         promptInjection: injection,
       }
+    },
+  }))
+
+  // 严格模式的 JavaScript 绑定名，允许 Unicode 标识符，但变量本身只存于 Map。
+  const debugVariableName = /^[$_\p{ID_Start}][$\u200C\u200D\p{ID_Continue}]*$/u
+  const reservedBindings = new Set([
+    'arguments', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
+    'default', 'delete', 'do', 'else', 'enum', 'eval', 'export', 'extends', 'false', 'finally',
+    'for', 'function', 'if', 'implements', 'import', 'in', 'instanceof', 'interface', 'let',
+    'new', 'null', 'package', 'private', 'protected', 'public', 'return', 'static', 'super',
+    'switch', 'this', 'throw', 'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield',
+  ])
+
+  ctx.tools.register(asTool({
+    name: 'mc_debug_var_set',
+    description: '【调试】在当前会话创建或更新一个变量，返回是否为新建。变量仅存于内存。',
+    parameters: {
+      name: { type: 'string', required: true, description: '合法的 JavaScript 变量名' },
+      value: { type: 'json', required: true, description: '要设置的任意 JSON 值' },
+    },
+    output: text(),
+    async execute({ name, value }, exec) {
+      if (!debugVariableName.test(name) || reservedBindings.has(name)) {
+        throw new Error('name 必须是合法的 JavaScript 变量名')
+      }
+      const variables = getSession(exec).debugVariables
+      const created = !variables.has(name)
+      variables.set(name, JSON.parse(JSON.stringify(value)))
+      return { created }
+    },
+  }))
+
+  ctx.tools.register(asTool({
+    name: 'mc_debug_var_get',
+    description: '【调试】读取当前会话中的变量。变量不存在时省略 value。',
+    parameters: {
+      name: { type: 'string', required: true, description: '要读取的变量名' },
+    },
+    output: text(),
+    async execute({ name }, exec) {
+      return { value: getSession(exec).debugVariables.get(name) }
     },
   }))
 }

@@ -30,7 +30,7 @@ DSH host 进程
    │   └─ McSession         McBot + events[]（≤200 条）+ GameSession + selectedAccount
    │       ├─ GameSession   Watchdog + WatchdogEngine + scene/focus（严格一对一）
    │       └─ McBot         src/core.mjs：mineflayer 实例（一个游戏角色）
-   ├─ 工具注册（37 个）      mc_* 30 / mc_kit_* 4 / mc_admin_* 1 / mc_debug_* 2，全部经 asTool()
+   ├─ 工具注册（37 个）      mc_* 28 / mc_kit_* 4 / mc_admin_* 1 / mc_debug_* 4，全部经 asTool()
    ├─ HTTP（webServer）
    │   └─ /api/mc/*                     状态/停止/设置（账户/配置/提示词/preset 名单）
    ├─ agent/pre-step 监听   提示词注入（改写 decision.messages）+ MC 模式策略对账

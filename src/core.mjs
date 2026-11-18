@@ -351,7 +351,9 @@ export function lossless (value, seen = new WeakSet()) {
   // 只取自有可枚举属性：类实例的 getter/原型方法/私有字段一并丢掉
   for (const [k, v] of Object.entries(value)) {
     const s = lossless(v, seen)
-    if (s !== undefined) out[k] = s
+    if (s !== undefined) {
+      Object.defineProperty(out, k, { value: s, enumerable: true, configurable: true, writable: true })
+    }
   }
   return out
 }

@@ -24,7 +24,7 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 
 | 位置 | 角色 |
 | --- | --- |
-| `index.js`（~4k 行） | **host 半端入口**：`apply()` 装配一切 —— Config / McSession / Watchdog、35 个工具、HTTP API、提示词注入、MC模式/MC+模式 三档权限策略、归档保护、扩展加载 |
+| `index.js`（~4k 行） | **host 半端入口**：`apply()` 装配一切 —— Config / McSession / Watchdog、37 个工具、HTTP API、提示词注入、MC模式/MC+模式 三档权限策略、归档保护、扩展加载 |
 | `presets/*.patch.yml` | 「MC模式」「MC+模式」两个 preset 的**声明式**定义（DSH 0.2.2；经 `dsh.bundle.patch` 数组随包挂载） |
 | `client.js`（~1.8k 行） | **浏览器半端 bundle**（手写 factory，无构建步骤，HMR 热更）：状态条 / MC设置弹窗 / 新会话页 hero 入口 |
 | `src/core.mjs`（~2k 行） | `McBot`：mineflayer 封装（连接/重连/动作/观察/协议护栏）；**不依赖 DSH**，可独立测试 |
@@ -44,7 +44,7 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 | 文档 | 内容 | 何时读 |
 | --- | --- | --- |
 | [architecture.md](architecture.md) | 全局架构、运行时数据流、注入/唤醒/隔离/自举机制、HTTP 面 | 想理解"系统怎么转" |
-| [tool-catalog.md](tool-catalog.md) | 35 个工具逐个说明 + 通用约定 | 改/加工具时 |
+| [tool-catalog.md](tool-catalog.md) | 37 个工具逐个说明 + 通用约定 | 改/加工具时 |
 | [src-modules.md](src-modules.md) | src/ 模块参考：导出、语义、不变式、坑 | 改某个模块时 |
 | [client-ui.md](client-ui.md) | 浏览器半端：插槽扩展点、**图标约定**、root vs 会话作用域 | 改 client.js / 加 UI 入口时 |
 | [dev-workflow.md](dev-workflow.md) | 本机环境硬约束、隔离铁律、自检、调试、升级敏感点 | **动手前必读** |

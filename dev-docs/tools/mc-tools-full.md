@@ -1301,3 +1301,30 @@ mode：
 - stats / connection: **object**
 - watching: **object | null** 看门狗状态
 - promptInjection: **object**
+
+### mc_debug_var_set
+
+**支持PTC**
+
+新建和赋值调试变量。
+
+普通工具调用已可用，PTC 接入待实现。变量按 DSH 会话隔离，仅在内存中保存，可在未连接 Minecraft 时使用。
+
+- name: (string) 变量名，必须为合法的 js 变量名。【这么要求只是保险。】变量不存在会自动创建。
+- value: (any) 要赋的值。普通工具调用接受任意 JSON 值，包括 `null`。
+
+**返回**
+
+- created: (boolean) 变量是否是新创建的。
+
+### mc_debug_var_get
+
+**支持PTC**
+
+读取当前会话的调试变量。
+
+- name: (string) 要读取的变量名。
+
+**返回**
+
+- value: (any | undefined) 读到的变量值。如果不存在，为 undefined，普通工具调用的 JSON 返回中省略 `value`。

@@ -172,7 +172,7 @@ console.log('\n--- 工具面（share 移除 / present 接入）---')
   const idx = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
   console.log(`  ${!tools.has('mc_kit_share') ? '✅' : '❌'} 🔴 mc_kit_share 已移除（它只是在调宿主**另装**的 dsh-file-host，插件本身没有文件服务器）`)
   console.log(`  ${!tools.has('mc_kit_express') ? '✅' : '❌'} 🔴 mc_kit_express 已移除（文件分享整体撤下，图片走回复内嵌）`)
-  console.log(`  ${tools.size === 35 ? '✅' : '❌'} 工具数 35（实际 ${tools.size}）：mc_* 28 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 2`)
+  console.log(`  ${tools.size === 37 ? '✅' : '❌'} 工具数 37（实际 ${tools.size}）：mc_* 28 + mc_kit_* 4 + mc_admin_* 1 + mc_debug_* 4`)
   console.log(`  ${!tools.has('mc_config') ? '✅' : '❌'} 🔴 旧配置工具 mc_config 已移除（只保留 mc_watchdog_* 配置面）`)
   // 只看**代码**，不看注释：注释里留着"为什么删"的说明（那是要留的）
   const codeOnly = idx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
@@ -246,6 +246,27 @@ console.log('  活跃实例:', JSON.stringify(sess.sessions.map((s) => s.agentId
 const ids = sess.sessions.map((s) => s.agentId).sort().join(',')
 if (ids === 'sess-A,sess-B') console.log('  ✅ 两个会话各自一个独立实例（互不干扰）')
 else console.log('  ❌ 实例隔离异常，期望 sess-A,sess-B，实际', ids)
+
+{
+  const set = (name, value, exec = A) => tools.get('mc_debug_var_set').execute({ name, value }, exec)
+  const get = (name, exec = A) => tools.get('mc_debug_var_get').execute({ name }, exec)
+  const name = '调试$变量'
+  const input = JSON.parse('{"nested":[null, false, 0, "", {"__proto__":{"tag":1}}]}')
+  const created = await set(name, input)
+  input.nested[1] = true
+  const read = await get(name)
+  const missing = await get(name, B)
+  const updated = await set(name, null)
+  const readNull = await get(name)
+  console.log(`  ${created.created && !updated.created && readNull.value === null ? '✅' : '❌'} 调试变量支持新建、覆盖和 null`)
+  console.log(`  ${read.value.nested[1] === false && Object.hasOwn(read.value.nested[4], '__proto__') && read.value.nested[4].__proto__.tag === 1 ? '✅' : '❌'} 调试变量按值保存嵌套 JSON，保留 __proto__ 数据键`)
+  console.log(`  ${!Object.hasOwn(missing, 'value') ? '✅' : '❌'} 调试变量按会话隔离，缺失与 null 可区分`)
+  const invalid = await Promise.allSettled([
+    set('bad-name', 1), set('class', 1), set('trailing\n', 1),
+    tools.get('mc_debug_var_set').execute({ name }, A),
+  ])
+  console.log(`  ${invalid.every((result) => result.status === 'rejected') ? '✅' : '❌'} 调试变量拒绝非法标识符、保留字和缺失的 value`)
+}
 
 // 没有 exec 时必须清晰报错（而不是静默用错实例）
 try {
