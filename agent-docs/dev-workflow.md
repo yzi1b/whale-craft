@@ -100,6 +100,15 @@ npm run dev:stop              # 按 pidfile 停实例
 
 另外，插件在 `package.json` 里声明了受支持的 DSH 运行时范围（`engines.dsh` + dsh peer 均为 `>=0.2.2-rc.1 <0.3.0`）：**DSH 升到范围外时，新安装会被拒、已装的会在启动时被跳过**（stderr 一行 `skipping profile bundle`）——这是有意为之的围栏，不是 bug；处理方式见 [release.md §7](release.md)（豁免命令或改范围发新版）。
 
+## 7.1 依赖升级敏感清单（mineflayer / minecraft-data）
+
+宿主之外，这两个依赖也直接决定"能不能连上某个版本"，升级后逐项自查：
+
+- **`wrapMovementTickEnd`（`src/core.mjs`）是否仍必要**：它是对上游 [mineflayer#4189](https://github.com/PrismarineJS/mineflayer/issues/4189) 的补丁。上游一旦在 tick 循环里自己发 `client_tick_end`，这层就该删（见 [history.md](history.md) §2 D7 与 §4 待办），别留成永久兼容层。
+- **它是否仍生效**：判定逻辑读的是 `minecraft-data` 内部结构（`protocol.play.toServer.types.packet…mappings`），且整段包在 `catch {}` 里——**结构一变就静默不发包、不报错**。升级后必须跑 `node selfcheck.mjs`，看那 3 条 `tick_end：…` 断言是否仍在、是否仍绿。
+- **新增版本数据要"先查后发"**：确认 `mcData(协议号)` 非 null、且当前 `play/toServer` 映射里确实有目标包名，才谈"支持某新版本"；否则宁可不发（protodef 对未知包名会静默编码成 id=0，曾把 `player_input` 写成 `accept_teleportation` → 秒踢，见 D1）。
+- **`presets/*.patch.yml` 的 `name:` 能否解析**：宿主升级会删/改工具子路径（F24 的事故）。改完 preset 或升级 DSH 后，把里面所有 `name:` 逐个 `require.resolve` 一遍。
+
 ## 8. 仓库约定
 
 - **ESM**（`"type":"module"`，Node ≥22），只用 `node:` 前缀内置模块；**无构建步骤**（client.js 是手写 bundle）。

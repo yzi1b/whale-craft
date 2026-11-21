@@ -58,6 +58,7 @@
 | D4 | 离线账户用假 token 做 session join → `ForbiddenOperationException`（2026-09-17 真炸） | 离线模式不该走 session join | `sessionFlags(mode)`：offline 的 `haveCredentials/useAccessToken=false` |
 | D5 | 顶号（同账号另开）连接失败 | `already connected|already logged` | 建连 <9s 时最多重试 4 次 × 3.5s |
 | D6 | yggdrasil 库新旧回调不兼容 → 悬空 rejection | 老式回调调用方 vs 新 async 库 | `wrapYggdrasilServer` 兼容层 + `takeAuthJoinError` 捞错 |
+| D7 | 进 Paper 26.3 约 **1.5 秒即被踢**：`Invalid move player packet received`（issue #10 / PR #11 @ProgramCX，2026-11-21） | **上游 mineflayer 的缺陷，不是本插件**：26.3 起服务端强制"每 tick 只允许一个位置包"，而该计数**只在收到 serverbound `client_tick_end` 时复位**；原版客户端 1.21.2+ 每个物理 tick 结束都发，mineflayer 4.x 从不发 ⇒ **任何** bot 都在第二个移动包上被踢（[mineflayer#4189](https://github.com/PrismarineJS/mineflayer/issues/4189)） | `src/core.mjs` 新增 `wrapMovementTickEnd(bot)`：每次 `createBot()` 后包装 `client.write`，`position`/`position_look`/`look`/`flying` 原包**成功返回后**补发空 `tick_end`；按发包时的 `client.version` 换成协议号，**≥1.21.2（768）且 `play/toServer` 映射里确有 `tick_end` 才发**，旧版/未知数据一律禁发（protodef 对未知包名会静默编码，不能只靠 try/catch）；原包异常原样抛出、不补包，补包异常兜底；无定时器、不改重连/停止。自检 3 条（含真实 `minecraft-protocol` 序列化）。**边界：只对 Via 协商到 ≥1.21.2 的服有效，原生 26.3（协议 777）minecraft-data 尚无数据，仍连不上** |
 
 ### E. 状态同步系（0.1.7 集中修）
 
@@ -131,3 +132,7 @@
 - 工具描述与文档目前中文。
 - 能连的 MC 版本取决于依赖里的 mineflayer（想连新版本可自行替换）。
 - **🔴 待办（等 DSH 修好 F14 的 resolver bug 后）**：删掉 `src/resolver-shim.mjs` + `index.js` 首条 `import './src/resolver-shim.mjs'`（连同 `src-modules.md` §16b 与本节这条），并记一条 CHANGELOG。判据：**registry（非 link）安装的插件加载 mineflayer 不再 `failed to import`**。
+- **🔭 观察项（上游 mineflayer #4189，见 §2 D7）——需要定期回看**：该 tick_end 兼容层是**给上游打补丁**，不是本插件的正式能力。
+  - **上游修好即拆**：判据 = mineflayer 在自己的 tick 循环里发 `client_tick_end`（[PrismarineJS/mineflayer#4189](https://github.com/PrismarineJS/mineflayer/issues/4189) 关闭/合并）。届时删除 `src/core.mjs` 的 `wrapMovementTickEnd` 与其调用、`selfcheck.mjs` 的 3 条 tick_end 断言、`dev-docs/movement-tick-end.md`、`src-modules.md` 对应说明，并记一条 CHANGELOG。
+  - **上游补数据即复验**：minecraft-data 收录 26.3（协议 777）后，确认 `mcData(777)` 非 null 再谈"支持原生 26.3"。
+  - **静默失效风险**：这层靠 `catch {}` 降级，`minecraft-data` 协议表结构一变就悄悄不发包、**不报错**——升级依赖后必须跑 `node selfcheck.mjs` 看那 3 条断言（见 dev-workflow.md §7.1）。
