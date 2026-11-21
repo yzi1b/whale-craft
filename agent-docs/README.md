@@ -44,8 +44,9 @@ DSH（DeepSeek Harness）原生插件：把一台无头 Minecraft 机器人（mi
 | 文档 | 内容 | 何时读 |
 | --- | --- | --- |
 | [architecture.md](architecture.md) | 全局架构、运行时数据流、注入/唤醒/隔离/自举机制、HTTP 面 | 想理解"系统怎么转" |
-| [tool-catalog.md](tool-catalog.md) | 37 个工具逐个说明 + 通用约定 | 改/加工具时 |
-| [src-modules.md](src-modules.md) | src/ 模块参考：导出、语义、不变式、坑 | 改某个模块时 |
+| [tool-catalog.md](tool-catalog.md) | 33 个工具逐个说明 + 通用约定 | 改/加工具时 |
+| [src-modules.md](src-modules.md) | src/ 模块参考：导出、语义、不变式、坑（含移动包 tick_end 兼容层） | 改某个模块时 |
+| [movement-tick-end.md](../dev-docs/movement-tick-end.md) | mineflayer #4189 插件层修复、协议护栏及验收方法 | 调整移动发包时 |
 | [client-ui.md](client-ui.md) | 浏览器半端：插槽扩展点、**图标约定**、root vs 会话作用域 | 改 client.js / 加 UI 入口时 |
 | [dev-workflow.md](dev-workflow.md) | 本机环境硬约束、隔离铁律、自检、调试、升级敏感点 | **动手前必读** |
 | [release.md](release.md) | 发版流程（tag / CI / npm 手动发）—— **发版唯一权威文档**（原根 `RELEASING.md` 已并入） | 发版时 |
