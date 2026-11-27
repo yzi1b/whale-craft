@@ -620,7 +620,7 @@ export class McBot extends EventEmitter {
   async connect (opts = {}) {
     const host    = opts.host      || this.cfg.host      || DEFAULTS.host
     const port    = Number(opts.port ?? this.cfg.port ?? DEFAULTS.port)
-    const sub     = this.cfg.subserver || DEFAULTS.subserver || ''
+    const sub     = opts.subserver || this.cfg.subserver || DEFAULTS.subserver || ''
     const version = false                 // 永远自动探测（用户 2026-10-05：不再由调用方传）
     const auth    = opts.auth ?? null
 
@@ -638,6 +638,16 @@ export class McBot extends EventEmitter {
       authMode: auth.mode,
       account: auth.label ?? auth.name ?? null,
     }
+
+    // 🔴 2026-11-27 修：把本次连接参数留在**实例上**，重连时才拿得到。
+    //   原 bug：`#scheduleReconnect(sub)` 里调 `this.connect(sub)`，把字符串当 opts 传 ——
+    //   于是 `opts.host` 是 undefined，回落到 `this.cfg.host`；而 DEFAULTS.host 是
+    //   `MC_HOST ?? ''`（故意不预设服务器），cfg 里也没有 host ⇒ 每次重连都抛
+    //   「缺少服务器地址」，指数退避刷到 60s 也永远连不回去。
+    //   实测：一晚上 6 次「重连失败：缺少服务器地址」，最后靠外部 mc_connect 才回来。
+    this._lastHost = host
+    this._lastPort = port
+    this._lastAuth = auth
 
     if (this.online && this.sub === sub && this._lastHost === host) return this.bot
     if (this.connecting) { await this.connecting.catch(() => {}); if (this.online) return this.bot }
@@ -799,6 +809,15 @@ export class McBot extends EventEmitter {
     try { return await this.connecting } finally { this.connecting = null }
   }
 
+  /**
+   * 断线重连。
+   * @param {string} [sub] 子服名（只用于日志与 fakeHost，**不是**连接参数）
+   *
+   * 🔴 2026-11-27 修：原来这里 `this.connect(sub)` 把 sub 字符串当 opts 传，
+   *    connect 里 `opts.host` 取不到 ⇒ 回落到 DEFAULTS.host（MC_HOST ?? ''）⇒ 空 ⇒
+   *    每次都抛「缺少服务器地址」，退避到 60s 也永远连不回去。
+   *    现在用 connect 时留在实例上的 `_lastHost` / `_lastPort` / `_lastAuth` 重建 opts。
+   */
   #scheduleReconnect (sub) {
     if (this.reconnecting || this.stopped) return
     this.reconnecting = true
@@ -806,7 +825,12 @@ export class McBot extends EventEmitter {
     setTimeout(async () => {
       this.reconnecting = false
       try {
-        await this.connect(sub)
+        await this.connect({
+          host: this._lastHost,
+          port: this._lastPort,
+          auth: this._lastAuth,
+          subserver: sub,
+        })
         this.reconnectDelay = 5000
         // 真回来了才算"断线期"结束（前端/状态据此从"重连中…"切回"在游戏中"）
         this.reconnectPending = false
